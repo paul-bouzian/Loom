@@ -167,6 +167,48 @@ impl WorkspaceService {
         self.project_by_id(&input.project_id, Vec::new())
     }
 
+    pub fn project_environment_ids(&self, project_id: &str) -> AppResult<Vec<String>> {
+        let connection = self.database.open()?;
+        let project_exists = connection
+            .query_row(
+                "SELECT 1 FROM projects WHERE id = ?1 AND archived_at IS NULL",
+                params![project_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+
+        if !project_exists {
+            return Err(AppError::NotFound("Project not found.".to_string()));
+        }
+
+        let mut statement = connection.prepare(
+            "
+            SELECT id
+            FROM environments
+            WHERE project_id = ?1
+            ORDER BY is_default DESC, created_at ASC
+            ",
+        )?;
+        let rows = statement.query_map(params![project_id], |row| row.get::<_, String>(0))?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+    }
+
+    pub fn remove_project(&self, project_id: &str) -> AppResult<()> {
+        let connection = self.database.open()?;
+        let affected = connection.execute(
+            "DELETE FROM projects WHERE id = ?1 AND archived_at IS NULL",
+            params![project_id],
+        )?;
+
+        if affected == 0 {
+            return Err(AppError::NotFound("Project not found.".to_string()));
+        }
+
+        Ok(())
+    }
+
     pub fn create_worktree(&self, input: CreateWorktreeRequest) -> AppResult<EnvironmentRecord> {
         let project = self.project_metadata(&input.project_id)?;
         let branch_name = git::ensure_branch_name(

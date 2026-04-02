@@ -1,3 +1,6 @@
+use std::path::Path;
+
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 use tauri::State;
 
@@ -44,4 +47,123 @@ pub fn get_bootstrap_status(state: State<'_, AppState>) -> Result<BootstrapStatu
         environment_count,
         thread_count,
     })
+}
+
+const ICON_CANDIDATES: &[&str] = &[
+    "public/favicon.svg",
+    "public/favicon.png",
+    "public/favicon.ico",
+    "public/apple-icon.png",
+    "public/logo.svg",
+    "public/logo.png",
+    "public/logo-icon.png",
+    "public/logo192.png",
+    "public/icon.svg",
+    "public/icon.png",
+    "favicon.svg",
+    "favicon.png",
+    "favicon.ico",
+    "logo.svg",
+    "logo.png",
+    "icon.svg",
+    "icon.png",
+    "src/assets/logo.svg",
+    "src/assets/logo.png",
+    "src/assets/icon.svg",
+    "src/assets/icon.png",
+    "assets/logo.svg",
+    "assets/logo.png",
+    "assets/icon.svg",
+    "assets/icon.png",
+    "src/app/favicon.ico",
+    "src/app/favicon.png",
+    "src/app/favicon.svg",
+    "src/app/icon.svg",
+    "src/app/icon.png",
+    "src/app/apple-icon.png",
+    "app/favicon.ico",
+    "app/favicon.png",
+    "app/favicon.svg",
+    "app/icon.svg",
+    "app/icon.png",
+    "app/apple-icon.png",
+    "static/favicon.ico",
+    "static/favicon.png",
+    "static/favicon.svg",
+    "resources/icon.png",
+    "resources/icon.icns",
+    "src-tauri/icons/icon.png",
+    "src-tauri/icons/icon.icns",
+    "src-tauri/icons/icon.ico",
+    "src-tauri/icons/32x32.png",
+    "electron/icon.png",
+    ".github/icon.png",
+];
+
+#[tauri::command]
+pub fn get_project_icon(root_path: String) -> Option<String> {
+    let root = Path::new(&root_path);
+    ICON_CANDIDATES
+        .iter()
+        .map(|candidate| root.join(candidate))
+        .find(|path| path.is_file())
+        .and_then(|path| icon_data_url(&path))
+}
+
+fn icon_data_url(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let mime = icon_mime_type(path)?;
+    let encoded = STANDARD.encode(bytes);
+    Some(format!("data:{mime};base64,{encoded}"))
+}
+
+fn icon_mime_type(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => Some("image/png"),
+        "svg" => Some("image/svg+xml"),
+        "ico" => Some("image/x-icon"),
+        "icns" => Some("image/icns"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{icon_data_url, icon_mime_type};
+
+    #[test]
+    fn mime_type_is_detected_from_known_icon_extensions() {
+        assert_eq!(
+            icon_mime_type(std::path::Path::new("/tmp/favicon.png")),
+            Some("image/png")
+        );
+        assert_eq!(
+            icon_mime_type(std::path::Path::new("/tmp/favicon.ico")),
+            Some("image/x-icon")
+        );
+        assert_eq!(
+            icon_mime_type(std::path::Path::new("/tmp/icon.svg")),
+            Some("image/svg+xml")
+        );
+    }
+
+    #[test]
+    fn icon_data_url_embeds_the_file_as_base64() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "threadex-icon-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("temp directory should exist");
+        let icon_path = temp_dir.join("favicon.png");
+        std::fs::write(&icon_path, [0u8, 1u8, 2u8, 3u8]).expect("icon bytes should be written");
+
+        let data_url = icon_data_url(&icon_path).expect("data url should be generated");
+        assert!(data_url.starts_with("data:image/png;base64,"));
+
+        let _ = std::fs::remove_file(icon_path);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
 }

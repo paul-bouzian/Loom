@@ -24,10 +24,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::system::get_bootstrap_status,
+            commands::system::get_project_icon,
             commands::workspace::get_workspace_snapshot,
             commands::workspace::update_global_settings,
             commands::workspace::add_project,
             commands::workspace::rename_project,
+            commands::workspace::remove_project,
             commands::workspace::create_worktree_environment,
             commands::workspace::create_thread,
             commands::workspace::rename_thread,

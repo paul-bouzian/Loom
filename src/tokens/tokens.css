@@ -1,0 +1,127 @@
+:root {
+  /* ── Fonts ── */
+  --tx-font-sans: "SF Pro Text", -apple-system, "Segoe UI", sans-serif;
+  --tx-font-mono: "SF Mono", "Menlo", "Consolas", monospace;
+
+  /* ── Text sizes ── */
+  --tx-text-xs: 0.6875rem;   /* 11px */
+  --tx-text-sm: 0.75rem;     /* 12px */
+  --tx-text-base: 0.8125rem; /* 13px */
+  --tx-text-lg: 0.9375rem;   /* 15px */
+  --tx-text-xl: 1.125rem;    /* 18px */
+  --tx-text-2xl: 1.5rem;     /* 24px */
+  --tx-text-3xl: 2rem;       /* 32px */
+
+  /* ── Font weights ── */
+  --tx-weight-normal: 400;
+  --tx-weight-medium: 500;
+  --tx-weight-semibold: 600;
+  --tx-weight-bold: 700;
+
+  /* ── Line heights ── */
+  --tx-leading-tight: 1.2;
+  --tx-leading-normal: 1.5;
+
+  /* ── Spacing ── */
+  --tx-space-xs: 4px;
+  --tx-space-sm: 8px;
+  --tx-space-md: 12px;
+  --tx-space-lg: 16px;
+  --tx-space-xl: 24px;
+  --tx-space-2xl: 32px;
+  --tx-space-3xl: 48px;
+
+  /* ── Radii ── */
+  --tx-radius-sm: 4px;
+  --tx-radius-md: 8px;
+  --tx-radius-lg: 12px;
+  --tx-radius-xl: 16px;
+
+  /* ── Layout ── */
+  --tx-rail-width: 48px;
+  --tx-sidebar-width: 260px;
+  --tx-inspector-width: 320px;
+  --tx-toolbar-height: 44px;
+  --tx-statusbar-height: 28px;
+  --tx-column-width: 240px;
+
+  /* ── Surfaces (dark) ── */
+  --tx-bg-base: #0a0a0c;
+  --tx-bg-raised: #141416;
+  --tx-bg-sunken: #060608;
+  --tx-bg-overlay: rgba(14, 14, 18, 0.94);
+  --tx-bg-translucent: rgba(10, 10, 14, 0.82);
+  --tx-bg-hover: rgba(255, 255, 255, 0.05);
+  --tx-bg-active: rgba(255, 255, 255, 0.07);
+  --tx-bg-selected: rgba(239, 68, 68, 0.12);
+
+  /* ── Borders ── */
+  --tx-border-subtle: rgba(255, 255, 255, 0.07);
+  --tx-border-muted: rgba(255, 255, 255, 0.12);
+  --tx-border-focus: rgba(239, 68, 68, 0.5);
+
+  /* ── Text ── */
+  --tx-text-primary: #ececef;
+  --tx-text-secondary: rgba(236, 236, 239, 0.65);
+  --tx-text-muted: rgba(236, 236, 239, 0.38);
+
+  /* ── Accent (Red) ── */
+  --tx-accent: #ef4444;
+  --tx-accent-hover: #f87171;
+  --tx-accent-subtle: rgba(239, 68, 68, 0.14);
+  --tx-accent-text: #ffffff;
+
+  /* ── Semantic ── */
+  --tx-success: #34d399;
+  --tx-warning: #fbbf24;
+  --tx-danger: #f87171;
+
+  /* ── Runtime ── */
+  --tx-runtime-running: #34d399;
+  --tx-runtime-stopped: rgba(232, 238, 247, 0.3);
+  --tx-runtime-exited: #fbbf24;
+
+  /* ── Shadows ── */
+  --tx-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --tx-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --tx-shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.35);
+  --tx-shadow-overlay: 0 24px 60px rgba(0, 0, 0, 0.45);
+
+  /* ── Transitions ── */
+  --tx-transition-fast: 120ms ease;
+  --tx-transition-normal: 200ms ease;
+  --tx-transition-slow: 300ms ease;
+}
+
+/* ── Light mode ── */
+
+:root[data-theme="light"] {
+  --tx-bg-base: #f5f5f7;
+  --tx-bg-raised: #ffffff;
+  --tx-bg-sunken: #ebebed;
+  --tx-bg-overlay: rgba(255, 255, 255, 0.94);
+  --tx-bg-translucent: rgba(245, 245, 247, 0.85);
+  --tx-bg-hover: rgba(0, 0, 0, 0.04);
+  --tx-bg-active: rgba(0, 0, 0, 0.06);
+  --tx-bg-selected: rgba(239, 68, 68, 0.1);
+
+  --tx-border-subtle: rgba(0, 0, 0, 0.08);
+  --tx-border-muted: rgba(0, 0, 0, 0.14);
+  --tx-border-focus: rgba(239, 68, 68, 0.5);
+
+  --tx-text-primary: #1a1a1e;
+  --tx-text-secondary: rgba(26, 26, 30, 0.6);
+  --tx-text-muted: rgba(26, 26, 30, 0.36);
+
+  --tx-accent: #dc2626;
+  --tx-accent-hover: #ef4444;
+  --tx-accent-subtle: rgba(220, 38, 38, 0.1);
+  --tx-accent-text: #ffffff;
+
+  --tx-runtime-stopped: rgba(26, 26, 30, 0.25);
+
+  --tx-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --tx-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --tx-shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.12);
+  --tx-shadow-overlay: 0 24px 60px rgba(0, 0, 0, 0.16);
+}
