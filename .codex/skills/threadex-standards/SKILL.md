@@ -12,6 +12,7 @@ Apply the repository's desktop engineering standards before changing ThreadEx. K
 ## Workflow
 
 1. Read [docs/engineering-standards.md](../../../docs/engineering-standards.md) when the task affects architecture, command boundaries, runtime services, capabilities, persistence, updater/release flow, or cross-layer behavior.
+   If the local engineering standards document is not present, use the rules in this skill as the source of truth.
 2. Classify the change:
    - frontend-only UI work
    - Rust/backend/runtime work
@@ -79,6 +80,6 @@ Apply the repository's desktop engineering standards before changing ThreadEx. K
 
 ## References
 
-- Main standards: [docs/engineering-standards.md](../../../docs/engineering-standards.md)
+- A local-only engineering standards document may exist at `docs/engineering-standards.md`.
 - Product shape: [README.md](../../../README.md)
 - Local-only product brief may exist beside the repo, but do not assume it is tracked or available to other contributors.

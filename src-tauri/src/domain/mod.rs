@@ -1,2 +1,2 @@
-pub mod system;
+pub mod settings;
 pub mod workspace;

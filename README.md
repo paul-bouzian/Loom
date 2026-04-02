@@ -26,5 +26,4 @@ Temporary private working name for a Codex-first macOS desktop app built with Ta
 
 ## Notes
 
-- The product brief is intentionally kept local and is not part of the repository history.
-- Engineering standards live in `docs/engineering-standards.md`.
+- Planning and engineering notes are intentionally kept local during the private phase.
