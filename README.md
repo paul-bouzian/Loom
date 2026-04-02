@@ -8,17 +8,23 @@ Temporary private working name for a Codex-first macOS desktop app built with Ta
 - React 19
 - TypeScript
 - Rust
-- pnpm
+- Bun
 
-## Scripts
+## Commands
 
-- `pnpm dev` starts the Vite frontend
-- `pnpm tauri:dev` starts the desktop app in development
-- `pnpm build` builds the frontend bundle
-- `pnpm tauri:build` builds the desktop app bundle
-- `pnpm lint` runs ESLint
-- `pnpm typecheck` runs TypeScript checks
+- `bun install` installs JavaScript dependencies
+- `bun run dev` starts the Vite frontend
+- `bun run tauri:dev` starts the desktop app in development
+- `bun run build` builds the frontend bundle
+- `bun run tauri:build` builds the desktop app bundle
+- `bun run tauri:build:debug` builds the debug desktop app bundle
+- `bun run lint` runs ESLint
+- `bun run typecheck` runs TypeScript checks
+- `bun run check:rust` runs `cargo check`
+- `bun run lint:rust` runs `cargo clippy`
+- `bun run verify` runs the expected local validation suite
 
 ## Notes
 
 - The product brief is intentionally kept local and is not part of the repository history.
+- Engineering standards live in `docs/engineering-standards.md`.
