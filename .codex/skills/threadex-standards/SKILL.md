@@ -1,0 +1,84 @@
+---
+name: threadex-standards
+description: Production engineering standards for the ThreadEx desktop app. Use when working in this repository on Tauri v2, React, TypeScript, Rust, Codex runtime integration, Git/worktree services, desktop command boundaries, capabilities/permissions, persistence, release/update plumbing, or any architectural change that should stay aligned with the project's professional desktop standards.
+---
+
+# ThreadEx Standards
+
+## Overview
+
+Apply the repository's desktop engineering standards before changing ThreadEx. Keep the implementation aligned with the app's Tauri v2, React, TypeScript, and Rust architecture instead of making local optimizations that weaken long-term maintainability.
+
+## Workflow
+
+1. Read [docs/engineering-standards.md](../../../docs/engineering-standards.md) when the task affects architecture, command boundaries, runtime services, capabilities, persistence, updater/release flow, or cross-layer behavior.
+2. Classify the change:
+   - frontend-only UI work
+   - Rust/backend/runtime work
+   - cross-boundary desktop work
+3. Keep the responsibility boundary intact:
+   - React owns presentation and local UI state
+   - Rust owns privileged logic, process supervision, Git/worktree orchestration, persistence coordination, and Codex runtime integration
+4. Prefer the canonical project model:
+   - `Project -> Environment -> Thread`
+   - worktrees are environments, not threads
+   - shared runtime/Git/terminal state is environment-scoped
+5. When changing Tauri privileges, review least-privilege requirements first:
+   - prefer explicit capabilities
+   - avoid broad shell/process exposure
+   - keep privileged APIs narrow and typed
+6. When changing React code:
+   - keep renders pure
+   - avoid effects for derivation
+   - prefer explicit state structure over store sprawl
+7. When changing Rust code:
+   - keep command handlers thin
+   - move logic into domain or service modules
+   - use `Result`, add context, and avoid `unwrap`/`expect` on runtime paths
+8. Run the standard validation suite before finishing:
+   - `bun run verify`
+   - `bun run tauri:build:debug` when Tauri config, plugins, bundling, or desktop behavior changed
+
+## Task-Specific Checks
+
+### Tauri and capabilities
+
+- Add plugins only when the capability is first-class and necessary.
+- Do not expose unrestricted shell execution to the frontend.
+- Keep permissions/capabilities granular and auditable.
+- Treat window boundaries and capability files as security boundaries, not UI details.
+
+### React and TypeScript
+
+- Keep component responsibilities narrow.
+- Prefer derived data during render over mirrored state.
+- Keep transport details out of presentational components.
+- Use typed desktop bridge helpers rather than scattering raw `invoke()` calls.
+- Reach for `startTransition` or `useDeferredValue` when interaction latency matters, not as decoration.
+
+### Rust and runtime services
+
+- Commands are boundary adapters, not business-logic containers.
+- Long-running work belongs in dedicated services or background tasks.
+- Logs should use structured `tracing` context rather than ad hoc prints.
+- Shared state should be synchronized deliberately and kept lock-light.
+
+### Codex integration
+
+- Do not reconstruct app-server behavior from terminal scraping if structured events already exist.
+- Keep Codex integration app-server first.
+- Favor environment-scoped supervisors over thread-scoped runtime duplication.
+- Keep settings precedence explicit: global defaults, then project overrides, then thread overrides only where justified.
+
+### Distribution and updates
+
+- The intended future path is GitHub Releases plus Tauri updater, not a custom updater.
+- Preserve a stable bundle identifier and semantic versioning discipline.
+- When implementing updates, use signed updater artifacts and a user-controlled restart flow.
+- For updater work, consult the official Tauri updater, GitHub pipeline, and process plugin docs before changing code.
+
+## References
+
+- Main standards: [docs/engineering-standards.md](../../../docs/engineering-standards.md)
+- Product shape: [README.md](../../../README.md)
+- Local-only product brief may exist beside the repo, but do not assume it is tracked or available to other contributors.

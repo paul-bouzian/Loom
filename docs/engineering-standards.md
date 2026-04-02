@@ -203,6 +203,15 @@ These are not the source of truth for correctness, but they are useful implement
 - `pingdotgg/t3code` for Codex-first session brokering and structured runtime/event handling
 - `21st-dev/1code` for broader desktop UX ideas
 
+### Distribution and updates
+
+- The intended desktop update path is GitHub Releases plus Tauri's updater flow.
+- Keep `productName`, `identifier`, and versioning stable because they are part of the distribution contract.
+- Do not invent a custom updater when the Tauri updater flow is sufficient.
+- Updater work must be treated as release/security work: signed artifacts, predictable release metadata, and explicit user consent for restart.
+- Automatic update checks should be non-blocking and user-visible, for example a launch-time check that can raise a toast when a newer version is available.
+- Restart after install should remain user-controlled even if download/install is automated.
+
 ## Immediate Rules For This Project
 
 - Keep the frontend shell minimal until the runtime and domain model are in place.
@@ -220,6 +229,7 @@ These are not the source of truth for correctness, but they are useful implement
 - Tauri Command Scopes: https://v2.tauri.app/security/scope/
 - Tauri State Management: https://v2.tauri.app/develop/state-management/
 - Tauri Shell Plugin: https://v2.tauri.app/plugin/shell/
+- Tauri GitHub Releases Pipeline: https://v2.tauri.app/distribute/pipelines/github/
 - React Keeping Components Pure: https://react.dev/learn/keeping-components-pure
 - React Choosing the State Structure: https://react.dev/learn/choosing-the-state-structure
 - React You Might Not Need an Effect: https://react.dev/learn/you-might-not-need-an-effect
