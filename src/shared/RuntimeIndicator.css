@@ -1,0 +1,38 @@
+.runtime-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tx-space-xs);
+}
+
+.runtime-indicator__dot {
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.runtime-indicator--sm .runtime-indicator__dot {
+  width: 6px;
+  height: 6px;
+}
+
+.runtime-indicator--md .runtime-indicator__dot {
+  width: 8px;
+  height: 8px;
+}
+
+.runtime-indicator__dot--running {
+  background: var(--tx-runtime-running);
+  box-shadow: 0 0 6px var(--tx-runtime-running);
+}
+
+.runtime-indicator__dot--stopped {
+  background: var(--tx-runtime-stopped);
+}
+
+.runtime-indicator__dot--exited {
+  background: var(--tx-runtime-exited);
+}
+
+.runtime-indicator__label {
+  font-size: var(--tx-text-xs);
+  color: var(--tx-text-secondary);
+}

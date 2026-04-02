@@ -1,0 +1,57 @@
+.studio-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--tx-statusbar-height);
+  padding: 0 var(--tx-space-md);
+  background: var(--tx-bg-sunken);
+  border-top: 1px solid var(--tx-border-subtle);
+  font-size: var(--tx-text-xs);
+  color: var(--tx-text-muted);
+  grid-column: 1 / -1;
+}
+
+.studio-statusbar__left,
+.studio-statusbar__center,
+.studio-statusbar__right {
+  display: flex;
+  align-items: center;
+  gap: var(--tx-space-sm);
+}
+
+.studio-statusbar__left {
+  flex: 1;
+}
+
+.studio-statusbar__right {
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.studio-statusbar__runtimes {
+  display: flex;
+  align-items: center;
+  gap: var(--tx-space-md);
+}
+
+.studio-statusbar__runtime-item {
+  display: flex;
+  align-items: center;
+  gap: var(--tx-space-xs);
+}
+
+.studio-statusbar__idle {
+  color: var(--tx-text-muted);
+}
+
+.studio-statusbar__version {
+  color: var(--tx-text-muted);
+}
+
+.studio-statusbar__breadcrumb {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+  color: var(--tx-text-secondary);
+}

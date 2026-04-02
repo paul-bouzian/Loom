@@ -1,0 +1,39 @@
+.studio-welcome {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.studio-welcome__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--tx-radius-xl);
+  font-size: var(--tx-text-lg);
+  font-weight: var(--tx-weight-bold);
+  letter-spacing: 0.08em;
+  color: var(--tx-accent-text);
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+}
+
+.studio-welcome__cta {
+  padding: var(--tx-space-sm) var(--tx-space-xl);
+  font-size: var(--tx-text-base);
+  font-weight: var(--tx-weight-medium);
+  color: var(--tx-accent-text);
+  background: var(--tx-accent);
+  border-radius: var(--tx-radius-md);
+  transition: background var(--tx-transition-fast);
+}
+
+.studio-welcome__cta:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.studio-welcome__cta:hover {
+  background: var(--tx-accent-hover);
+}
