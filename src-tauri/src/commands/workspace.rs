@@ -42,6 +42,19 @@ pub fn rename_project(
 }
 
 #[tauri::command]
+pub fn remove_project(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let environment_ids = state.workspace.project_environment_ids(&project_id)?;
+    for environment_id in environment_ids {
+        state.runtime.stop(&environment_id)?;
+    }
+    state.workspace.remove_project(&project_id)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn create_worktree_environment(
     input: CreateWorktreeRequest,
     state: State<'_, AppState>,

@@ -1,0 +1,24 @@
+.env-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: var(--tx-text-xs);
+  font-weight: var(--tx-weight-medium);
+  line-height: var(--tx-leading-tight);
+  border-radius: var(--tx-radius-sm);
+  white-space: nowrap;
+}
+
+.env-badge--local {
+  background: var(--tx-accent-subtle);
+  color: var(--tx-accent);
+}
+
+.env-badge--managedWorktree {
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--tx-warning);
+}
+
+.env-badge--permanentWorktree {
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--tx-success);
+}

@@ -1,0 +1,10 @@
+.studio-shell {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1fr var(--tx-statusbar-height);
+  grid-template-columns: var(--tx-rail-width) auto 1fr auto;
+}
+
+.studio-shell > .studio-statusbar {
+  grid-column: 1 / -1;
+}
