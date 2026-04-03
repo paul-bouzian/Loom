@@ -2,11 +2,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::domain::conversation::{
-    CollaborationModeOption, ConversationComposerSettings, ConversationErrorSnapshot,
-    ConversationItem, ConversationItemStatus, ConversationMessageItem,
-    ConversationReasoningItem, ConversationRole, ConversationStatus, ConversationSystemItem,
-    ConversationTone, ConversationToolItem, ModelOption, ThreadConversationSnapshot,
-    ThreadTokenUsageSnapshot, TokenUsageBreakdown,
+    CollaborationModeOption, ConversationApprovalKind, ConversationComposerSettings,
+    ConversationErrorSnapshot, ConversationInteraction, ConversationItem, ConversationItemStatus,
+    ConversationMessageItem, ConversationReasoningItem, ConversationRole, ConversationStatus,
+    ConversationSystemItem, ConversationTone, ConversationToolItem, FileSystemPermissionSnapshot,
+    ModelOption, NetworkApprovalContextSnapshot, NetworkPermissionSnapshot,
+    NetworkPolicyAmendmentSnapshot, NetworkPolicyRuleAction, PendingApprovalRequest,
+    PendingUserInputOption, PendingUserInputQuestion, PendingUserInputRequest,
+    PermissionProfileSnapshot, ProposedPlanSnapshot, ProposedPlanStatus, ProposedPlanStep,
+    ProposedPlanStepStatus, ThreadConversationSnapshot, ThreadTokenUsageSnapshot,
+    TokenUsageBreakdown, UnsupportedInteractionRequest,
 };
 use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort};
 use crate::error::{AppError, AppResult};
@@ -28,6 +33,7 @@ pub struct ResponseEnvelope {
 
 #[derive(Debug, Clone)]
 pub struct ServerRequestEnvelope {
+    pub id: Value,
     pub method: String,
     pub params: Value,
 }
@@ -114,8 +120,7 @@ pub struct TurnCompletedNotification {
 #[serde(rename_all = "camelCase")]
 pub struct ItemNotification {
     pub thread_id: String,
-    #[serde(rename = "turnId")]
-    pub _turn_id: String,
+    pub turn_id: String,
     pub item: Value,
 }
 
@@ -160,6 +165,133 @@ pub struct TokenUsageWire {
 pub struct ErrorNotification {
     pub thread_id: Option<String>,
     pub error: TurnErrorWire,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnPlanUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    #[serde(default)]
+    pub explanation: Option<String>,
+    #[serde(default)]
+    pub plan: Vec<TurnPlanStepWire>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnPlanStepWire {
+    pub step: String,
+    pub status: ProposedPlanStepStatus,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    #[serde(default)]
+    pub questions: Vec<ToolRequestUserInputQuestionWire>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputQuestionWire {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Option<Vec<ToolRequestUserInputOptionWire>>,
+    #[serde(default)]
+    pub is_other: bool,
+    #[serde(default)]
+    pub is_secret: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputOptionWire {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecutionRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub approval_id: Option<String>,
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+    pub reason: Option<String>,
+    pub network_approval_context: Option<NetworkApprovalContextWire>,
+    pub proposed_execpolicy_amendment: Option<Vec<String>>,
+    pub proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendmentWire>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChangeRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub reason: Option<String>,
+    pub grant_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionsRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub permissions: PermissionProfileWire,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionProfileWire {
+    pub file_system: Option<FileSystemPermissionsWire>,
+    pub network: Option<NetworkPermissionWire>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSystemPermissionsWire {
+    pub read: Option<Vec<String>>,
+    pub write: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkPermissionWire {
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkApprovalContextWire {
+    pub host: String,
+    pub protocol: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkPolicyAmendmentWire {
+    pub action: NetworkPolicyRuleAction,
+    pub host: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -231,6 +363,7 @@ pub fn parse_incoming_message(line: &str) -> AppResult<IncomingMessage> {
             AppError::Runtime(format!("Failed to decode app-server request: {error}"))
         })?;
         return Ok(IncomingMessage::Request(ServerRequestEnvelope {
+            id: request.id,
             method: request.method,
             params: request.params.unwrap_or(Value::Null),
         }));
@@ -324,6 +457,10 @@ pub fn user_input_payload(text: &str) -> Value {
     json!([{ "type": "text", "text": text }])
 }
 
+pub fn plan_approval_message() -> &'static str {
+    "Plan approved. Begin implementing the changes now. Do not re-explain the plan — start writing code."
+}
+
 pub fn build_history_snapshot(
     thread_id: String,
     environment_id: String,
@@ -339,8 +476,9 @@ pub fn build_history_snapshot(
     );
     let mut last_status = ConversationStatus::Idle;
     let mut last_error = None;
+    let last_turn_index = thread.turns.len().saturating_sub(1);
 
-    for turn in thread.turns {
+    for (index, turn) in thread.turns.into_iter().enumerate() {
         last_status = conversation_status_from_turn_status(turn.status.as_str());
         if matches!(last_status, ConversationStatus::Running) {
             snapshot.active_turn_id = Some(turn.id.clone());
@@ -348,10 +486,21 @@ pub fn build_history_snapshot(
         if let Some(error) = turn.error {
             last_error = Some(error_snapshot(error));
         }
+        let mut latest_turn_plan = None;
         for item in turn.items {
+            if item.get("type").and_then(Value::as_str) == Some("plan") {
+                if index == last_turn_index {
+                    latest_turn_plan =
+                        proposed_plan_from_item(&turn.id, &item, ProposedPlanStatus::Ready);
+                }
+                continue;
+            }
             if let Some(normalized) = normalize_item(&item) {
                 upsert_item(&mut snapshot.items, normalized);
             }
+        }
+        if index == last_turn_index {
+            snapshot.proposed_plan = latest_turn_plan;
         }
     }
 
@@ -446,6 +595,9 @@ pub fn normalize_item(value: &Value) -> Option<ConversationItem> {
                         .join("\n")
                 })
                 .unwrap_or_default();
+            if is_hidden_control_message(&text) {
+                return None;
+            }
             Some(ConversationItem::Message(ConversationMessageItem {
                 id,
                 role: ConversationRole::User,
@@ -459,14 +611,7 @@ pub fn normalize_item(value: &Value) -> Option<ConversationItem> {
             text: string_field(value, "text"),
             is_streaming: false,
         })),
-        "plan" => Some(ConversationItem::Tool(ConversationToolItem {
-            id,
-            tool_type: "plan".to_string(),
-            title: "Plan".to_string(),
-            status: ConversationItemStatus::Completed,
-            summary: None,
-            output: rich_text_field(value, "text"),
-        })),
+        "plan" => None,
         "reasoning" => Some(ConversationItem::Reasoning(ConversationReasoningItem {
             id,
             summary: rich_text_field(value, "summary"),
@@ -570,6 +715,239 @@ pub fn normalize_item(value: &Value) -> Option<ConversationItem> {
             body: format!("ThreadEx recorded the `{other}` item without a dedicated renderer."),
         })),
     }
+}
+
+pub fn normalize_server_interaction(
+    interaction_id: &str,
+    request: &ServerRequestEnvelope,
+) -> Option<ConversationInteraction> {
+    match request.method.as_str() {
+        "item/tool/requestUserInput" => {
+            let params =
+                serde_json::from_value::<ToolRequestUserInputParams>(request.params.clone()).ok()?;
+            Some(ConversationInteraction::UserInput(Box::new(PendingUserInputRequest {
+                id: interaction_id.to_string(),
+                method: request.method.clone(),
+                thread_id: params.thread_id,
+                turn_id: params.turn_id,
+                item_id: params.item_id,
+                questions: params
+                    .questions
+                    .into_iter()
+                    .map(|question| PendingUserInputQuestion {
+                        id: question.id,
+                        header: question.header,
+                        question: question.question,
+                        options: question
+                            .options
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|option| PendingUserInputOption {
+                                label: option.label,
+                                description: option.description,
+                            })
+                            .collect(),
+                        is_other: question.is_other,
+                        is_secret: question.is_secret,
+                    })
+                    .collect(),
+            })))
+        }
+        "item/commandExecution/requestApproval" => {
+            let params = serde_json::from_value::<CommandExecutionRequestApprovalParams>(
+                request.params.clone(),
+            )
+            .ok()?;
+            Some(ConversationInteraction::Approval(Box::new(PendingApprovalRequest {
+                id: interaction_id.to_string(),
+                method: request.method.clone(),
+                thread_id: params.thread_id,
+                turn_id: params.turn_id,
+                item_id: params
+                    .approval_id
+                    .filter(|approval_id| !approval_id.is_empty())
+                    .unwrap_or(params.item_id),
+                approval_kind: ConversationApprovalKind::CommandExecution,
+                title: "Command approval".to_string(),
+                summary: params.command.clone().filter(|command| !command.is_empty()),
+                reason: params.reason,
+                command: params.command,
+                cwd: params.cwd,
+                grant_root: None,
+                permissions: None,
+                network_context: params.network_approval_context.map(|context| {
+                    NetworkApprovalContextSnapshot {
+                        host: context.host,
+                        protocol: context.protocol,
+                    }
+                }),
+                proposed_execpolicy_amendment: params
+                    .proposed_execpolicy_amendment
+                    .unwrap_or_default(),
+                proposed_network_policy_amendments: params
+                    .proposed_network_policy_amendments
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|amendment| NetworkPolicyAmendmentSnapshot {
+                        action: amendment.action,
+                        host: amendment.host,
+                    })
+                    .collect(),
+            })))
+        }
+        "item/fileChange/requestApproval" => {
+            let params =
+                serde_json::from_value::<FileChangeRequestApprovalParams>(request.params.clone())
+                    .ok()?;
+            Some(ConversationInteraction::Approval(Box::new(PendingApprovalRequest {
+                id: interaction_id.to_string(),
+                method: request.method.clone(),
+                thread_id: params.thread_id,
+                turn_id: params.turn_id,
+                item_id: params.item_id,
+                approval_kind: ConversationApprovalKind::FileChange,
+                title: "File change approval".to_string(),
+                summary: params.grant_root.clone(),
+                reason: params.reason,
+                command: None,
+                cwd: None,
+                grant_root: params.grant_root,
+                permissions: None,
+                network_context: None,
+                proposed_execpolicy_amendment: Vec::new(),
+                proposed_network_policy_amendments: Vec::new(),
+            })))
+        }
+        "item/permissions/requestApproval" => {
+            let params = serde_json::from_value::<PermissionsRequestApprovalParams>(
+                request.params.clone(),
+            )
+            .ok()?;
+            Some(ConversationInteraction::Approval(Box::new(PendingApprovalRequest {
+                id: interaction_id.to_string(),
+                method: request.method.clone(),
+                thread_id: params.thread_id,
+                turn_id: params.turn_id,
+                item_id: params.item_id,
+                approval_kind: ConversationApprovalKind::Permissions,
+                title: "Permission approval".to_string(),
+                summary: permission_profile_summary(&params.permissions),
+                reason: params.reason,
+                command: None,
+                cwd: None,
+                grant_root: None,
+                permissions: Some(permission_profile_snapshot(params.permissions)),
+                network_context: None,
+                proposed_execpolicy_amendment: Vec::new(),
+                proposed_network_policy_amendments: Vec::new(),
+            })))
+        }
+        "mcpServer/elicitation/request"
+        | "item/tool/call"
+        | "account/chatgptAuthTokens/refresh"
+        | "applyPatchApproval"
+        | "execCommandApproval" => {
+            let thread_id = request
+                .params
+                .get("threadId")
+                .and_then(Value::as_str)?
+                .to_string();
+            let turn_id = request
+                .params
+                .get("turnId")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let item_id = request
+                .params
+                .get("itemId")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+
+            Some(ConversationInteraction::Unsupported(
+                UnsupportedInteractionRequest {
+                    id: interaction_id.to_string(),
+                    method: request.method.clone(),
+                    thread_id,
+                    turn_id,
+                    item_id,
+                    title: "Interactive request not supported yet".to_string(),
+                    message: format!(
+                        "`{}` is visible in ThreadEx, but responding to it is part of the next milestone.",
+                        request.method
+                    ),
+                },
+            ))
+        }
+        _ => None,
+    }
+}
+
+pub fn proposed_plan_from_turn_update(
+    event: TurnPlanUpdatedNotification,
+    existing: Option<&ProposedPlanSnapshot>,
+) -> ProposedPlanSnapshot {
+    let mut plan = existing
+        .cloned()
+        .filter(|candidate| candidate.turn_id == event.turn_id)
+        .unwrap_or(ProposedPlanSnapshot {
+            turn_id: event.turn_id,
+            item_id: None,
+            explanation: String::new(),
+            steps: Vec::new(),
+            markdown: String::new(),
+            status: ProposedPlanStatus::Streaming,
+            is_awaiting_decision: false,
+        });
+    plan.explanation = event.explanation.unwrap_or_default();
+    plan.steps = event
+        .plan
+        .into_iter()
+        .map(|step| ProposedPlanStep {
+            step: step.step,
+            status: step.status,
+        })
+        .collect();
+    if !plan.is_awaiting_decision {
+        plan.status = ProposedPlanStatus::Streaming;
+    }
+    plan
+}
+
+pub fn append_plan_delta(plan: &mut ProposedPlanSnapshot, item_id: &str, delta: &str) {
+    plan.item_id = Some(item_id.to_string());
+    plan.markdown.push_str(delta);
+    if !plan.is_awaiting_decision {
+        plan.status = ProposedPlanStatus::Streaming;
+    }
+}
+
+pub fn complete_proposed_plan(
+    plan: &mut ProposedPlanSnapshot,
+    item_id: &str,
+    value: Option<&Value>,
+) {
+    plan.item_id = Some(item_id.to_string());
+    if let Some(value) = value {
+        let markdown = rich_text_field(value, "text");
+        if !markdown.is_empty() {
+            plan.markdown = markdown;
+        }
+    }
+    if plan.markdown.trim().is_empty() && plan.steps.is_empty() {
+        return;
+    }
+    plan.status = ProposedPlanStatus::Ready;
+    plan.is_awaiting_decision = true;
+}
+
+pub fn mark_plan_superseded(plan: &mut ProposedPlanSnapshot) {
+    plan.status = ProposedPlanStatus::Superseded;
+    plan.is_awaiting_decision = false;
+}
+
+pub fn mark_plan_approved(plan: &mut ProposedPlanSnapshot) {
+    plan.status = ProposedPlanStatus::Approved;
+    plan.is_awaiting_decision = false;
 }
 
 pub fn upsert_item(items: &mut Vec<ConversationItem>, item: ConversationItem) {
@@ -828,6 +1206,82 @@ fn web_search_output(value: &Value) -> String {
     lines.join("\n")
 }
 
+pub fn proposed_plan_from_item(
+    turn_id: &str,
+    value: &Value,
+    status: ProposedPlanStatus,
+) -> Option<ProposedPlanSnapshot> {
+    let markdown = rich_text_field(value, "text");
+    let steps = value
+        .get("plan")
+        .and_then(Value::as_array)
+        .map(|plan| {
+            plan.iter()
+                .filter_map(|step| {
+                    Some(ProposedPlanStep {
+                        step: step.get("step")?.as_str()?.to_string(),
+                        status: serde_json::from_value::<ProposedPlanStepStatus>(
+                            step.get("status")?.clone(),
+                        )
+                        .ok()?,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let explanation = value
+        .get("explanation")
+        .map(rich_text_value)
+        .unwrap_or_default();
+
+    if markdown.trim().is_empty() && steps.is_empty() && explanation.trim().is_empty() {
+        return None;
+    }
+
+    Some(ProposedPlanSnapshot {
+        turn_id: turn_id.to_string(),
+        item_id: value.get("id").and_then(Value::as_str).map(ToString::to_string),
+        explanation,
+        steps,
+        markdown,
+        status,
+        is_awaiting_decision: matches!(status, ProposedPlanStatus::Ready),
+    })
+}
+
+fn permission_profile_snapshot(profile: PermissionProfileWire) -> PermissionProfileSnapshot {
+    PermissionProfileSnapshot {
+        file_system: profile.file_system.map(|file_system| FileSystemPermissionSnapshot {
+            read: file_system.read.unwrap_or_default(),
+            write: file_system.write.unwrap_or_default(),
+        }),
+        network: profile.network.map(|network| NetworkPermissionSnapshot {
+            enabled: network.enabled,
+        }),
+    }
+}
+
+fn permission_profile_summary(profile: &PermissionProfileWire) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(file_system) = profile.file_system.as_ref() {
+        if let Some(read) = file_system.read.as_ref().filter(|paths| !paths.is_empty()) {
+            parts.push(format!("Read: {}", read.join(", ")));
+        }
+        if let Some(write) = file_system.write.as_ref().filter(|paths| !paths.is_empty()) {
+            parts.push(format!("Write: {}", write.join(", ")));
+        }
+    }
+    if let Some(network) = profile.network.as_ref().and_then(|network| network.enabled) {
+        parts.push(format!("Network: {}", if network { "enabled" } else { "disabled" }));
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" · "))
+    }
+}
+
 fn format_file_changes(changes: &[Value]) -> String {
     changes
         .iter()
@@ -863,6 +1317,10 @@ fn user_content_to_text(value: &Value) -> String {
             .unwrap_or("$skill".to_string()),
         _ => String::new(),
     }
+}
+
+fn is_hidden_control_message(text: &str) -> bool {
+    text == plan_approval_message()
 }
 
 fn item_id(item: &ConversationItem) -> &str {
@@ -942,6 +1400,7 @@ struct ResponseErrorWire {
 
 #[derive(Debug, Clone, Deserialize)]
 struct ServerRequestWire {
+    id: Value,
     method: String,
     params: Option<Value>,
 }

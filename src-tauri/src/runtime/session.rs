@@ -13,23 +13,29 @@ use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::domain::conversation::{
-    BlockedInteractionSnapshot, ConversationEventPayload, ConversationItem, ConversationMessageItem,
-    ConversationRole, ConversationStatus, EnvironmentCapabilitiesSnapshot,
-    ThreadConversationOpenResponse, ThreadConversationSnapshot,
+    ApprovalResponseInput, CommandApprovalDecisionInput, ConversationEventPayload,
+    ConversationInteraction, ConversationItem, ConversationMessageItem, ConversationRole,
+    ConversationStatus, EnvironmentCapabilitiesSnapshot, FileChangeApprovalDecisionInput,
+    PermissionGrantScope, PermissionsApprovalDecisionInput, PlanDecisionAction,
+    RespondToUserInputRequestInput, SubmitPlanDecisionInput, ThreadConversationOpenResponse,
+    ThreadConversationSnapshot,
 };
 use crate::domain::settings::CollaborationMode;
 use crate::error::{AppError, AppResult};
 use crate::runtime::protocol::{
     CONVERSATION_EVENT_NAME, CollaborationModeListResponse, ErrorNotification, IncomingMessage,
-    ItemDeltaNotification, ItemNotification, ModelListResponse, ReasoningBoundaryNotification,
-    ThreadReadResponse, ThreadStartResponse, TokenUsageNotification, TurnCompletedNotification,
-    TurnResponse, TurnStartedNotification, append_agent_delta, append_reasoning_boundary,
+    ItemDeltaNotification, ItemNotification, ModelListResponse, PlanDeltaNotification,
+    ReasoningBoundaryNotification, ThreadReadResponse, ThreadStartResponse,
+    TokenUsageNotification, TurnCompletedNotification, TurnPlanUpdatedNotification, TurnResponse,
+    TurnStartedNotification, append_agent_delta, append_plan_delta, append_reasoning_boundary,
     append_reasoning_content, append_reasoning_summary, append_tool_output,
     approval_policy_value, build_history_snapshot, clear_streaming_flags,
     collaboration_mode_options_from_response, collaboration_mode_payload,
-    conversation_status_from_turn_status, error_snapshot, initialize_params,
-    initialized_notification, model_options_from_response, normalize_item,
-    parse_incoming_message, sandbox_policy_value, token_usage_snapshot, upsert_item,
+    complete_proposed_plan, conversation_status_from_turn_status, error_snapshot,
+    initialize_params, initialized_notification, mark_plan_approved, mark_plan_superseded,
+    model_options_from_response, normalize_item, normalize_server_interaction,
+    parse_incoming_message, plan_approval_message, proposed_plan_from_item,
+    proposed_plan_from_turn_update, sandbox_policy_value, token_usage_snapshot, upsert_item,
     user_input_payload,
 };
 use crate::services::workspace::ThreadRuntimeContext;
@@ -55,6 +61,13 @@ struct SessionState {
     snapshots_by_thread: HashMap<String, ThreadConversationSnapshot>,
     local_thread_by_codex_id: HashMap<String, String>,
     capabilities: Option<EnvironmentCapabilitiesSnapshot>,
+    pending_server_requests: HashMap<String, PendingServerRequest>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingServerRequest {
+    json_rpc_id: serde_json::Value,
+    thread_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -274,96 +287,120 @@ impl RuntimeSession {
         context: ThreadRuntimeContext,
         text: String,
     ) -> AppResult<SendMessageResult> {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Err(AppError::Validation("Message cannot be empty.".to_string()));
-        }
-        if matches!(context.composer.collaboration_mode, CollaborationMode::Plan) {
+        self.send_message_with_visibility(context, text, true).await
+    }
+
+    pub async fn respond_to_approval_request(
+        &self,
+        thread_id: &str,
+        interaction_id: &str,
+        response: ApprovalResponseInput,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let json_rpc_id = {
+            let state = self.state.lock().await;
+            let pending = state
+                .pending_server_requests
+                .get(interaction_id)
+                .cloned()
+                .ok_or_else(|| AppError::NotFound("Approval request not found.".to_string()))?;
+            if pending.thread_id != thread_id {
+                return Err(AppError::Validation(
+                    "Approval request does not belong to the selected thread.".to_string(),
+                ));
+            }
+            pending.json_rpc_id
+        };
+
+        let payload = approval_response_payload(response)?;
+        self.send_server_response(json_rpc_id, payload).await?;
+        self.complete_interaction(thread_id, interaction_id).await
+    }
+
+    pub async fn respond_to_user_input_request(
+        &self,
+        input: RespondToUserInputRequestInput,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        if input.answers.is_empty() {
             return Err(AppError::Validation(
-                "Plan mode is not part of this milestone yet. Switch the composer to Build."
-                    .to_string(),
+                "At least one answer is required to continue.".to_string(),
             ));
         }
 
-        let mut open = self.open_thread(context.clone()).await?;
-        let user_item = ConversationItem::Message(ConversationMessageItem {
-            id: format!("local-user-{}", Uuid::now_v7()),
-            role: ConversationRole::User,
-            text: trimmed.to_string(),
-            is_streaming: false,
-        });
-        open.snapshot.status = ConversationStatus::Running;
-        open.snapshot.error = None;
-        open.snapshot.blocked_interaction = None;
-        upsert_item(&mut open.snapshot.items, user_item);
-
-        let mut new_codex_thread_id = None;
-        let codex_thread_id = match open.snapshot.codex_thread_id.clone() {
-            Some(thread_id) => thread_id,
-            None => {
-                let response = self
-                    .request_typed::<ThreadStartResponse>(
-                        "thread/start",
-                        serde_json::json!({
-                            "cwd": context.environment_path,
-                            "approvalPolicy": approval_policy_value(context.composer.approval_policy),
-                        }),
-                    )
-                    .await?;
-                let thread_id = response.thread.id;
-                new_codex_thread_id = Some(thread_id.clone());
-                open.snapshot.codex_thread_id = Some(thread_id.clone());
-                thread_id
+        let json_rpc_id = {
+            let state = self.state.lock().await;
+            let pending = state
+                .pending_server_requests
+                .get(&input.interaction_id)
+                .cloned()
+                .ok_or_else(|| AppError::NotFound("User input request not found.".to_string()))?;
+            if pending.thread_id != input.thread_id {
+                return Err(AppError::Validation(
+                    "User input request does not belong to the selected thread.".to_string(),
+                ));
             }
+            pending.json_rpc_id
         };
 
-        {
-            let mut state = self.state.lock().await;
-            state
-                .local_thread_by_codex_id
-                .insert(codex_thread_id.clone(), context.thread_id.clone());
-            state
-                .snapshots_by_thread
-                .insert(context.thread_id.clone(), open.snapshot.clone());
-        }
-        self.emit_snapshot(&open.snapshot);
-
-        let turn_response = self
-            .request_typed::<TurnResponse>(
-                "turn/start",
-                serde_json::json!({
-                    "threadId": codex_thread_id,
-                    "input": user_input_payload(trimmed),
-                    "cwd": context.environment_path,
-                    "approvalPolicy": approval_policy_value(context.composer.approval_policy),
-                    "sandboxPolicy": sandbox_policy_value(
-                        context.composer.approval_policy,
-                        &context.environment_path,
-                    ),
-                    "collaborationMode": collaboration_mode_payload(&context.composer),
-                }),
-            )
+        let answers = input
+            .answers
+            .into_iter()
+            .map(|(question_id, answers)| {
+                (
+                    question_id,
+                    serde_json::json!({
+                        "answers": answers
+                    }),
+                )
+            })
+            .collect::<serde_json::Map<String, serde_json::Value>>();
+        self.send_server_response(json_rpc_id, serde_json::json!({ "answers": answers }))
             .await?;
+        self.complete_interaction(&input.thread_id, &input.interaction_id)
+            .await
+    }
 
-        let snapshot = {
-            let mut state = self.state.lock().await;
-            let snapshot = state
-                .snapshots_by_thread
-                .get_mut(&context.thread_id)
-                .ok_or_else(|| {
-                    AppError::Runtime("Conversation snapshot disappeared unexpectedly.".to_string())
-                })?;
-            snapshot.active_turn_id = Some(turn_response.turn.id);
-            snapshot.status = conversation_status_from_turn_status(&turn_response.turn.status);
-            snapshot.error = turn_response.turn.error.map(error_snapshot);
-            snapshot.clone()
-        };
-        self.emit_snapshot(&snapshot);
+    pub async fn submit_plan_decision(
+        &self,
+        mut context: ThreadRuntimeContext,
+        input: SubmitPlanDecisionInput,
+    ) -> AppResult<SendMessageResult> {
+        if let Some(composer) = input.composer {
+            context.composer = composer;
+        }
 
-        Ok(SendMessageResult {
-            snapshot,
-            new_codex_thread_id,
-        })
+        match input.action {
+            PlanDecisionAction::Approve => {
+                context.composer.collaboration_mode = CollaborationMode::Build;
+                self.mark_plan_state(&context.thread_id, mark_plan_approved)
+                    .await?;
+                self.push_system_item(
+                    &context.thread_id,
+                    "Plan approved",
+                    "ThreadEx approved the current plan and switched the thread to Build mode.",
+                )
+                .await?;
+                self.send_message_with_visibility(
+                    context,
+                    plan_approval_message().to_string(),
+                    false,
+                )
+                .await
+            }
+            PlanDecisionAction::Refine => {
+                let feedback = input.feedback.unwrap_or_default();
+                let trimmed = feedback.trim();
+                if trimmed.is_empty() {
+                    return Err(AppError::Validation(
+                        "Add refinement guidance before asking Codex to revise the plan."
+                            .to_string(),
+                    ));
+                }
+                self.mark_plan_state(&context.thread_id, mark_plan_superseded)
+                    .await?;
+                self.send_message_with_visibility(context, trimmed.to_string(), true)
+                    .await
+            }
+        }
     }
 
     pub async fn interrupt_thread(
@@ -431,6 +468,7 @@ impl RuntimeSession {
                 "Codex runtime stopped before the request completed.".to_string(),
             )));
         }
+        self.state.lock().await.pending_server_requests.clear();
         Ok(())
     }
 
@@ -465,6 +503,188 @@ impl RuntimeSession {
         };
         self.state.lock().await.capabilities = Some(capabilities.clone());
         Ok(capabilities)
+    }
+
+    async fn send_message_with_visibility(
+        &self,
+        context: ThreadRuntimeContext,
+        text: String,
+        visible_to_user: bool,
+    ) -> AppResult<SendMessageResult> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::Validation("Message cannot be empty.".to_string()));
+        }
+
+        let mut open = self.open_thread(context.clone()).await?;
+        if visible_to_user {
+            let user_item = ConversationItem::Message(ConversationMessageItem {
+                id: format!("local-user-{}", Uuid::now_v7()),
+                role: ConversationRole::User,
+                text: trimmed.to_string(),
+                is_streaming: false,
+            });
+            upsert_item(&mut open.snapshot.items, user_item);
+        }
+
+        open.snapshot.status = ConversationStatus::Running;
+        open.snapshot.error = None;
+        open.snapshot.pending_interactions.clear();
+        if let Some(plan) = open.snapshot.proposed_plan.as_mut() {
+            plan.is_awaiting_decision = false;
+            if matches!(context.composer.collaboration_mode, CollaborationMode::Plan) {
+                plan.status = crate::domain::conversation::ProposedPlanStatus::Superseded;
+            }
+        }
+
+        let mut new_codex_thread_id = None;
+        let codex_thread_id = match open.snapshot.codex_thread_id.clone() {
+            Some(thread_id) => thread_id,
+            None => {
+                let response = self
+                    .request_typed::<ThreadStartResponse>(
+                        "thread/start",
+                        serde_json::json!({
+                            "cwd": context.environment_path,
+                            "approvalPolicy": approval_policy_value(context.composer.approval_policy),
+                        }),
+                    )
+                    .await?;
+                let thread_id = response.thread.id;
+                new_codex_thread_id = Some(thread_id.clone());
+                open.snapshot.codex_thread_id = Some(thread_id.clone());
+                thread_id
+            }
+        };
+
+        {
+            let mut state = self.state.lock().await;
+            state
+                .local_thread_by_codex_id
+                .insert(codex_thread_id.clone(), context.thread_id.clone());
+            state
+                .snapshots_by_thread
+                .insert(context.thread_id.clone(), open.snapshot.clone());
+        }
+        self.emit_snapshot(&open.snapshot);
+
+        let turn_response = self
+            .request_typed::<TurnResponse>(
+                "turn/start",
+                serde_json::json!({
+                    "threadId": codex_thread_id,
+                    "input": user_input_payload(trimmed),
+                    "cwd": context.environment_path,
+                    "approvalPolicy": approval_policy_value(context.composer.approval_policy),
+                    "sandboxPolicy": sandbox_policy_value(
+                        context.composer.approval_policy,
+                        &context.environment_path,
+                    ),
+                    "collaborationMode": collaboration_mode_payload(&context.composer),
+                }),
+            )
+            .await?;
+
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            let snapshot = state
+                .snapshots_by_thread
+                .get_mut(&context.thread_id)
+                .ok_or_else(|| {
+                    AppError::Runtime("Conversation snapshot disappeared unexpectedly.".to_string())
+                })?;
+            snapshot.composer = context.composer.clone();
+            snapshot.active_turn_id = Some(turn_response.turn.id);
+            snapshot.status = conversation_status_from_turn_status(&turn_response.turn.status);
+            snapshot.error = turn_response.turn.error.map(error_snapshot);
+            reconcile_snapshot_status(snapshot);
+            snapshot.clone()
+        };
+        self.emit_snapshot(&snapshot);
+
+        Ok(SendMessageResult {
+            snapshot,
+            new_codex_thread_id,
+        })
+    }
+
+    async fn send_server_response(
+        &self,
+        id: serde_json::Value,
+        result: serde_json::Value,
+    ) -> AppResult<()> {
+        self.write_message(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result
+        }))
+        .await
+    }
+
+    async fn complete_interaction(
+        &self,
+        thread_id: &str,
+        interaction_id: &str,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            state.pending_server_requests.remove(interaction_id);
+            let snapshot = state
+                .snapshots_by_thread
+                .get_mut(thread_id)
+                .ok_or_else(|| AppError::NotFound("Thread conversation is not open.".to_string()))?;
+            snapshot
+                .pending_interactions
+                .retain(|interaction| interaction_id_for(interaction) != interaction_id);
+            reconcile_snapshot_status(snapshot);
+            snapshot.clone()
+        };
+        self.emit_snapshot(&snapshot);
+        Ok(snapshot)
+    }
+
+    async fn mark_plan_state<F>(&self, thread_id: &str, mutate: F) -> AppResult<()>
+    where
+        F: FnOnce(&mut crate::domain::conversation::ProposedPlanSnapshot),
+    {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            let snapshot = state
+                .snapshots_by_thread
+                .get_mut(thread_id)
+                .ok_or_else(|| AppError::NotFound("Thread conversation is not open.".to_string()))?;
+            let plan = snapshot
+                .proposed_plan
+                .as_mut()
+                .ok_or_else(|| AppError::Validation("There is no proposed plan to update.".to_string()))?;
+            mutate(plan);
+            reconcile_snapshot_status(snapshot);
+            snapshot.clone()
+        };
+        self.emit_snapshot(&snapshot);
+        Ok(())
+    }
+
+    async fn push_system_item(&self, thread_id: &str, title: &str, body: &str) -> AppResult<()> {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            let snapshot = state
+                .snapshots_by_thread
+                .get_mut(thread_id)
+                .ok_or_else(|| AppError::NotFound("Thread conversation is not open.".to_string()))?;
+            upsert_item(
+                &mut snapshot.items,
+                ConversationItem::System(crate::domain::conversation::ConversationSystemItem {
+                    id: format!("system-{}", Uuid::now_v7()),
+                    tone: crate::domain::conversation::ConversationTone::Info,
+                    title: title.to_string(),
+                    body: body.to_string(),
+                }),
+            );
+            snapshot.clone()
+        };
+        self.emit_snapshot(&snapshot);
+        Ok(())
     }
 
     async fn request_typed<T>(&self, method: &str, params: serde_json::Value) -> AppResult<T>
@@ -608,31 +828,39 @@ async fn handle_server_request(
     state: &Arc<Mutex<SessionState>>,
     request: crate::runtime::protocol::ServerRequestEnvelope,
 ) {
-    let Some(codex_thread_id) = request
-        .params
-        .get("threadId")
-        .and_then(serde_json::Value::as_str)
-    else {
+    let interaction_id = format!("interaction-{}", Uuid::now_v7());
+    let Some(interaction) = normalize_server_interaction(&interaction_id, &request) else {
         return;
     };
 
     let snapshot = {
         let mut state = state.lock().await;
-        let Some(local_thread_id) = state.local_thread_by_codex_id.get(codex_thread_id).cloned() else {
+        let codex_thread_id = interaction_thread_id(&interaction);
+        let Some(local_thread_id) = state
+            .local_thread_by_codex_id
+            .get(codex_thread_id)
+            .cloned()
+        else {
             return;
         };
+        let should_track_request = matches!(
+            interaction,
+            ConversationInteraction::Approval(_) | ConversationInteraction::UserInput(_)
+        );
+        if should_track_request {
+            state.pending_server_requests.insert(
+                interaction_id.clone(),
+                PendingServerRequest {
+                    json_rpc_id: request.id,
+                    thread_id: local_thread_id.clone(),
+                },
+            );
+        }
         let Some(snapshot) = state.snapshots_by_thread.get_mut(&local_thread_id) else {
             return;
         };
-        snapshot.status = ConversationStatus::WaitingForExternalAction;
-        snapshot.blocked_interaction = Some(BlockedInteractionSnapshot {
-            method: request.method.clone(),
-            title: "User action required".to_string(),
-            message: format!(
-                "`{}` is not actionable in ThreadEx yet. This turn is waiting for the next milestone UI.",
-                request.method
-            ),
-        });
+        snapshot.pending_interactions.push(interaction);
+        reconcile_snapshot_status(snapshot);
         snapshot.clone()
     };
     emit_snapshot_from_handle(app, snapshot);
@@ -648,12 +876,18 @@ async fn handle_notification(
         "turn/started" => {
             if let Ok(event) = serde_json::from_value::<TurnStartedNotification>(notification.params)
             {
-                update_snapshot_for_codex_thread(state, &event.thread_id, |snapshot| {
-                    snapshot.active_turn_id = Some(event.turn.id.clone());
-                    snapshot.status = ConversationStatus::Running;
-                    snapshot.error = None;
-                    snapshot.blocked_interaction = None;
-                }, app)
+                update_snapshot_for_codex_thread(
+                    state,
+                    &event.thread_id,
+                    |snapshot| {
+                        snapshot.active_turn_id = Some(event.turn.id.clone());
+                        snapshot.status = ConversationStatus::Running;
+                        snapshot.error = None;
+                        snapshot.pending_interactions.clear();
+                        reconcile_snapshot_status(snapshot);
+                    },
+                    app,
+                )
                 .await;
             }
         }
@@ -661,13 +895,42 @@ async fn handle_notification(
             if let Ok(event) =
                 serde_json::from_value::<TurnCompletedNotification>(notification.params)
             {
-                update_snapshot_for_codex_thread(state, &event.thread_id, |snapshot| {
-                    snapshot.active_turn_id = None;
-                    snapshot.status = conversation_status_from_turn_status(&event.turn.status);
-                    snapshot.error = event.turn.error.clone().map(error_snapshot);
-                    snapshot.blocked_interaction = None;
-                    clear_streaming_flags(&mut snapshot.items);
-                }, app)
+                update_snapshot_for_codex_thread(
+                    state,
+                    &event.thread_id,
+                    |snapshot| {
+                        snapshot.active_turn_id = None;
+                        snapshot.status = conversation_status_from_turn_status(&event.turn.status);
+                        snapshot.error = event.turn.error.clone().map(error_snapshot);
+                        clear_streaming_flags(&mut snapshot.items);
+                        if let Some(plan) = snapshot.proposed_plan.as_mut() {
+                            if plan.turn_id == event.turn.id && plan.status == crate::domain::conversation::ProposedPlanStatus::Streaming {
+                                complete_proposed_plan(plan, plan.item_id.clone().unwrap_or_default().as_str(), None);
+                            }
+                        }
+                        reconcile_snapshot_status(snapshot);
+                    },
+                    app,
+                )
+                .await;
+            }
+        }
+        "turn/plan/updated" => {
+            if let Ok(event) =
+                serde_json::from_value::<TurnPlanUpdatedNotification>(notification.params)
+            {
+                update_snapshot_for_codex_thread(
+                    state,
+                    &event.thread_id,
+                    |snapshot| {
+                        snapshot.proposed_plan = Some(proposed_plan_from_turn_update(
+                            event.clone(),
+                            snapshot.proposed_plan.as_ref(),
+                        ));
+                        reconcile_snapshot_status(snapshot);
+                    },
+                    app,
+                )
                 .await;
             }
         }
@@ -678,6 +941,34 @@ async fn handle_notification(
                     state,
                     &event.thread_id,
                     |snapshot| {
+                        if event.item.get("type").and_then(serde_json::Value::as_str) == Some("plan")
+                        {
+                            let existing = snapshot.proposed_plan.as_ref();
+                            snapshot.proposed_plan = proposed_plan_from_item(
+                                &event.turn_id,
+                                &event.item,
+                                if is_started {
+                                    crate::domain::conversation::ProposedPlanStatus::Streaming
+                                } else {
+                                    crate::domain::conversation::ProposedPlanStatus::Ready
+                                },
+                            )
+                            .or_else(|| existing.cloned());
+                            if let Some(plan) = snapshot.proposed_plan.as_mut() {
+                                if is_started {
+                                    plan.status = crate::domain::conversation::ProposedPlanStatus::Streaming;
+                                    plan.is_awaiting_decision = false;
+                                } else {
+                                    complete_proposed_plan(
+                                        plan,
+                                        event.item["id"].as_str().unwrap_or_default(),
+                                        Some(&event.item),
+                                    );
+                                }
+                            }
+                            reconcile_snapshot_status(snapshot);
+                            return;
+                        }
                         if let Some(item) = normalize_item(&event.item).map(|item| {
                             if is_started {
                                 mark_item_streaming(item)
@@ -687,6 +978,33 @@ async fn handle_notification(
                         }) {
                             upsert_item(&mut snapshot.items, item);
                         }
+                        reconcile_snapshot_status(snapshot);
+                    },
+                    app,
+                )
+                .await;
+            }
+        }
+        "item/plan/delta" => {
+            if let Ok(event) = serde_json::from_value::<PlanDeltaNotification>(notification.params)
+            {
+                update_snapshot_for_codex_thread(
+                    state,
+                    &event.thread_id,
+                    |snapshot| {
+                        let plan = snapshot.proposed_plan.get_or_insert_with(|| {
+                            crate::domain::conversation::ProposedPlanSnapshot {
+                                turn_id: event.turn_id.clone(),
+                                item_id: Some(event.item_id.clone()),
+                                explanation: String::new(),
+                                steps: Vec::new(),
+                                markdown: String::new(),
+                                status: crate::domain::conversation::ProposedPlanStatus::Streaming,
+                                is_awaiting_decision: false,
+                            }
+                        });
+                        append_plan_delta(plan, &event.item_id, &event.delta);
+                        reconcile_snapshot_status(snapshot);
                     },
                     app,
                 )
@@ -698,7 +1016,10 @@ async fn handle_notification(
                 update_snapshot_for_codex_thread(
                     state,
                     &event.thread_id,
-                    |snapshot| append_agent_delta(&mut snapshot.items, &event.item_id, &event.delta),
+                    |snapshot| {
+                        append_agent_delta(&mut snapshot.items, &event.item_id, &event.delta);
+                        reconcile_snapshot_status(snapshot);
+                    },
                     app,
                 )
                 .await;
@@ -710,7 +1031,8 @@ async fn handle_notification(
                     state,
                     &event.thread_id,
                     |snapshot| {
-                        append_reasoning_summary(&mut snapshot.items, &event.item_id, &event.delta)
+                        append_reasoning_summary(&mut snapshot.items, &event.item_id, &event.delta);
+                        reconcile_snapshot_status(snapshot);
                     },
                     app,
                 )
@@ -724,7 +1046,10 @@ async fn handle_notification(
                 update_snapshot_for_codex_thread(
                     state,
                     &event.thread_id,
-                    |snapshot| append_reasoning_boundary(&mut snapshot.items, &event.item_id),
+                    |snapshot| {
+                        append_reasoning_boundary(&mut snapshot.items, &event.item_id);
+                        reconcile_snapshot_status(snapshot);
+                    },
                     app,
                 )
                 .await;
@@ -736,7 +1061,8 @@ async fn handle_notification(
                     state,
                     &event.thread_id,
                     |snapshot| {
-                        append_reasoning_content(&mut snapshot.items, &event.item_id, &event.delta)
+                        append_reasoning_content(&mut snapshot.items, &event.item_id, &event.delta);
+                        reconcile_snapshot_status(snapshot);
                     },
                     app,
                 )
@@ -748,7 +1074,10 @@ async fn handle_notification(
                 update_snapshot_for_codex_thread(
                     state,
                     &event.thread_id,
-                    |snapshot| append_tool_output(&mut snapshot.items, &event.item_id, &event.delta),
+                    |snapshot| {
+                        append_tool_output(&mut snapshot.items, &event.item_id, &event.delta);
+                        reconcile_snapshot_status(snapshot);
+                    },
                     app,
                 )
                 .await;
@@ -760,7 +1089,10 @@ async fn handle_notification(
                 update_snapshot_for_codex_thread(
                     state,
                     &event.thread_id,
-                    |snapshot| snapshot.token_usage = Some(token_usage_snapshot(event.token_usage.clone())),
+                    |snapshot| {
+                        snapshot.token_usage = Some(token_usage_snapshot(event.token_usage.clone()));
+                        reconcile_snapshot_status(snapshot);
+                    },
                     app,
                 )
                 .await;
@@ -772,7 +1104,10 @@ async fn handle_notification(
                     update_snapshot_for_codex_thread(
                         state,
                         &thread_id,
-                        |snapshot| snapshot.error = Some(error_snapshot(event.error.clone())),
+                        |snapshot| {
+                            snapshot.error = Some(error_snapshot(event.error.clone()));
+                            reconcile_snapshot_status(snapshot);
+                        },
                         app,
                     )
                     .await;
@@ -813,14 +1148,173 @@ async fn update_snapshot_for_codex_thread<F>(
     }
 }
 
+fn reconcile_snapshot_status(snapshot: &mut ThreadConversationSnapshot) {
+    if !snapshot.pending_interactions.is_empty()
+        || snapshot
+            .proposed_plan
+            .as_ref()
+            .is_some_and(|plan| plan.is_awaiting_decision)
+    {
+        snapshot.status = ConversationStatus::WaitingForExternalAction;
+        return;
+    }
+
+    if snapshot.active_turn_id.is_some() {
+        snapshot.status = ConversationStatus::Running;
+        return;
+    }
+
+    if snapshot.error.is_some() {
+        snapshot.status = ConversationStatus::Failed;
+        return;
+    }
+
+    if matches!(snapshot.status, ConversationStatus::Interrupted) {
+        return;
+    }
+
+    snapshot.status = if snapshot.items.is_empty() {
+        ConversationStatus::Idle
+    } else {
+        ConversationStatus::Completed
+    };
+}
+
+fn interaction_id_for(interaction: &ConversationInteraction) -> &str {
+    match interaction {
+        ConversationInteraction::Approval(request) => &request.id,
+        ConversationInteraction::UserInput(request) => &request.id,
+        ConversationInteraction::Unsupported(request) => &request.id,
+    }
+}
+
+fn interaction_thread_id(interaction: &ConversationInteraction) -> &str {
+    match interaction {
+        ConversationInteraction::Approval(request) => &request.thread_id,
+        ConversationInteraction::UserInput(request) => &request.thread_id,
+        ConversationInteraction::Unsupported(request) => &request.thread_id,
+    }
+}
+
+fn approval_response_payload(response: ApprovalResponseInput) -> AppResult<serde_json::Value> {
+    match response {
+        ApprovalResponseInput::CommandExecution {
+            decision,
+            execpolicy_amendment,
+            network_policy_amendment,
+        } => match decision {
+            CommandApprovalDecisionInput::Accept => Ok(serde_json::json!({ "decision": "accept" })),
+            CommandApprovalDecisionInput::AcceptForSession => {
+                Ok(serde_json::json!({ "decision": "acceptForSession" }))
+            }
+            CommandApprovalDecisionInput::Decline => {
+                Ok(serde_json::json!({ "decision": "decline" }))
+            }
+            CommandApprovalDecisionInput::Cancel => Ok(serde_json::json!({ "decision": "cancel" })),
+            CommandApprovalDecisionInput::AcceptWithExecpolicyAmendment => {
+                let execpolicy_amendment = execpolicy_amendment.ok_or_else(|| {
+                    AppError::Validation(
+                        "An execpolicy amendment is required for this approval decision."
+                            .to_string(),
+                    )
+                })?;
+                Ok(serde_json::json!({
+                    "decision": {
+                        "acceptWithExecpolicyAmendment": {
+                            "execpolicy_amendment": execpolicy_amendment
+                        }
+                    }
+                }))
+            }
+            CommandApprovalDecisionInput::ApplyNetworkPolicyAmendment => {
+                let network_policy_amendment = network_policy_amendment.ok_or_else(|| {
+                    AppError::Validation(
+                        "A network policy amendment is required for this approval decision."
+                            .to_string(),
+                    )
+                })?;
+                Ok(serde_json::json!({
+                    "decision": {
+                        "applyNetworkPolicyAmendment": {
+                            "network_policy_amendment": {
+                                "action": network_policy_amendment.action,
+                                "host": network_policy_amendment.host
+                            }
+                        }
+                    }
+                }))
+            }
+        },
+        ApprovalResponseInput::FileChange { decision } => match decision {
+            FileChangeApprovalDecisionInput::Accept => {
+                Ok(serde_json::json!({ "decision": "accept" }))
+            }
+            FileChangeApprovalDecisionInput::AcceptForSession => {
+                Ok(serde_json::json!({ "decision": "acceptForSession" }))
+            }
+            FileChangeApprovalDecisionInput::Decline => {
+                Ok(serde_json::json!({ "decision": "decline" }))
+            }
+            FileChangeApprovalDecisionInput::Cancel => {
+                Ok(serde_json::json!({ "decision": "cancel" }))
+            }
+        },
+        ApprovalResponseInput::Permissions {
+            decision,
+            permissions,
+            scope,
+        } => match decision {
+            PermissionsApprovalDecisionInput::Approve => {
+                let permissions = permissions.ok_or_else(|| {
+                    AppError::Validation(
+                        "Permissions approval requires the requested permission profile."
+                            .to_string(),
+                    )
+                })?;
+                Ok(serde_json::json!({
+                    "permissions": permission_profile_json(&permissions),
+                    "scope": match scope.unwrap_or(PermissionGrantScope::Turn) {
+                        PermissionGrantScope::Turn => "turn",
+                        PermissionGrantScope::Session => "session",
+                    }
+                }))
+            }
+            PermissionsApprovalDecisionInput::Decline => Ok(serde_json::json!({
+                "permissions": {},
+                "scope": "turn"
+            })),
+        },
+    }
+}
+
+fn permission_profile_json(
+    permissions: &crate::domain::conversation::PermissionProfileSnapshot,
+) -> serde_json::Value {
+    serde_json::json!({
+        "fileSystem": permissions.file_system.as_ref().map(|file_system| {
+            serde_json::json!({
+                "read": file_system.read,
+                "write": file_system.write
+            })
+        }),
+        "network": permissions.network.as_ref().map(|network| {
+            serde_json::json!({
+                "enabled": network.enabled
+            })
+        })
+    })
+}
+
 async fn mark_runtime_disconnected(app: &Option<AppHandle>, state: &Arc<Mutex<SessionState>>) {
     let snapshots = {
         let mut state = state.lock().await;
+        state.pending_server_requests.clear();
         state
             .snapshots_by_thread
             .values_mut()
             .map(|snapshot| {
                 snapshot.status = ConversationStatus::Failed;
+                snapshot.pending_interactions.clear();
                 snapshot.error = Some(crate::domain::conversation::ConversationErrorSnapshot {
                     message: "The Codex runtime disconnected unexpectedly.".to_string(),
                     codex_error_info: None,
@@ -899,6 +1393,7 @@ mod tests {
                 "thread-1".to_string(),
             )]),
             capabilities: None,
+            pending_server_requests: HashMap::new(),
         }));
 
         handle_notification(

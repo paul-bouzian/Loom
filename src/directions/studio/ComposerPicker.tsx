@@ -13,6 +13,7 @@ type Props = {
   value: string;
   options: Option[];
   disabled?: boolean;
+  tone?: "default" | "accent";
   onChange: (value: string) => void;
 };
 
@@ -29,6 +30,7 @@ export function ComposerPicker({
   value,
   options,
   disabled = false,
+  tone = "default",
   onChange,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -36,6 +38,7 @@ export function ComposerPicker({
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
+  const isAccent = tone === "accent";
 
   const selected = useMemo(
     () => options.find((option) => option.value === value) ?? null,
@@ -111,13 +114,15 @@ export function ComposerPicker({
       <button
         ref={triggerRef}
         type="button"
-        className="tx-picker__trigger"
+        className={`tx-picker__trigger ${isAccent ? "tx-picker__trigger--accent" : ""}`}
         disabled={disabled}
         aria-expanded={open}
         aria-label={`${label} picker`}
         onClick={() => setOpen((current) => !current)}
       >
-        <span className="tx-picker__value">{selected?.label ?? value}</span>
+        <span className={`tx-picker__value ${isAccent ? "tx-picker__value--accent" : ""}`}>
+          {selected?.label ?? value}
+        </span>
         <ChevronRightIcon
           size={12}
           className={`tx-picker__chevron ${open ? "tx-picker__chevron--open" : ""}`}

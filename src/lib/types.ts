@@ -13,6 +13,10 @@ export type ConversationStatus =
   | "interrupted"
   | "failed"
   | "waitingForExternalAction";
+export type ConversationApprovalKind =
+  | "commandExecution"
+  | "fileChange"
+  | "permissions";
 export type ConversationItemStatus =
   | "inProgress"
   | "completed"
@@ -20,6 +24,14 @@ export type ConversationItemStatus =
   | "declined";
 export type ConversationRole = "user" | "assistant";
 export type ConversationTone = "info" | "warning" | "error";
+export type ProposedPlanStatus =
+  | "streaming"
+  | "ready"
+  | "approved"
+  | "superseded";
+export type ProposedPlanStepStatus = "pending" | "inProgress" | "completed";
+export type PermissionGrantScope = "turn" | "session";
+export type NetworkPolicyRuleAction = "allow" | "deny";
 
 /* ── Domain records ── */
 
@@ -148,11 +160,104 @@ export type ThreadTokenUsageSnapshot = {
   modelContextWindow?: number | null;
 };
 
-export type BlockedInteractionSnapshot = {
+export type ProposedPlanStep = {
+  step: string;
+  status: ProposedPlanStepStatus;
+};
+
+export type ProposedPlanSnapshot = {
+  turnId: string;
+  itemId?: string | null;
+  explanation: string;
+  steps: ProposedPlanStep[];
+  markdown: string;
+  status: ProposedPlanStatus;
+  isAwaitingDecision: boolean;
+};
+
+export type PendingUserInputOption = {
+  label: string;
+  description: string;
+};
+
+export type PendingUserInputQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  options: PendingUserInputOption[];
+  isOther: boolean;
+  isSecret: boolean;
+};
+
+export type FileSystemPermissionSnapshot = {
+  read: string[];
+  write: string[];
+};
+
+export type NetworkPermissionSnapshot = {
+  enabled?: boolean | null;
+};
+
+export type PermissionProfileSnapshot = {
+  fileSystem?: FileSystemPermissionSnapshot | null;
+  network?: NetworkPermissionSnapshot | null;
+};
+
+export type NetworkPolicyAmendmentSnapshot = {
+  action: NetworkPolicyRuleAction;
+  host: string;
+};
+
+export type NetworkApprovalContextSnapshot = {
+  host: string;
+  protocol: string;
+};
+
+export type PendingApprovalRequest = {
+  kind: "approval";
+  id: string;
   method: string;
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  approvalKind: ConversationApprovalKind;
+  title: string;
+  summary?: string | null;
+  reason?: string | null;
+  command?: string | null;
+  cwd?: string | null;
+  grantRoot?: string | null;
+  permissions?: PermissionProfileSnapshot | null;
+  networkContext?: NetworkApprovalContextSnapshot | null;
+  proposedExecpolicyAmendment: string[];
+  proposedNetworkPolicyAmendments: NetworkPolicyAmendmentSnapshot[];
+};
+
+export type PendingUserInputRequest = {
+  kind: "userInput";
+  id: string;
+  method: string;
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  questions: PendingUserInputQuestion[];
+};
+
+export type UnsupportedInteractionRequest = {
+  kind: "unsupported";
+  id: string;
+  method: string;
+  threadId: string;
+  turnId?: string | null;
+  itemId?: string | null;
   title: string;
   message: string;
 };
+
+export type ConversationInteraction =
+  | PendingApprovalRequest
+  | PendingUserInputRequest
+  | UnsupportedInteractionRequest;
 
 export type ConversationErrorSnapshot = {
   message: string;
@@ -208,7 +313,8 @@ export type ThreadConversationSnapshot = {
   activeTurnId?: string | null;
   items: ConversationItem[];
   tokenUsage?: ThreadTokenUsageSnapshot | null;
-  blockedInteraction?: BlockedInteractionSnapshot | null;
+  pendingInteractions: ConversationInteraction[];
+  proposedPlan?: ProposedPlanSnapshot | null;
   error?: ConversationErrorSnapshot | null;
   composer: ConversationComposerSettings;
 };
@@ -262,7 +368,53 @@ export type ArchiveThreadRequest = {
 export type SendThreadMessageInput = {
   threadId: string;
   text: string;
-  composer?: ConversationComposerSettings;
+  composer?: ConversationComposerSettings | null;
+};
+
+export type ApprovalResponseInput =
+  | {
+      kind: "commandExecution";
+      decision:
+        | "accept"
+        | "acceptForSession"
+        | "decline"
+        | "cancel"
+        | "acceptWithExecpolicyAmendment";
+      execpolicyAmendment?: string[];
+    }
+  | {
+      kind: "commandExecution";
+      decision: "applyNetworkPolicyAmendment";
+      networkPolicyAmendment: NetworkPolicyAmendmentSnapshot;
+    }
+  | {
+      kind: "fileChange";
+      decision: "accept" | "acceptForSession" | "decline" | "cancel";
+    }
+  | {
+      kind: "permissions";
+      decision: "approve" | "decline";
+      permissions?: PermissionProfileSnapshot | null;
+      scope?: PermissionGrantScope;
+    };
+
+export type RespondToApprovalRequestInput = {
+  threadId: string;
+  interactionId: string;
+  response: ApprovalResponseInput;
+};
+
+export type RespondToUserInputRequestInput = {
+  threadId: string;
+  interactionId: string;
+  answers: Record<string, string[]>;
+};
+
+export type SubmitPlanDecisionInput = {
+  threadId: string;
+  action: "approve" | "refine";
+  feedback?: string;
+  composer?: ConversationComposerSettings | null;
 };
 
 export type GlobalSettingsPatch = {

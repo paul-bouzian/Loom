@@ -194,10 +194,28 @@ function ThreadInspector({ thread }: { thread: ThreadRecord }) {
               value={snapshot.tokenUsage?.last.outputTokens.toLocaleString() ?? "pending"}
             />
           </InspectorSection>
-          {snapshot.blockedInteraction ? (
-            <InspectorSection label="Blocked">
-              <InspectorRow label="Method" value={snapshot.blockedInteraction.method} />
-              <InspectorRow label="State" value={snapshot.blockedInteraction.title} />
+          <InspectorSection label="Interactions">
+            <InspectorRow label="Pending" value={snapshot.pendingInteractions.length} />
+            <InspectorRow
+              label="Active"
+              value={
+                snapshot.pendingInteractions[0]
+                  ? snapshot.pendingInteractions[0].kind
+                  : "none"
+              }
+            />
+          </InspectorSection>
+          {snapshot.proposedPlan ? (
+            <InspectorSection label="Plan">
+              <InspectorRow label="Status" value={snapshot.proposedPlan.status} />
+              <InspectorRow
+                label="Steps"
+                value={snapshot.proposedPlan.steps.length}
+              />
+              <InspectorRow
+                label="Decision"
+                value={snapshot.proposedPlan.isAwaitingDecision ? "pending" : "resolved"}
+              />
             </InspectorSection>
           ) : null}
           {snapshot.error ? (

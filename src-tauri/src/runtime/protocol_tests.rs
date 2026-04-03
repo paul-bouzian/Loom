@@ -1,13 +1,16 @@
 use serde_json::json;
 
-use crate::domain::conversation::{ConversationComposerSettings, ConversationItem};
+use crate::domain::conversation::{
+    ConversationComposerSettings, ConversationInteraction, ConversationItem, ProposedPlanStatus,
+};
 use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort};
 
 use super::protocol::{
     CollaborationModeListResponse, CollaborationModeWire, IncomingMessage, ModelListResponse,
     ModelWire, ReasoningEffortOptionWire, ThreadWire, approval_policy_value,
     build_history_snapshot, collaboration_mode_options_from_response, model_options_from_response,
-    parse_incoming_message, sandbox_policy_value,
+    normalize_server_interaction, parse_incoming_message, proposed_plan_from_item,
+    sandbox_policy_value, ServerRequestEnvelope,
 };
 
 fn composer() -> ConversationComposerSettings {
@@ -81,6 +84,134 @@ fn builds_history_snapshot_from_thread_turns() {
         item,
         ConversationItem::Tool(tool) if tool.summary.as_deref() == Some("ls")
     )));
+}
+
+#[test]
+fn history_snapshot_extracts_latest_plan_items() {
+    let snapshot = build_history_snapshot(
+        "thread-1".to_string(),
+        "env-1".to_string(),
+        Some("thr-existing".to_string()),
+        composer(),
+        ThreadWire {
+            id: "thr-existing".to_string(),
+            turns: vec![super::protocol::TurnWire {
+                id: "turn-plan-1".to_string(),
+                status: "completed".to_string(),
+                error: None,
+                items: vec![json!({
+                    "id": "plan-item-1",
+                    "type": "plan",
+                    "text": "## Proposed plan\n\n- Inspect runtime"
+                })],
+            }],
+        },
+    );
+
+    assert!(matches!(
+        snapshot.proposed_plan.as_ref().map(|plan| plan.status),
+        Some(ProposedPlanStatus::Ready)
+    ));
+    assert_eq!(
+        snapshot
+            .proposed_plan
+            .as_ref()
+            .expect("plan should exist")
+            .markdown,
+        "## Proposed plan\n\n- Inspect runtime"
+    );
+}
+
+#[test]
+fn history_snapshot_ignores_historical_plans_once_a_later_turn_exists() {
+    let snapshot = build_history_snapshot(
+        "thread-1".to_string(),
+        "env-1".to_string(),
+        Some("thr-existing".to_string()),
+        composer(),
+        ThreadWire {
+            id: "thr-existing".to_string(),
+            turns: vec![
+                super::protocol::TurnWire {
+                    id: "turn-plan-1".to_string(),
+                    status: "completed".to_string(),
+                    error: None,
+                    items: vec![json!({
+                        "id": "plan-item-1",
+                        "type": "plan",
+                        "text": "## Proposed plan\n\n- Inspect runtime"
+                    })],
+                },
+                super::protocol::TurnWire {
+                    id: "turn-build-1".to_string(),
+                    status: "completed".to_string(),
+                    error: None,
+                    items: vec![json!({
+                        "id": "assistant-1",
+                        "type": "agentMessage",
+                        "text": "Implementation started"
+                    })],
+                },
+            ],
+        },
+    );
+
+    assert!(snapshot.proposed_plan.is_none());
+    assert!(snapshot.items.iter().any(|item| matches!(
+        item,
+        ConversationItem::Message(message) if message.text == "Implementation started"
+    )));
+}
+
+#[test]
+fn normalizes_user_input_server_requests() {
+    let interaction = normalize_server_interaction(
+        "interaction-1",
+        &ServerRequestEnvelope {
+            id: json!(900),
+            method: "item/tool/requestUserInput".to_string(),
+            params: json!({
+                "threadId": "thr-existing",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "questions": [{
+                    "id": "scope",
+                    "header": "Scope",
+                    "question": "Which path should Codex take?",
+                    "options": [{ "label": "Frontend", "description": "Recommended" }],
+                    "isOther": true
+                }]
+            }),
+        },
+    )
+    .expect("interaction should normalize");
+
+    match interaction {
+        ConversationInteraction::UserInput(request) => {
+            assert_eq!(request.thread_id, "thr-existing");
+            assert_eq!(request.questions.len(), 1);
+            assert_eq!(request.questions[0].options[0].label, "Frontend");
+            assert!(request.questions[0].is_other);
+        }
+        _ => panic!("expected a user input interaction"),
+    }
+}
+
+#[test]
+fn proposed_plan_from_item_marks_ready_plans_as_actionable() {
+    let plan = proposed_plan_from_item(
+        "turn-1",
+        &json!({
+            "id": "plan-item-1",
+            "type": "plan",
+            "text": "## Proposed plan\n\n- Inspect runtime"
+        }),
+        ProposedPlanStatus::Ready,
+    )
+    .expect("plan item should normalize");
+
+    assert!(plan.is_awaiting_decision);
+    assert_eq!(plan.item_id.as_deref(), Some("plan-item-1"));
 }
 
 #[test]

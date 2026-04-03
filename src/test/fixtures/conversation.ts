@@ -1,4 +1,7 @@
 import type {
+  PendingApprovalRequest,
+  PendingUserInputRequest,
+  ProposedPlanSnapshot,
   ConversationComposerSettings,
   EnvironmentCapabilitiesSnapshot,
   EnvironmentRecord,
@@ -165,9 +168,82 @@ export function makeConversationSnapshot(
       },
       modelContextWindow: 200_000,
     },
-    blockedInteraction: null,
+    pendingInteractions: [],
+    proposedPlan: null,
     error: null,
     composer: baseComposer,
+    ...overrides,
+  };
+}
+
+export function makeUserInputRequest(
+  overrides: Partial<PendingUserInputRequest> = {},
+): PendingUserInputRequest {
+  return {
+    kind: "userInput",
+    id: "interaction-user-input-1",
+    method: "item/tool/requestUserInput",
+    threadId: "thr_codex_1",
+    turnId: "turn-1",
+    itemId: "item-user-input-1",
+    questions: [
+      {
+        id: "question-1",
+        header: "Approval",
+        question: "Which path should Codex take?",
+        options: [
+          { label: "Option A", description: "Recommended path" },
+          { label: "Option B", description: "Safer but slower" },
+          { label: "Option C", description: "Aggressive shortcut" },
+        ],
+        isOther: true,
+        isSecret: false,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+export function makeApprovalRequest(
+  overrides: Partial<PendingApprovalRequest> = {},
+): PendingApprovalRequest {
+  return {
+    kind: "approval",
+    id: "interaction-approval-1",
+    method: "item/commandExecution/requestApproval",
+    threadId: "thr_codex_1",
+    turnId: "turn-1",
+    itemId: "item-command-1",
+    approvalKind: "commandExecution",
+    title: "Command approval",
+    summary: "bun run test",
+    reason: "Codex wants to run the test suite.",
+    command: "bun run test",
+    cwd: "/tmp/threadex",
+    grantRoot: null,
+    permissions: null,
+    networkContext: null,
+    proposedExecpolicyAmendment: [],
+    proposedNetworkPolicyAmendments: [],
+    ...overrides,
+  };
+}
+
+export function makeProposedPlan(
+  overrides: Partial<ProposedPlanSnapshot> = {},
+): ProposedPlanSnapshot {
+  return {
+    turnId: "turn-plan-1",
+    itemId: "plan-item-1",
+    explanation: "Codex clarified the implementation path.",
+    steps: [
+      { step: "Inspect the runtime layer", status: "completed" },
+      { step: "Implement the plan UI", status: "inProgress" },
+      { step: "Validate interactions", status: "pending" },
+    ],
+    markdown: "## Proposed plan\n\n- Inspect the runtime layer\n- Implement the plan UI\n- Validate interactions",
+    status: "ready",
+    isAwaitingDecision: true,
     ...overrides,
   };
 }

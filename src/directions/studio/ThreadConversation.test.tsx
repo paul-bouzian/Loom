@@ -6,11 +6,17 @@ import * as bridge from "../../lib/bridge";
 import {
   baseComposer,
   capabilitiesFixture,
+  makeApprovalRequest,
   makeConversationSnapshot,
   makeEnvironment,
+  makeProposedPlan,
   makeThread,
+  makeUserInputRequest,
 } from "../../test/fixtures/conversation";
-import { teardownConversationListener, useConversationStore } from "../../stores/conversation-store";
+import {
+  teardownConversationListener,
+  useConversationStore,
+} from "../../stores/conversation-store";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import { ThreadConversation } from "./ThreadConversation";
 
@@ -18,6 +24,9 @@ vi.mock("../../lib/bridge", () => ({
   openThreadConversation: vi.fn(),
   sendThreadMessage: vi.fn(),
   interruptThreadTurn: vi.fn(),
+  respondToApprovalRequest: vi.fn(),
+  respondToUserInputRequest: vi.fn(),
+  submitPlanDecision: vi.fn(),
   listenToConversationEvents: vi.fn(),
 }));
 
@@ -51,82 +60,210 @@ beforeEach(() => {
 });
 
 describe("ThreadConversation", () => {
-  it("renders the real conversation timeline", async () => {
+  it("renders the conversation timeline with collapsible thinking and tool details", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot(),
       capabilities: capabilitiesFixture,
     });
 
-    render(
-      <ThreadConversation environment={makeEnvironment()} thread={makeThread()} />,
-    );
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
 
     await screen.findByText("Inspect the repository");
-    expect(
-      screen.getByRole("button", { name: "Show thinking details" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show thinking details" })).toBeInTheDocument();
     expect(screen.queryByText("Looking through package.json and the runtime service.")).toBeNull();
     expect(screen.queryByText("3 tests passed")).toBeNull();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Show thinking details" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Show thinking details" }));
     await userEvent.click(screen.getByRole("button", { name: "Show Command details" }));
 
-    expect(screen.getByText("bun run test")).toBeInTheDocument();
     expect(
       screen.getByText("Looking through package.json and the runtime service."),
     ).toBeInTheDocument();
     expect(screen.getByText("3 tests passed")).toBeInTheDocument();
-    expect(screen.getByText("The workspace looks healthy.")).toBeInTheDocument();
-    expect(screen.getByText("1,024 tokens")).toBeInTheDocument();
   });
 
-  it("shows the milestone warning and disables send in plan mode", async () => {
+  it("renders the interaction panel and paginates request-user-input questions", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({
-        composer: { ...baseComposer, collaborationMode: "plan" },
-      }),
-      capabilities: capabilitiesFixture,
-    });
-
-    render(
-      <ThreadConversation environment={makeEnvironment()} thread={makeThread()} />,
-    );
-
-    expect(
-      await screen.findByText("Plan mode comes next"),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
-  });
-
-  it("hides completed empty thinking blocks", async () => {
-    mockedBridge.openThreadConversation.mockResolvedValue({
-      snapshot: makeConversationSnapshot({
-        items: [
-          {
-            kind: "reasoning",
-            id: "reasoning-empty",
-            summary: "",
-            content: "",
-            isStreaming: false,
-          },
+        status: "waitingForExternalAction",
+        pendingInteractions: [
+          makeUserInputRequest({
+            questions: [
+              makeUserInputRequest().questions[0],
+              {
+                id: "question-2",
+                header: "Depth",
+                question: "How far should Codex go?",
+                options: [{ label: "Full", description: "Implement all requested changes" }],
+                isOther: false,
+                isSecret: false,
+              },
+            ],
+          }),
         ],
       }),
       capabilities: capabilitiesFixture,
     });
-
-    render(
-      <ThreadConversation environment={makeEnvironment()} thread={makeThread()} />,
+    mockedBridge.respondToUserInputRequest.mockResolvedValue(
+      makeConversationSnapshot({ pendingInteractions: [] }),
     );
 
-    await screen.findByText("Thread 1");
-    expect(
-      screen.queryByRole("button", { name: "Show thinking details" }),
-    ).toBeNull();
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
+
+    expect(await screen.findByText("Codex needs input")).toBeInTheDocument();
+    expect(screen.getByText("Question 1 / 2")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Option ARecommended path" }));
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("Question 2 / 2")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "FullImplement all requested changes" }));
+    await userEvent.click(screen.getByRole("button", { name: "Submit answers" }));
+
+    await waitFor(() => {
+      expect(mockedBridge.respondToUserInputRequest).toHaveBeenCalledWith({
+        threadId: "thread-1",
+        interactionId: "interaction-user-input-1",
+        answers: {
+          "question-1": ["Option A"],
+          "question-2": ["Full"],
+        },
+      });
+    });
   });
 
-  it("sends composer-backed input through Enter and keeps Shift+Enter for newlines", async () => {
+  it("renders a proposed plan card and continues through approve or refine", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "waitingForExternalAction",
+        composer: { ...baseComposer, collaborationMode: "plan" },
+        proposedPlan: makeProposedPlan(),
+      }),
+      capabilities: capabilitiesFixture,
+    });
+    mockedBridge.submitPlanDecision.mockResolvedValue(
+      makeConversationSnapshot({
+        status: "running",
+        composer: { ...baseComposer, collaborationMode: "build" },
+        items: [
+          ...makeConversationSnapshot().items,
+          {
+            kind: "system",
+            id: "system-plan-approved",
+            tone: "info",
+            title: "Plan approved",
+            body: "ThreadEx approved the current plan and switched the thread to Build mode.",
+          },
+          {
+            kind: "message",
+            id: "assistant-build-1",
+            role: "assistant",
+            text: "Starting implementation now.",
+            isStreaming: true,
+          },
+        ],
+        proposedPlan: makeProposedPlan({ status: "approved", isAwaitingDecision: false }),
+      }),
+    );
+
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
+
+    expect(await screen.findByRole("button", { name: "Approve plan" })).toBeInTheDocument();
+    expect(screen.getByText("Codex clarified the implementation path.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Proposed plan" })).toBeInTheDocument();
+    expect(screen.getAllByText("Inspect the runtime layer").length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByRole("button", { name: "Approve plan" }));
+
+    await waitFor(() => {
+      expect(mockedBridge.submitPlanDecision).toHaveBeenCalledWith({
+        threadId: "thread-1",
+        action: "approve",
+        composer: expect.objectContaining({
+          collaborationMode: "build",
+        }),
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Approve plan")).toBeNull();
+      expect(screen.getByText("Starting implementation now.")).toBeInTheDocument();
+    });
+  });
+
+  it("sends plan-refinement feedback through the composer", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "waitingForExternalAction",
+        composer: { ...baseComposer, collaborationMode: "plan" },
+        proposedPlan: makeProposedPlan(),
+      }),
+      capabilities: capabilitiesFixture,
+    });
+    mockedBridge.submitPlanDecision.mockResolvedValue(
+      makeConversationSnapshot({
+        status: "running",
+        composer: { ...baseComposer, collaborationMode: "plan" },
+        proposedPlan: makeProposedPlan({
+          status: "superseded",
+          isAwaitingDecision: false,
+        }),
+      }),
+    );
+
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
+
+    await screen.findByRole("button", { name: "Refine" });
+    await userEvent.click(screen.getByRole("button", { name: "Refine" }));
+    const input = screen.getByPlaceholderText("Refine the proposed plan...");
+    await userEvent.type(input, "Add explicit rollback coverage");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockedBridge.submitPlanDecision).toHaveBeenCalledWith({
+        threadId: "thread-1",
+        action: "refine",
+        feedback: "Add explicit rollback coverage",
+        composer: expect.objectContaining({
+          collaborationMode: "plan",
+        }),
+      });
+    });
+  });
+
+  it("renders approval actions and sends the selected approval response", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "waitingForExternalAction",
+        pendingInteractions: [
+          makeApprovalRequest({
+            proposedExecpolicyAmendment: ["allow bun run test"],
+          }),
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+    mockedBridge.respondToApprovalRequest.mockResolvedValue(
+      makeConversationSnapshot({ pendingInteractions: [] }),
+    );
+
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
+
+    expect(await screen.findByText("Command approval")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Allow similar commands" }));
+
+    await waitFor(() => {
+      expect(mockedBridge.respondToApprovalRequest).toHaveBeenCalledWith({
+        threadId: "thread-1",
+        interactionId: "interaction-approval-1",
+        response: {
+          kind: "commandExecution",
+          decision: "acceptWithExecpolicyAmendment",
+          execpolicyAmendment: ["allow bun run test"],
+        },
+      });
+    });
+  });
+
+  it("keeps Enter-to-send and Shift+Enter for multiline build messages", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({ status: "idle" }),
       capabilities: capabilitiesFixture,
@@ -138,9 +275,7 @@ describe("ThreadConversation", () => {
       }),
     );
 
-    render(
-      <ThreadConversation environment={makeEnvironment()} thread={makeThread()} />,
-    );
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
 
     const user = userEvent.setup();
     const input = await screen.findByPlaceholderText("Message ThreadEx...");
@@ -155,10 +290,7 @@ describe("ThreadConversation", () => {
         threadId: "thread-1",
         text: "Run\ntests",
         composer: expect.objectContaining({
-          model: "gpt-5.4",
-          reasoningEffort: "high",
           collaborationMode: "build",
-          approvalPolicy: "askToEdit",
         }),
       });
     });

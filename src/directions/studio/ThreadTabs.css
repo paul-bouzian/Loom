@@ -47,6 +47,7 @@
   min-width: 0;
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 4px 10px;
   font-size: var(--tx-text-sm);
   color: var(--tx-text-secondary);
@@ -62,6 +63,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thread-tab__status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--tx-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tx-accent) 18%, transparent);
+  flex-shrink: 0;
 }
 
 .thread-tab__close {

@@ -1,24 +1,25 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 
-import {
-  useConversationStore,
-  selectConversationCapabilities,
-  selectConversationComposer,
-  selectConversationError,
-  selectConversationSnapshot,
-} from "../../stores/conversation-store";
-import { EmptyState } from "../../shared/EmptyState";
-import { ChevronRightIcon, SendIcon, StopIcon } from "../../shared/Icons";
 import type {
-  CollaborationModeOption,
   ConversationComposerSettings,
   ConversationItem,
   EnvironmentRecord,
   ModelOption,
-  ThreadConversationSnapshot,
   ThreadRecord,
 } from "../../lib/types";
+import { EmptyState } from "../../shared/EmptyState";
+import { ChevronRightIcon, SendIcon, StopIcon } from "../../shared/Icons";
+import {
+  selectConversationCapabilities,
+  selectConversationComposer,
+  selectConversationError,
+  selectConversationSnapshot,
+  useConversationStore,
+} from "../../stores/conversation-store";
 import { ComposerPicker } from "./ComposerPicker";
+import { ConversationInteractionPanel } from "./ConversationInteractionPanel";
+import { ConversationMeta } from "./ConversationMeta";
+import { ConversationPlanCard } from "./ConversationPlanCard";
 import "./ThreadConversation.css";
 
 type Props = {
@@ -32,13 +33,21 @@ export function ThreadConversation({ environment, thread }: Props) {
   const capabilities = useConversationStore(
     selectConversationCapabilities(environment.id),
   );
-  const loading = useConversationStore((s) => s.loadingByThreadId[thread.id] ?? false);
+  const loading = useConversationStore((state) => state.loadingByThreadId[thread.id] ?? false);
   const storeError = useConversationStore(selectConversationError(thread.id));
-  const openThread = useConversationStore((s) => s.openThread);
-  const updateComposer = useConversationStore((s) => s.updateComposer);
-  const sendMessage = useConversationStore((s) => s.sendMessage);
-  const interruptThread = useConversationStore((s) => s.interruptThread);
+  const openThread = useConversationStore((state) => state.openThread);
+  const updateComposer = useConversationStore((state) => state.updateComposer);
+  const sendMessage = useConversationStore((state) => state.sendMessage);
+  const interruptThread = useConversationStore((state) => state.interruptThread);
+  const respondToApproval = useConversationStore(
+    (state) => state.respondToApprovalRequest,
+  );
+  const respondToUserInput = useConversationStore(
+    (state) => state.respondToUserInputRequest,
+  );
+  const submitPlanDecision = useConversationStore((state) => state.submitPlanDecision);
   const [draft, setDraft] = useState("");
+  const [isRefiningPlan, setIsRefiningPlan] = useState(false);
   const [isPending, startTransition] = useTransition();
   const timelineRef = useRef<HTMLDivElement | null>(null);
 
@@ -50,7 +59,18 @@ export function ThreadConversation({ environment, thread }: Props) {
     const element = timelineRef.current;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
-  }, [snapshot?.items.length, snapshot?.status]);
+  }, [
+    snapshot?.items.length,
+    snapshot?.status,
+    snapshot?.pendingInteractions.length,
+    snapshot?.proposedPlan?.status,
+  ]);
+
+  useEffect(() => {
+    if (!snapshot?.proposedPlan?.isAwaitingDecision && isRefiningPlan) {
+      setIsRefiningPlan(false);
+    }
+  }, [isRefiningPlan, snapshot?.proposedPlan?.isAwaitingDecision]);
 
   if (!snapshot && loading) {
     return <ConversationLoading />;
@@ -68,41 +88,67 @@ export function ThreadConversation({ environment, thread }: Props) {
   }
 
   const resolvedComposer = composer ?? snapshot.composer;
-  const modelOptions = capabilities?.models ?? [];
   const selectedModel =
-    modelOptions.find((candidate) => candidate.id === resolvedComposer.model) ?? null;
+    capabilities?.models.find((candidate) => candidate.id === resolvedComposer.model) ?? null;
   const effortOptions = selectedModel?.supportedReasoningEfforts ?? [
     resolvedComposer.reasoningEffort,
   ];
-  const collaborationModes = capabilities?.collaborationModes ?? [];
-  const isPlanMode = resolvedComposer.collaborationMode === "plan";
+  const activePlan = snapshot.proposedPlan;
+  const interaction = snapshot.pendingInteractions[0] ?? null;
+  const shouldRenderPlanCard = Boolean(
+    activePlan && (activePlan.isAwaitingDecision || activePlan.status === "streaming"),
+  );
+  const composerLocked =
+    Boolean(interaction) || Boolean(activePlan?.isAwaitingDecision && !isRefiningPlan);
   const isRunning = snapshot.status === "running";
-  const canSend = draft.trim().length > 0 && !isRunning && !isPlanMode;
+  const sendDisabled =
+    draft.trim().length === 0 || isRunning || (composerLocked && !isRefiningPlan);
 
   async function handleSend() {
-    if (!canSend) return;
+    if (sendDisabled) return;
     const message = draft.trim();
     startTransition(() => setDraft(""));
+    if (isRefiningPlan) {
+      await submitPlanDecision({
+        threadId: thread.id,
+        action: "refine",
+        feedback: message,
+        composer: { ...resolvedComposer, collaborationMode: "plan" },
+      });
+      setIsRefiningPlan(false);
+      return;
+    }
     await sendMessage(thread.id, message);
+  }
+
+  async function handleApprovePlan() {
+    setIsRefiningPlan(false);
+    setDraft("");
+    await submitPlanDecision({
+      threadId: thread.id,
+      action: "approve",
+      composer: { ...resolvedComposer, collaborationMode: "build" },
+    });
   }
 
   return (
     <div className="tx-conversation">
       <ConversationMeta
-        snapshot={snapshot}
         environment={environment}
+        snapshot={snapshot}
         thread={thread}
       />
       <div ref={timelineRef} className="tx-conversation__timeline">
-        {snapshot.items.length === 0 ? <ConversationEmpty /> : null}
+        {snapshot.items.length === 0 && !activePlan ? <ConversationEmpty /> : null}
         {snapshot.items.map((item) => (
           <ConversationItemRow key={item.id} item={item} />
         ))}
-        {snapshot.blockedInteraction ? (
-          <ConversationBanner
-            tone="warning"
-            title={snapshot.blockedInteraction.title}
-            body={snapshot.blockedInteraction.message}
+        {shouldRenderPlanCard && activePlan ? (
+          <ConversationPlanCard
+            plan={activePlan}
+            disabled={isRunning || isPending}
+            onApprove={() => void handleApprovePlan()}
+            onRefine={() => setIsRefiningPlan(true)}
           />
         ) : null}
         {snapshot.error ? (
@@ -116,50 +162,35 @@ export function ThreadConversation({ environment, thread }: Props) {
           <ConversationBanner tone="error" title="Action failed" body={storeError} />
         ) : null}
       </div>
+      <ConversationInteractionPanel
+        interaction={interaction}
+        queueCount={snapshot.pendingInteractions.length}
+        onRespondApproval={(response) =>
+          respondToApproval(thread.id, interaction?.id ?? "", response)
+        }
+        onSubmitAnswers={(answers) =>
+          respondToUserInput(thread.id, interaction?.id ?? "", answers)
+        }
+      />
       <ConversationComposer
         composer={resolvedComposer}
-        collaborationModes={collaborationModes}
+        collaborationModes={capabilities?.collaborationModes ?? []}
+        disabled={composerLocked && !isRefiningPlan}
         draft={draft}
         effortOptions={effortOptions}
         isBusy={isRunning || isPending}
-        modelOptions={modelOptions}
+        isRefiningPlan={isRefiningPlan}
+        modelOptions={capabilities?.models ?? []}
         onChangeDraft={setDraft}
         onInterrupt={() => void interruptThread(thread.id)}
         onSend={() => void handleSend()}
-        onUpdateComposer={(patch) => updateComposer(thread.id, patch)}
+        onUpdateComposer={(patch) => {
+          if (patch.collaborationMode === "build") {
+            setIsRefiningPlan(false);
+          }
+          updateComposer(thread.id, patch);
+        }}
       />
-    </div>
-  );
-}
-
-function ConversationMeta({
-  snapshot,
-  environment,
-  thread,
-}: {
-  snapshot: ThreadConversationSnapshot;
-  environment: EnvironmentRecord;
-  thread: ThreadRecord;
-}) {
-  return (
-    <div className="tx-conversation__meta">
-      <div>
-        <h2 className="tx-conversation__title">{thread.title}</h2>
-        <p className="tx-conversation__subtitle">
-          {environment.name}
-          {snapshot.codexThreadId ? <> · {snapshot.codexThreadId}</> : null}
-        </p>
-      </div>
-      <div className="tx-conversation__status-group">
-        <span className={`tx-pill tx-pill--${snapshot.status}`}>
-          {labelForStatus(snapshot.status)}
-        </span>
-        {snapshot.tokenUsage ? (
-          <span className="tx-pill tx-pill--neutral">
-            {snapshot.tokenUsage.total.totalTokens.toLocaleString()} tokens
-          </span>
-        ) : null}
-      </div>
     </div>
   );
 }
@@ -167,9 +198,11 @@ function ConversationMeta({
 function ConversationComposer({
   composer,
   collaborationModes,
+  disabled,
   draft,
   effortOptions,
   isBusy,
+  isRefiningPlan,
   modelOptions,
   onChangeDraft,
   onInterrupt,
@@ -177,10 +210,12 @@ function ConversationComposer({
   onUpdateComposer,
 }: {
   composer: ConversationComposerSettings;
-  collaborationModes: CollaborationModeOption[];
+  collaborationModes: Array<{ id: string; label: string }>;
+  disabled: boolean;
   draft: string;
   effortOptions: Array<"low" | "medium" | "high" | "xhigh">;
   isBusy: boolean;
+  isRefiningPlan: boolean;
   modelOptions: ModelOption[];
   onChangeDraft: (value: string) => void;
   onInterrupt: () => void;
@@ -188,6 +223,7 @@ function ConversationComposer({
   onUpdateComposer: (patch: Partial<ConversationComposerSettings>) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const controlsDisabled = isBusy || disabled;
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -208,7 +244,7 @@ function ConversationComposer({
             label: option.displayName,
             value: option.id,
           }))}
-          disabled={isBusy}
+          disabled={controlsDisabled}
           onChange={(value) => onUpdateComposer({ model: value })}
         />
         <ComposerPicker
@@ -218,7 +254,7 @@ function ConversationComposer({
             label: effortLabel(effort),
             value: effort,
           }))}
-          disabled={isBusy}
+          disabled={controlsDisabled}
           onChange={(value) =>
             onUpdateComposer({
               reasoningEffort: value as ConversationComposerSettings["reasoningEffort"],
@@ -228,11 +264,12 @@ function ConversationComposer({
         <ComposerPicker
           label="Mode"
           value={composer.collaborationMode}
+          tone={composer.collaborationMode === "plan" ? "accent" : "default"}
           options={collaborationModes.map((option) => ({
             label: option.label,
             value: option.id,
           }))}
-          disabled={isBusy}
+          disabled={controlsDisabled}
           onChange={(value) =>
             onUpdateComposer({
               collaborationMode: value as ConversationComposerSettings["collaborationMode"],
@@ -246,7 +283,7 @@ function ConversationComposer({
             { label: "Ask to Edit", value: "askToEdit" },
             { label: "Full Access", value: "fullAccess" },
           ]}
-          disabled={isBusy}
+          disabled={controlsDisabled}
           onChange={(value) =>
             onUpdateComposer({
               approvalPolicy: value as ConversationComposerSettings["approvalPolicy"],
@@ -254,24 +291,22 @@ function ConversationComposer({
           }
         />
       </div>
-      {composer.collaborationMode === "plan" ? (
-        <ConversationBanner
-          tone="warning"
-          title="Plan mode comes next"
-          body="This milestone only ships real Build-mode conversations. Switch back to Build to send."
-        />
-      ) : null}
       <div className="tx-composer__body">
         <div className="tx-composer__input-row">
           <textarea
             ref={textareaRef}
             className="tx-composer__textarea"
-            placeholder="Message ThreadEx..."
+            placeholder={isRefiningPlan ? "Refine the proposed plan..." : "Message ThreadEx..."}
             rows={1}
             value={draft}
-            disabled={isBusy}
+            disabled={isBusy || (disabled && !isRefiningPlan)}
             onChange={(event) => onChangeDraft(event.target.value)}
             onKeyDown={(event) => {
+              if (event.key === "Escape" && isRefiningPlan) {
+                event.preventDefault();
+                onChangeDraft("");
+                return;
+              }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 onSend();
@@ -291,8 +326,8 @@ function ConversationComposer({
             <button
               type="button"
               className="tx-composer__icon-button"
-              aria-label="Send message"
-              disabled={draft.trim().length === 0 || composer.collaborationMode === "plan"}
+              aria-label={isRefiningPlan ? "Refine plan" : "Send message"}
+              disabled={draft.trim().length === 0 || (disabled && !isRefiningPlan)}
               onClick={onSend}
             >
               <SendIcon size={14} />
@@ -300,7 +335,11 @@ function ConversationComposer({
           )}
         </div>
         <div className="tx-composer__actions">
-          <span className="tx-composer__hint">Enter to send · Shift+Enter for newline</span>
+          <span className="tx-composer__hint">
+            {isRefiningPlan
+              ? "Enter to refine · Escape to leave refine mode"
+              : "Enter to send · Shift+Enter for newline"}
+          </span>
         </div>
       </div>
     </div>
@@ -361,9 +400,7 @@ function ConversationItemRow({ item }: { item: ConversationItem }) {
         <button
           type="button"
           className="tx-item__toggle"
-          aria-label={
-            expanded ? `Hide ${item.title} details` : `Show ${item.title} details`
-          }
+          aria-label={expanded ? `Hide ${item.title} details` : `Show ${item.title} details`}
           onClick={() => setExpanded((value) => !value)}
         >
           <div className="tx-item__header">
@@ -387,9 +424,7 @@ function ConversationItemRow({ item }: { item: ConversationItem }) {
     );
   }
 
-  return (
-    <ConversationBanner tone={item.tone} title={item.title} body={item.body} />
-  );
+  return <ConversationBanner tone={item.tone} title={item.title} body={item.body} />;
 }
 
 function ConversationBanner({
@@ -424,7 +459,7 @@ function ConversationEmpty() {
   return (
     <div className="tx-conversation__empty">
       <h3>Ready for the first turn</h3>
-      <p>Build mode is wired to the real Codex app-server. Use the composer below to start.</p>
+      <p>Codex is connected. Use Build or Plan mode to start the next turn.</p>
     </div>
   );
 }
@@ -432,11 +467,6 @@ function ConversationEmpty() {
 function effortLabel(value: string) {
   if (value === "xhigh") return "Extra High";
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function labelForStatus(status: string) {
-  if (status === "waitingForExternalAction") return "Blocked";
-  return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
 function labelForItemStatus(status: string) {

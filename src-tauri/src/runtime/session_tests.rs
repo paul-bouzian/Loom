@@ -7,7 +7,6 @@ use tokio::sync::Mutex;
 
 use crate::domain::conversation::ConversationComposerSettings;
 use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort};
-use crate::error::AppError;
 use crate::services::workspace::ThreadRuntimeContext;
 
 use super::session::RuntimeSession;
@@ -18,8 +17,15 @@ struct RecordedRequest {
     params: Value,
 }
 
+#[derive(Clone, Debug)]
+struct RecordedResponse {
+    id: Value,
+    result: Value,
+}
+
 struct FakeCodexHarness {
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
+    responses: Arc<Mutex<Vec<RecordedResponse>>>,
     writer: Arc<Mutex<DuplexStream>>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -29,8 +35,14 @@ impl FakeCodexHarness {
         let (client_writer, server_reader) = duplex(32 * 1024);
         let (server_writer, client_reader) = duplex(32 * 1024);
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let responses = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(server_writer));
-        let task = spawn_fake_codex(server_reader, writer.clone(), requests.clone());
+        let task = spawn_fake_codex(
+            server_reader,
+            writer.clone(),
+            requests.clone(),
+            responses.clone(),
+        );
 
         let session = RuntimeSession::from_test_transport(
             "env-1".to_string(),
@@ -46,6 +58,7 @@ impl FakeCodexHarness {
             session,
             Self {
                 requests,
+                responses,
                 writer,
                 task,
             },
@@ -54,6 +67,21 @@ impl FakeCodexHarness {
 
     async fn requests(&self) -> Vec<RecordedRequest> {
         self.requests.lock().await.clone()
+    }
+
+    async fn responses(&self) -> Vec<RecordedResponse> {
+        self.responses.lock().await.clone()
+    }
+
+    async fn wait_for_response_count(&self, expected: usize) -> Vec<RecordedResponse> {
+        for _ in 0..20 {
+            let responses = self.responses().await;
+            if responses.len() >= expected {
+                return responses;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        self.responses().await
     }
 
     async fn emit_notification(&self, method: &str, params: Value) {
@@ -92,11 +120,19 @@ fn spawn_fake_codex(
     reader: DuplexStream,
     writer: Arc<Mutex<DuplexStream>>,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
+    responses: Arc<Mutex<Vec<RecordedResponse>>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let payload = serde_json::from_str::<Value>(&line).expect("json-rpc should parse");
+            if payload.get("method").is_none() {
+                responses.lock().await.push(RecordedResponse {
+                    id: payload.get("id").cloned().unwrap_or(Value::Null),
+                    result: payload.get("result").cloned().unwrap_or(Value::Null),
+                });
+                continue;
+            }
             let Some(id) = payload.get("id").and_then(Value::as_u64) else {
                 continue;
             };
@@ -307,7 +343,7 @@ async fn interrupt_thread_marks_the_snapshot_interrupted() {
 }
 
 #[tokio::test]
-async fn unsupported_server_requests_surface_a_blocked_state() {
+async fn unsupported_server_requests_surface_pending_interactions() {
     let (session, harness) = FakeCodexHarness::new().await;
     let runtime_context = context(
         "thread-local-4",
@@ -323,10 +359,11 @@ async fn unsupported_server_requests_surface_a_blocked_state() {
 
     harness
         .emit_request(
-            "item/tool/requestApproval",
+            "item/tool/call",
             json!({
                 "threadId": "thr-new",
-                "turnId": "turn-live-1"
+                "turnId": "turn-live-1",
+                "itemId": "tool-call-1"
             }),
         )
         .await;
@@ -347,20 +384,18 @@ async fn unsupported_server_requests_surface_a_blocked_state() {
         snapshot.status,
         crate::domain::conversation::ConversationStatus::WaitingForExternalAction
     ));
-    assert_eq!(
-        snapshot
-            .blocked_interaction
-            .as_ref()
-            .expect("blocked interaction should exist")
-            .method,
-        "item/tool/requestApproval"
-    );
+    assert_eq!(snapshot.pending_interactions.len(), 1);
+    assert!(matches!(
+        snapshot.pending_interactions[0],
+        crate::domain::conversation::ConversationInteraction::Unsupported(ref interaction)
+            if interaction.method == "item/tool/call"
+    ));
 }
 
 #[tokio::test]
-async fn plan_mode_is_rejected_before_turn_start() {
+async fn plan_mode_starts_a_real_plan_turn() {
     let (session, harness) = FakeCodexHarness::new().await;
-    let error = session
+    let result = session
         .send_message(
             context(
                 "thread-local-5",
@@ -371,11 +406,174 @@ async fn plan_mode_is_rejected_before_turn_start() {
             "Create a plan".to_string(),
         )
         .await
-        .expect_err("plan mode should be rejected for this milestone");
+        .expect("plan mode should now be supported");
 
-    assert!(matches!(error, AppError::Validation(message) if message.contains("Plan mode")));
+    assert_eq!(result.snapshot.active_turn_id.as_deref(), Some("turn-live-1"));
     let requests = harness.requests().await;
-    assert!(!requests.iter().any(|request| request.method == "turn/start"));
+    let turn_start = requests
+        .iter()
+        .find(|request| request.method == "turn/start")
+        .expect("turn/start should be issued");
+    assert_eq!(turn_start.params["collaborationMode"]["mode"], "plan");
+}
+
+#[tokio::test]
+async fn user_input_requests_can_be_answered() {
+    let (session, harness) = FakeCodexHarness::new().await;
+
+    session
+        .send_message(
+            context(
+                "thread-local-6",
+                None,
+                CollaborationMode::Build,
+                ApprovalPolicy::AskToEdit,
+            ),
+            "Investigate".to_string(),
+        )
+        .await
+        .expect("message should send");
+
+    harness
+        .emit_request(
+            "item/tool/requestUserInput",
+            json!({
+                "threadId": "thr-new",
+                "turnId": "turn-live-1",
+                "itemId": "user-input-1",
+                "questions": [{
+                    "id": "scope",
+                    "header": "Scope",
+                    "question": "Which scope should Codex use?",
+                    "options": [
+                        { "label": "Frontend", "description": "Recommended" },
+                        { "label": "Backend", "description": "Rust only" }
+                    ],
+                    "isOther": true
+                }]
+            }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let open = session
+        .open_thread(context(
+            "thread-local-6",
+            Some("thr-new"),
+            CollaborationMode::Build,
+            ApprovalPolicy::AskToEdit,
+        ))
+        .await
+        .expect("snapshot should reopen");
+    let interaction = match &open.snapshot.pending_interactions[0] {
+        crate::domain::conversation::ConversationInteraction::UserInput(interaction) => interaction,
+        other => panic!("expected user input interaction, got {other:?}"),
+    };
+
+    let snapshot = session
+        .respond_to_user_input_request(
+            crate::domain::conversation::RespondToUserInputRequestInput {
+                thread_id: "thread-local-6".to_string(),
+                interaction_id: interaction.id.clone(),
+                answers: std::collections::HashMap::from([(
+                    "scope".to_string(),
+                    vec!["Frontend".to_string(), "Plus the CLI".to_string()],
+                )]),
+            },
+        )
+        .await
+        .expect("answering user input should succeed");
+
+    assert!(snapshot.pending_interactions.is_empty());
+    let responses = harness.wait_for_response_count(1).await;
+    assert!(responses.iter().any(|response| {
+        response.id == json!(900)
+            && response.result["answers"]["scope"]["answers"][0] == json!("Frontend")
+            && response.result["answers"]["scope"]["answers"][1] == json!("Plus the CLI")
+    }));
+}
+
+#[tokio::test]
+async fn plan_notifications_and_approval_continue_the_same_thread_in_build_mode() {
+    let (session, harness) = FakeCodexHarness::new().await;
+
+    session
+        .send_message(
+            context(
+                "thread-local-7",
+                None,
+                CollaborationMode::Plan,
+                ApprovalPolicy::AskToEdit,
+            ),
+            "Draft the implementation plan".to_string(),
+        )
+        .await
+        .expect("plan message should send");
+
+    harness
+        .emit_notification(
+            "turn/plan/updated",
+            json!({
+                "threadId": "thr-new",
+                "turnId": "turn-live-1",
+                "explanation": "Codex clarified the path.",
+                "plan": [
+                    { "step": "Inspect runtime", "status": "completed" },
+                    { "step": "Add UI", "status": "pending" }
+                ]
+            }),
+        )
+        .await;
+    harness
+        .emit_notification(
+            "item/completed",
+            json!({
+                "threadId": "thr-new",
+                "turnId": "turn-live-1",
+                "item": {
+                    "id": "plan-item-1",
+                    "type": "plan",
+                    "text": "## Proposed plan\n\n- Inspect runtime\n- Add UI"
+                }
+            }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let snapshot = session
+        .submit_plan_decision(
+            context(
+                "thread-local-7",
+                Some("thr-new"),
+                CollaborationMode::Plan,
+                ApprovalPolicy::AskToEdit,
+            ),
+            crate::domain::conversation::SubmitPlanDecisionInput {
+                thread_id: "thread-local-7".to_string(),
+                action: crate::domain::conversation::PlanDecisionAction::Approve,
+                feedback: None,
+                composer: None,
+            },
+        )
+        .await
+        .expect("plan approval should continue the thread")
+        .snapshot;
+
+    assert!(matches!(
+        snapshot.proposed_plan.as_ref().map(|plan| plan.status),
+        Some(crate::domain::conversation::ProposedPlanStatus::Approved)
+    ));
+    assert!(matches!(snapshot.composer.collaboration_mode, CollaborationMode::Build));
+
+    let requests = harness.requests().await;
+    assert!(requests.iter().filter(|request| request.method == "turn/start").count() >= 2);
+    let build_turn = requests
+        .iter()
+        .rev()
+        .find(|request| request.method == "turn/start")
+        .expect("a build continuation turn should exist");
+    assert_eq!(build_turn.params["collaborationMode"]["mode"], "default");
+    assert_eq!(build_turn.params["input"][0]["text"], super::protocol::plan_approval_message());
 }
 
 #[tokio::test]

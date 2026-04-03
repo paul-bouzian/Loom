@@ -5,7 +5,10 @@ use chrono::Utc;
 use tauri::AppHandle;
 use tokio::sync::Mutex;
 
-use crate::domain::conversation::{ThreadConversationOpenResponse, ThreadConversationSnapshot};
+use crate::domain::conversation::{
+    ApprovalResponseInput, RespondToUserInputRequestInput, SubmitPlanDecisionInput,
+    ThreadConversationOpenResponse, ThreadConversationSnapshot,
+};
 use crate::domain::workspace::{RuntimeState, RuntimeStatusSnapshot};
 use crate::error::{AppError, AppResult};
 use crate::runtime::session::{RuntimeSession, SendMessageResult};
@@ -199,6 +202,46 @@ impl RuntimeSupervisor {
     ) -> AppResult<ThreadConversationSnapshot> {
         let session = self.ensure_runtime(&context).await?;
         session.interrupt_thread(context).await
+    }
+
+    pub async fn respond_to_approval_request(
+        &self,
+        context: ThreadRuntimeContext,
+        interaction_id: &str,
+        response: ApprovalResponseInput,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let session = self.ensure_runtime(&context).await?;
+        session
+            .respond_to_approval_request(&context.thread_id, interaction_id, response)
+            .await
+    }
+
+    pub async fn respond_to_user_input_request(
+        &self,
+        context: ThreadRuntimeContext,
+        input: RespondToUserInputRequestInput,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let session = self.ensure_runtime(&context).await?;
+        if input.thread_id != context.thread_id {
+            return Err(AppError::Validation(
+                "User input response thread id does not match the active context.".to_string(),
+            ));
+        }
+        session.respond_to_user_input_request(input).await
+    }
+
+    pub async fn submit_plan_decision(
+        &self,
+        context: ThreadRuntimeContext,
+        input: SubmitPlanDecisionInput,
+    ) -> AppResult<SendMessageResult> {
+        let session = self.ensure_runtime(&context).await?;
+        if input.thread_id != context.thread_id {
+            return Err(AppError::Validation(
+                "Plan decision thread id does not match the active context.".to_string(),
+            ));
+        }
+        session.submit_plan_decision(context, input).await
     }
 
     async fn running_status(&self, environment_id: &str) -> Option<RuntimeStatusSnapshot> {

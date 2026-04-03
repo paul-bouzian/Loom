@@ -2,7 +2,9 @@ use serde::Deserialize;
 use tauri::State;
 
 use crate::domain::conversation::{
-    ConversationComposerSettings, ThreadConversationOpenResponse, ThreadConversationSnapshot,
+    ConversationComposerSettings, RespondToApprovalRequestInput,
+    RespondToUserInputRequestInput, SubmitPlanDecisionInput, ThreadConversationOpenResponse,
+    ThreadConversationSnapshot,
 };
 use crate::error::CommandError;
 use crate::state::AppState;
@@ -57,4 +59,55 @@ pub async fn interrupt_thread_turn(
 ) -> Result<ThreadConversationSnapshot, CommandError> {
     let context = state.workspace.thread_runtime_context(&thread_id)?;
     Ok(state.runtime.interrupt_thread(context).await?)
+}
+
+#[tauri::command]
+pub async fn respond_to_approval_request(
+    input: RespondToApprovalRequestInput,
+    state: State<'_, AppState>,
+) -> Result<ThreadConversationSnapshot, CommandError> {
+    let context = state.workspace.thread_runtime_context(&input.thread_id)?;
+    Ok(state
+        .runtime
+        .respond_to_approval_request(context, &input.interaction_id, input.response)
+        .await?)
+}
+
+#[tauri::command]
+pub async fn respond_to_user_input_request(
+    input: RespondToUserInputRequestInput,
+    state: State<'_, AppState>,
+) -> Result<ThreadConversationSnapshot, CommandError> {
+    let context = state.workspace.thread_runtime_context(&input.thread_id)?;
+    Ok(state
+        .runtime
+        .respond_to_user_input_request(context, input)
+        .await?)
+}
+
+#[tauri::command]
+pub async fn submit_plan_decision(
+    input: SubmitPlanDecisionInput,
+    state: State<'_, AppState>,
+) -> Result<ThreadConversationSnapshot, CommandError> {
+    let mut context = state.workspace.thread_runtime_context(&input.thread_id)?;
+    if let Some(composer) = input.composer.clone() {
+        state
+            .workspace
+            .persist_thread_composer_settings(&input.thread_id, &composer)?;
+        context.composer = composer;
+    }
+
+    let result = state.runtime.submit_plan_decision(context, input).await?;
+
+    if let Some(codex_thread_id) = result.new_codex_thread_id {
+        state
+            .workspace
+            .persist_codex_thread_id(&result.snapshot.thread_id, &codex_thread_id)?;
+    }
+    state
+        .workspace
+        .persist_thread_composer_settings(&result.snapshot.thread_id, &result.snapshot.composer)?;
+
+    Ok(result.snapshot)
 }

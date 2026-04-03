@@ -12,10 +12,13 @@ import type {
   GlobalSettings,
   GlobalSettingsPatch,
   ProjectRecord,
+  RespondToApprovalRequestInput,
+  RespondToUserInputRequestInput,
   RenameProjectRequest,
   RenameThreadRequest,
   RuntimeStatusSnapshot,
   SendThreadMessageInput,
+  SubmitPlanDecisionInput,
   ThreadConversationOpenResponse,
   ThreadConversationSnapshot,
   ThreadRecord,
@@ -50,6 +53,24 @@ export function interruptThreadTurn(
   return invoke<ThreadConversationSnapshot>("interrupt_thread_turn", {
     threadId,
   });
+}
+
+export function respondToApprovalRequest(
+  input: RespondToApprovalRequestInput,
+): Promise<ThreadConversationSnapshot> {
+  return invoke<ThreadConversationSnapshot>("respond_to_approval_request", { input });
+}
+
+export function respondToUserInputRequest(
+  input: RespondToUserInputRequestInput,
+): Promise<ThreadConversationSnapshot> {
+  return invoke<ThreadConversationSnapshot>("respond_to_user_input_request", { input });
+}
+
+export function submitPlanDecision(
+  input: SubmitPlanDecisionInput,
+): Promise<ThreadConversationSnapshot> {
+  return invoke<ThreadConversationSnapshot>("submit_plan_decision", { input });
 }
 
 export function listenToConversationEvents(

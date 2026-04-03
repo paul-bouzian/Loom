@@ -2,8 +2,10 @@ import { create } from "zustand";
 
 import * as bridge from "../lib/bridge";
 import type {
+  ApprovalResponseInput,
   ConversationComposerSettings,
   EnvironmentCapabilitiesSnapshot,
+  SubmitPlanDecisionInput,
   ThreadConversationSnapshot,
 } from "../lib/types";
 import { useWorkspaceStore } from "./workspace-store";
@@ -24,6 +26,19 @@ type ConversationState = {
   ) => void;
   sendMessage: (threadId: string, text: string) => Promise<void>;
   interruptThread: (threadId: string) => Promise<void>;
+  respondToApprovalRequest: (
+    threadId: string,
+    interactionId: string,
+    response: ApprovalResponseInput,
+  ) => Promise<void>;
+  respondToUserInputRequest: (
+    threadId: string,
+    interactionId: string,
+    answers: Record<string, string[]>,
+  ) => Promise<void>;
+  submitPlanDecision: (
+    input: SubmitPlanDecisionInput,
+  ) => Promise<void>;
 };
 
 let unlistenConversationEvents: null | (() => void) = null;
@@ -157,6 +172,82 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         cause instanceof Error ? cause.message : "Failed to stop the active turn";
       set((state) => ({
         errorByThreadId: { ...state.errorByThreadId, [threadId]: message },
+      }));
+    }
+  },
+
+  respondToApprovalRequest: async (threadId, interactionId, response) => {
+    set((state) => ({
+      errorByThreadId: { ...state.errorByThreadId, [threadId]: null },
+    }));
+    try {
+      const snapshot = await bridge.respondToApprovalRequest({
+        threadId,
+        interactionId,
+        response,
+      });
+      set((state) => ({
+        snapshotsByThreadId: {
+          ...state.snapshotsByThreadId,
+          [threadId]: snapshot,
+        },
+      }));
+    } catch (cause: unknown) {
+      const message =
+        cause instanceof Error ? cause.message : "Failed to answer the approval request";
+      set((state) => ({
+        errorByThreadId: { ...state.errorByThreadId, [threadId]: message },
+      }));
+    }
+  },
+
+  respondToUserInputRequest: async (threadId, interactionId, answers) => {
+    set((state) => ({
+      errorByThreadId: { ...state.errorByThreadId, [threadId]: null },
+    }));
+    try {
+      const snapshot = await bridge.respondToUserInputRequest({
+        threadId,
+        interactionId,
+        answers,
+      });
+      set((state) => ({
+        snapshotsByThreadId: {
+          ...state.snapshotsByThreadId,
+          [threadId]: snapshot,
+        },
+      }));
+    } catch (cause: unknown) {
+      const message =
+        cause instanceof Error ? cause.message : "Failed to submit the requested answers";
+      set((state) => ({
+        errorByThreadId: { ...state.errorByThreadId, [threadId]: message },
+      }));
+    }
+  },
+
+  submitPlanDecision: async (input) => {
+    set((state) => ({
+      errorByThreadId: { ...state.errorByThreadId, [input.threadId]: null },
+    }));
+    try {
+      const snapshot = await bridge.submitPlanDecision(input);
+      set((state) => ({
+        snapshotsByThreadId: {
+          ...state.snapshotsByThreadId,
+          [input.threadId]: snapshot,
+        },
+        composerByThreadId: {
+          ...state.composerByThreadId,
+          [input.threadId]: snapshot.composer,
+        },
+      }));
+      await useWorkspaceStore.getState().refreshSnapshot();
+    } catch (cause: unknown) {
+      const message =
+        cause instanceof Error ? cause.message : "Failed to continue from the proposed plan";
+      set((state) => ({
+        errorByThreadId: { ...state.errorByThreadId, [input.threadId]: message },
       }));
     }
   },

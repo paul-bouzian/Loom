@@ -1,8 +1,9 @@
 import { useWorkspaceStore, selectSelectedEnvironment } from "../../stores/workspace-store";
+import { useConversationStore } from "../../stores/conversation-store";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import * as bridge from "../../lib/bridge";
 import { CloseIcon, PlusIcon } from "../../shared/Icons";
-import type { ThreadRecord } from "../../lib/types";
+import type { ThreadConversationSnapshot, ThreadRecord } from "../../lib/types";
 import "./ThreadTabs.css";
 
 export function ThreadTabs() {
@@ -10,6 +11,7 @@ export function ThreadTabs() {
   const selectedThreadId = useWorkspaceStore((s) => s.selectedThreadId);
   const selectThread = useWorkspaceStore((s) => s.selectThread);
   const refreshSnapshot = useWorkspaceStore((s) => s.refreshSnapshot);
+  const snapshotsByThreadId = useConversationStore((state) => state.snapshotsByThreadId);
 
   if (!selectedEnvironment) return null;
 
@@ -54,6 +56,9 @@ export function ThreadTabs() {
               title={thread.title}
               onClick={() => selectThread(thread.id)}
             >
+              {needsAttention(snapshotsByThreadId[thread.id]) ? (
+                <span className="thread-tab__status-dot" aria-hidden="true" />
+              ) : null}
               <span className="thread-tab__title">{thread.title}</span>
             </button>
             <button
@@ -77,5 +82,13 @@ export function ThreadTabs() {
         <PlusIcon size={12} />
       </button>
     </div>
+  );
+}
+
+function needsAttention(snapshot: ThreadConversationSnapshot | undefined) {
+  if (!snapshot) return false;
+  return (
+    snapshot.pendingInteractions.length > 0 ||
+    Boolean(snapshot.proposedPlan?.isAwaitingDecision)
   );
 }
