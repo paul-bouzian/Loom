@@ -147,7 +147,7 @@ fn parse_git_diff_output(
     }
 
     let text = String::from_utf8_lossy(&output.stdout).to_string();
-    if text.contains("Binary files") {
+    if is_binary_diff_output(&text) {
         return Ok(GitFileDiff {
             environment_id: environment_id.to_string(),
             scope,
@@ -182,6 +182,14 @@ fn parse_git_diff_output(
         hunks,
         empty_message,
     })
+}
+
+fn is_binary_diff_output(text: &str) -> bool {
+    let Some(first_line) = text.lines().next() else {
+        return false;
+    };
+
+    first_line.starts_with("Binary files ") && first_line.ends_with(" differ")
 }
 
 fn parse_unified_diff(diff_text: &str) -> Vec<GitDiffHunk> {
@@ -285,7 +293,7 @@ fn parse_hunk_position(position: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_unified_diff;
+    use super::{is_binary_diff_output, parse_unified_diff};
 
     #[test]
     fn parses_added_and_removed_lines_from_unified_diff() {
@@ -296,5 +304,13 @@ mod tests {
         assert_eq!(hunks[0].lines.len(), 3);
         assert_eq!(hunks[0].lines[0].old_line_number, Some(1));
         assert_eq!(hunks[0].lines[1].new_line_number, Some(1));
+    }
+
+    #[test]
+    fn only_marks_true_binary_diff_headers_as_binary() {
+        assert!(is_binary_diff_output("Binary files a/test.png and b/test.png differ\n"));
+        assert!(!is_binary_diff_output(
+            "diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n+const msg = \"Binary files differ\";\n",
+        ));
     }
 }

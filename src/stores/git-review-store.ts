@@ -235,7 +235,16 @@ export const useGitReviewStore = create<GitReviewState>((set, get) => ({
       scope: get().scopeByEnvironmentId[environmentId] ?? "uncommitted",
       message: trimmed,
     };
-    await runReviewMutation(environmentId, "commit", () => bridge.commitGit(input), set, get);
+    const committed = await runReviewMutation(
+      environmentId,
+      "commit",
+      () => bridge.commitGit(input),
+      set,
+      get,
+    );
+    if (!committed) {
+      return;
+    }
     set((state) => ({
       commitMessageByEnvironmentId: {
         ...state.commitMessageByEnvironmentId,
@@ -305,7 +314,7 @@ async function runReviewMutation(
   operation: (scope: GitReviewScope) => Promise<GitReviewSnapshot>,
   set: GitReviewSetter,
   get: () => GitReviewState,
-) {
+): Promise<boolean> {
   const scope = get().scopeByEnvironmentId[environmentId] ?? "uncommitted";
   set((state) => ({
     actionByEnvironmentId: {
@@ -321,6 +330,7 @@ async function runReviewMutation(
   try {
     const snapshot = await operation(scope);
     await applySnapshot(snapshot, set, get);
+    return true;
   } catch (cause: unknown) {
     const message =
       cause instanceof Error ? cause.message : "Git action failed";
@@ -330,6 +340,7 @@ async function runReviewMutation(
         [environmentId]: message,
       },
     }));
+    return false;
   } finally {
     set((state) => ({
       actionByEnvironmentId: {
@@ -431,13 +442,10 @@ async function loadDiffBundle(
     },
   }));
 
-  const cachedDiffs = get().diffsByContext[contextKey] ?? {};
-  let nextDiffs = { ...cachedDiffs };
-
   try {
     for (const file of orderedFiles) {
       const fileKey = changedFileKey(file.section, file.path);
-      if (nextDiffs[fileKey]) {
+      if (get().diffsByContext[contextKey]?.[fileKey]) {
         continue;
       }
 
@@ -447,23 +455,18 @@ async function loadDiffBundle(
         section: file.section,
         path: file.path,
       });
-      nextDiffs = {
-        ...nextDiffs,
-        [fileKey]: diff,
-      };
       set((state) => ({
         diffsByContext: {
           ...state.diffsByContext,
-          [contextKey]: nextDiffs,
+          [contextKey]: {
+            ...(state.diffsByContext[contextKey] ?? {}),
+            [fileKey]: diff,
+          },
         },
       }));
     }
 
     set((state) => ({
-      diffsByContext: {
-        ...state.diffsByContext,
-        [contextKey]: nextDiffs,
-      },
       diffErrorByContext: {
         ...state.diffErrorByContext,
         [contextKey]: null,

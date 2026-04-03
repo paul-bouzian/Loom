@@ -99,6 +99,20 @@ describe("git-review-store", () => {
     );
   });
 
+  it("keeps the commit message when commit fails", async () => {
+    mockedBridge.commitGit.mockRejectedValue(new Error("push rejected"));
+    useGitReviewStore.setState({
+      scopeByEnvironmentId: { "env-1": "uncommitted" },
+      commitMessageByEnvironmentId: { "env-1": "feat: keep me" },
+    });
+
+    await useGitReviewStore.getState().commit("env-1", "feat: keep me");
+
+    const state = useGitReviewStore.getState();
+    expect(state.commitMessageByEnvironmentId["env-1"]).toBe("feat: keep me");
+    expect(state.errorByEnvironmentId["env-1"]).toBe("push rejected");
+  });
+
   it("keeps the selected file open when it moves between sections", async () => {
     mockedBridge.getGitReviewSnapshot.mockResolvedValue(makeGitReviewSnapshot());
     mockedBridge.getGitFileDiff.mockResolvedValue(makeGitFileDiff());
@@ -142,5 +156,83 @@ describe("git-review-store", () => {
     expect(useGitReviewStore.getState().selectedFileByContext["env-1:uncommitted"]).toBe(
       "staged:src/lib.ts",
     );
+  });
+
+  it("merges concurrent diff loads instead of dropping earlier results", async () => {
+    mockedBridge.getGitReviewSnapshot.mockResolvedValue(
+      makeGitReviewSnapshot({
+        sections: [
+          {
+            id: "unstaged",
+            label: "Unstaged",
+            files: [
+              {
+                path: "src/a.ts",
+                oldPath: null,
+                section: "unstaged",
+                kind: "modified",
+                additions: null,
+                deletions: null,
+                canStage: true,
+                canUnstage: false,
+                canRevert: true,
+              },
+              {
+                path: "src/b.ts",
+                oldPath: null,
+                section: "unstaged",
+                kind: "modified",
+                additions: null,
+                deletions: null,
+                canStage: true,
+                canUnstage: false,
+                canRevert: true,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const pending = new Map<
+      string,
+      {
+        promise: Promise<ReturnType<typeof makeGitFileDiff>>;
+        resolve: (value: ReturnType<typeof makeGitFileDiff>) => void;
+      }
+    >();
+    mockedBridge.getGitFileDiff.mockImplementation(({ path }) => {
+      const existing = pending.get(path);
+      if (existing) {
+        return existing.promise;
+      }
+
+      let resolvePromise: ((value: ReturnType<typeof makeGitFileDiff>) => void) | undefined;
+      const promise = new Promise<ReturnType<typeof makeGitFileDiff>>((resolve) => {
+        resolvePromise = resolve;
+      });
+      pending.set(path, {
+        promise,
+        resolve: (value) => resolvePromise?.(value),
+      });
+      return promise;
+    });
+
+    await useGitReviewStore.getState().loadReview("env-1");
+    const first = useGitReviewStore
+      .getState()
+      .selectFile("env-1", "uncommitted", "unstaged", "src/a.ts");
+    const second = useGitReviewStore
+      .getState()
+      .selectFile("env-1", "uncommitted", "unstaged", "src/b.ts");
+
+    pending.get("src/b.ts")?.resolve(makeGitFileDiff({ path: "src/b.ts" }));
+    pending.get("src/a.ts")?.resolve(makeGitFileDiff({ path: "src/a.ts" }));
+    await Promise.all([first, second]);
+
+    expect(useGitReviewStore.getState().diffsByContext["env-1:uncommitted"]).toMatchObject({
+      "unstaged:src/a.ts": expect.objectContaining({ path: "src/a.ts" }),
+      "unstaged:src/b.ts": expect.objectContaining({ path: "src/b.ts" }),
+    });
   });
 });

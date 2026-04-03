@@ -31,7 +31,18 @@ pub fn unstage_file(repo_root: &Path, path: &str) -> AppResult<()> {
 
 pub fn unstage_all(repo_root: &Path) -> AppResult<()> {
     if !reference_exists(repo_root, "HEAD") {
-        return run_git(repo_root, ["rm", "--cached", "--quiet", "--force", "-r", "."]);
+        return run_git(
+            repo_root,
+            [
+                "rm",
+                "--cached",
+                "--quiet",
+                "--force",
+                "-r",
+                "--ignore-unmatch",
+                ".",
+            ],
+        );
     }
     run_git(repo_root, ["restore", "--staged", "--", "."])
 }
@@ -44,10 +55,13 @@ pub fn revert_file(repo_root: &Path, path: &str, section: GitChangeSection) -> A
     }
 
     validate_relative_path(path)?;
-    run_git(
-        repo_root,
-        ["restore", "--source=HEAD", "--staged", "--worktree", "--", path],
-    )
+    match section {
+        GitChangeSection::Staged => {
+            run_git(repo_root, ["restore", "--source=HEAD", "--staged", "--", path])
+        }
+        GitChangeSection::Unstaged => run_git(repo_root, ["restore", "--worktree", "--", path]),
+        GitChangeSection::Untracked | GitChangeSection::Branch => unreachable!(),
+    }
 }
 
 pub fn revert_all(repo_root: &Path) -> AppResult<()> {
@@ -199,7 +213,13 @@ fn truncate_diff(diff: &str, limit: usize) -> String {
         return diff.to_string();
     }
 
-    let mut truncated = diff[..limit].to_string();
+    let truncate_at = diff
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= limit)
+        .last()
+        .unwrap_or(0);
+    let mut truncated = diff[..truncate_at].to_string();
     truncated.push_str("\n\n[diff truncated]");
     truncated
 }
@@ -221,7 +241,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use super::{commit, revert_file, stage_file, unstage_file};
+    use super::{commit, revert_file, stage_file, unstage_all, unstage_file};
     use crate::domain::git_review::GitChangeSection;
     use crate::error::AppResult;
 
@@ -247,8 +267,43 @@ mod tests {
         stage_file(&repo.path, "src/app.ts")?;
         revert_file(&repo.path, "src/app.ts", GitChangeSection::Staged)?;
         let content = fs::read_to_string(&file)?;
-        assert_eq!(content, "const answer = 1;\n");
+        assert_eq!(content, "const answer = 2;\n");
         Ok(())
+    }
+
+    #[test]
+    fn unstage_all_is_a_noop_on_a_fresh_repo_without_tracked_files() -> AppResult<()> {
+        let repo = TestRepo::new()?;
+        unstage_all(&repo.path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn revert_unstaged_preserves_staged_changes() -> AppResult<()> {
+        let repo = TestRepo::new()?;
+        let file = repo.path.join("src/app.ts");
+        fs::create_dir_all(file.parent().expect("parent"))?;
+        fs::write(&file, "const answer = 1;\n")?;
+        stage_file(&repo.path, "src/app.ts")?;
+        repo.run(["commit", "-m", "feat: add app file"])?;
+
+        fs::write(&file, "const answer = 2;\n")?;
+        stage_file(&repo.path, "src/app.ts")?;
+        fs::write(&file, "const answer = 3;\n")?;
+
+        revert_file(&repo.path, "src/app.ts", GitChangeSection::Unstaged)?;
+
+        assert_eq!(fs::read_to_string(&file)?, "const answer = 2;\n");
+        assert!(repo
+            .stdout(["diff", "--cached", "--", "src/app.ts"])?
+            .contains("+const answer = 2;"));
+        Ok(())
+    }
+
+    #[test]
+    fn truncate_diff_keeps_utf8_boundaries() {
+        let truncated = super::truncate_diff("ééé", 1);
+        assert!(truncated.ends_with("[diff truncated]"));
     }
 
     struct TestRepo {
@@ -271,6 +326,10 @@ mod tests {
 
         fn run<const N: usize>(&self, args: [&str; N]) -> AppResult<()> {
             super::run_git(&self.path, args)
+        }
+
+        fn stdout<const N: usize>(&self, args: [&str; N]) -> AppResult<String> {
+            Ok(super::stdout_message(&super::command_output(&self.path, args)?.stdout))
         }
     }
 
