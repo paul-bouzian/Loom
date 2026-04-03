@@ -1,7 +1,9 @@
 import { useWorkspaceStore, selectSelectedEnvironment } from "../../stores/workspace-store";
+import { useConversationStore } from "../../stores/conversation-store";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import * as bridge from "../../lib/bridge";
 import { CloseIcon, PlusIcon } from "../../shared/Icons";
-import type { ThreadRecord } from "../../lib/types";
+import type { ThreadConversationSnapshot, ThreadRecord } from "../../lib/types";
 import "./ThreadTabs.css";
 
 export function ThreadTabs() {
@@ -9,6 +11,7 @@ export function ThreadTabs() {
   const selectedThreadId = useWorkspaceStore((s) => s.selectedThreadId);
   const selectThread = useWorkspaceStore((s) => s.selectThread);
   const refreshSnapshot = useWorkspaceStore((s) => s.refreshSnapshot);
+  const snapshotsByThreadId = useConversationStore((state) => state.snapshotsByThreadId);
 
   if (!selectedEnvironment) return null;
 
@@ -24,10 +27,17 @@ export function ThreadTabs() {
   }
 
   async function handleArchiveThread(thread: ThreadRecord) {
+    const confirmed = await confirm("Are you sure you want to archive this thread?", {
+      title: "Archive Thread",
+      kind: "warning",
+      okLabel: "Archive",
+      cancelLabel: "Cancel",
+    });
+    if (!confirmed) return;
+
     await bridge.archiveThread({ threadId: thread.id });
     if (selectedThreadId === thread.id) {
-      const remaining = activeThreads.filter((t) => t.id !== thread.id);
-      selectThread(remaining.length > 0 ? remaining[0].id : null);
+      selectThread(null);
     }
     await refreshSnapshot();
   }
@@ -46,12 +56,16 @@ export function ThreadTabs() {
               title={thread.title}
               onClick={() => selectThread(thread.id)}
             >
+              {needsAttention(snapshotsByThreadId[thread.id]) ? (
+                <span className="thread-tab__status-dot" aria-hidden="true" />
+              ) : null}
               <span className="thread-tab__title">{thread.title}</span>
             </button>
             <button
               type="button"
               className="thread-tab__close"
-              title={`Close ${thread.title}`}
+              aria-label={`Archive ${thread.title}`}
+              title={`Archive ${thread.title}`}
               onClick={() => void handleArchiveThread(thread)}
             >
               <CloseIcon size={10} />
@@ -68,5 +82,13 @@ export function ThreadTabs() {
         <PlusIcon size={12} />
       </button>
     </div>
+  );
+}
+
+function needsAttention(snapshot: ThreadConversationSnapshot | undefined) {
+  if (!snapshot) return false;
+  return (
+    snapshot.pendingInteractions.length > 0 ||
+    Boolean(snapshot.proposedPlan?.isAwaitingDecision)
   );
 }
