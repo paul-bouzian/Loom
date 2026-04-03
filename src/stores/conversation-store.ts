@@ -43,6 +43,7 @@ type ConversationState = {
 
 let unlistenConversationEvents: null | (() => void) = null;
 let listenerInitialization: Promise<void> | null = null;
+let listenerGeneration = 0;
 
 export const useConversationStore = create<ConversationState>((set, get) => ({
   snapshotsByThreadId: {},
@@ -59,7 +60,8 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       return;
     }
 
-    listenerInitialization = bridge
+    const generation = listenerGeneration;
+    const initialization = bridge
       .listenToConversationEvents((payload) => {
         set((state) => ({
           snapshotsByThreadId: {
@@ -84,14 +86,22 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         }));
       })
       .then((unlisten) => {
+        if (generation !== listenerGeneration) {
+          unlisten();
+          return;
+        }
         unlistenConversationEvents = unlisten;
         set({ listenerReady: true });
-      })
-      .finally(() => {
-        listenerInitialization = null;
       });
+    listenerInitialization = initialization;
 
-    await listenerInitialization;
+    try {
+      await initialization;
+    } finally {
+      if (listenerInitialization === initialization) {
+        listenerInitialization = null;
+      }
+    }
   },
 
   openThread: async (threadId) => {
@@ -300,6 +310,7 @@ export function selectConversationError(threadId: string | null) {
 }
 
 export function teardownConversationListener() {
+  listenerGeneration += 1;
   unlistenConversationEvents?.();
   unlistenConversationEvents = null;
   listenerInitialization = null;

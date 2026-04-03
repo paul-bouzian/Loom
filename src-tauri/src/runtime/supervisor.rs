@@ -125,10 +125,11 @@ impl RuntimeSupervisor {
             )
             .await?,
         );
+        let pid = session.pid().await;
         let status = RuntimeStatusSnapshot {
             environment_id: environment_id.to_string(),
             state: RuntimeState::Running,
-            pid: None,
+            pid,
             binary_path: Some(binary_path),
             started_at: Some(Utc::now()),
             last_exit_code: None,

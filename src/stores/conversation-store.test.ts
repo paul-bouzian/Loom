@@ -16,6 +16,16 @@ vi.mock("../lib/bridge", () => ({
 }));
 
 const mockedBridge = vi.mocked(bridge);
+type ListenerResolver = (value: (() => void) | PromiseLike<() => void>) => void;
+
+function requireListenerResolver(
+  resolver: ListenerResolver | null,
+): ListenerResolver {
+  if (!resolver) {
+    throw new Error("Expected listener initialization to be pending");
+  }
+  return resolver;
+}
 
 function resetConversationState() {
   teardownConversationListener();
@@ -130,10 +140,10 @@ describe("conversation store", () => {
   });
 
   it("initializes the runtime listener only once across concurrent calls", async () => {
-    let resolveListener: ((value: () => void) => void) | null = null;
+    let resolveListener: ListenerResolver | null = null;
     mockedBridge.listenToConversationEvents.mockImplementation(
       () =>
-        new Promise((resolve) => {
+        new Promise<() => void>((resolve) => {
           resolveListener = resolve;
         }),
     );
@@ -142,7 +152,7 @@ describe("conversation store", () => {
     const second = useConversationStore.getState().initializeListener();
 
     expect(mockedBridge.listenToConversationEvents).toHaveBeenCalledTimes(1);
-    resolveListener?.(() => undefined);
+    requireListenerResolver(resolveListener)(() => undefined);
     await Promise.all([first, second]);
 
     expect(useConversationStore.getState().listenerReady).toBe(true);
@@ -165,5 +175,24 @@ describe("conversation store", () => {
     teardownConversationListener();
 
     expect(useConversationStore.getState().listenerReady).toBe(false);
+  });
+
+  it("ignores a listener initialization that resolves after teardown", async () => {
+    let resolveListener: ListenerResolver | null = null;
+    const unlisten = vi.fn();
+    mockedBridge.listenToConversationEvents.mockImplementation(
+      () =>
+        new Promise<() => void>((resolve) => {
+          resolveListener = resolve;
+        }),
+    );
+
+    const pendingInitialization = useConversationStore.getState().initializeListener();
+    teardownConversationListener();
+    requireListenerResolver(resolveListener)(unlisten);
+    await pendingInitialization;
+
+    expect(useConversationStore.getState().listenerReady).toBe(false);
+    expect(unlisten).toHaveBeenCalledTimes(1);
   });
 });

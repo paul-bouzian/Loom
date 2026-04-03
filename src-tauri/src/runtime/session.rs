@@ -358,20 +358,23 @@ impl RuntimeSession {
         match input.action {
             PlanDecisionAction::Approve => {
                 context.composer.collaboration_mode = CollaborationMode::Build;
-                self.mark_plan_state(&context.thread_id, mark_plan_approved)
+                let mut result = self
+                    .send_message_with_visibility(
+                        context,
+                        plan_approval_message().to_string(),
+                        false,
+                    )
                     .await?;
-                self.push_system_item(
-                    &context.thread_id,
-                    "Plan approved",
-                    "ThreadEx approved the current plan and switched the thread to Build mode.",
-                )
-                .await?;
-                self.send_message_with_visibility(
-                    context,
-                    plan_approval_message().to_string(),
-                    false,
-                )
-                .await
+                self.mark_plan_state(&result.snapshot.thread_id, mark_plan_approved)
+                    .await?;
+                result.snapshot = self
+                    .push_system_item(
+                        &result.snapshot.thread_id,
+                        "Plan approved",
+                        "ThreadEx approved the current plan and switched the thread to Build mode.",
+                    )
+                    .await?;
+                Ok(result)
             }
             PlanDecisionAction::Refine => {
                 let feedback = input.feedback.unwrap_or_default();
@@ -382,10 +385,13 @@ impl RuntimeSession {
                             .to_string(),
                     ));
                 }
-                self.mark_plan_state(&context.thread_id, mark_plan_superseded)
+                let mut result = self
+                    .send_message_with_visibility(context, trimmed.to_string(), true)
                     .await?;
-                self.send_message_with_visibility(context, trimmed.to_string(), true)
-                    .await
+                result.snapshot = self
+                    .mark_plan_state(&result.snapshot.thread_id, mark_plan_superseded)
+                    .await?;
+                Ok(result)
             }
         }
     }
@@ -468,6 +474,11 @@ impl RuntimeSession {
         Ok(child.try_wait()?.and_then(|status| status.code()))
     }
 
+    pub async fn pid(&self) -> Option<u32> {
+        let child = self.child.as_ref()?;
+        child.lock().await.id()
+    }
+
     async fn ensure_capabilities(&self) -> AppResult<EnvironmentCapabilitiesSnapshot> {
         if let Some(capabilities) = self.state.lock().await.capabilities.clone() {
             return Ok(capabilities);
@@ -504,6 +515,7 @@ impl RuntimeSession {
         }
 
         let mut open = self.open_thread(context.clone()).await?;
+        let mut rollback_snapshot = open.snapshot.clone();
         if visible_to_user {
             let user_item = ConversationItem::Message(ConversationMessageItem {
                 id: format!("local-user-{}", Uuid::now_v7()),
@@ -536,10 +548,11 @@ impl RuntimeSession {
                             "approvalPolicy": approval_policy_value(context.composer.approval_policy),
                         }),
                     )
-                    .await?;
+                .await?;
                 let thread_id = response.thread.id;
                 new_codex_thread_id = Some(thread_id.clone());
                 open.snapshot.codex_thread_id = Some(thread_id.clone());
+                rollback_snapshot.codex_thread_id = Some(thread_id.clone());
                 thread_id
             }
         };
@@ -585,15 +598,15 @@ impl RuntimeSession {
                                 "Conversation snapshot disappeared unexpectedly.".to_string(),
                             )
                         })?;
-                    snapshot.active_turn_id = None;
-                    snapshot.error =
+                    rollback_snapshot.error =
                         Some(crate::domain::conversation::ConversationErrorSnapshot {
                             message: error.to_string(),
                             codex_error_info: None,
                             additional_details: None,
                         });
-                    clear_streaming_flags(&mut snapshot.items);
-                    reconcile_snapshot_status(snapshot);
+                    clear_streaming_flags(&mut rollback_snapshot.items);
+                    reconcile_snapshot_status(&mut rollback_snapshot);
+                    *snapshot = rollback_snapshot.clone();
                     snapshot.clone()
                 };
                 self.emit_snapshot(&snapshot);
@@ -690,35 +703,31 @@ impl RuntimeSession {
             .insert(interaction_id.to_string(), request);
     }
 
-    async fn mark_plan_state<F>(&self, thread_id: &str, mutate: F) -> AppResult<()>
+    async fn mark_plan_state<F>(
+        &self,
+        thread_id: &str,
+        mutate: F,
+    ) -> AppResult<ThreadConversationSnapshot>
     where
         F: FnOnce(&mut crate::domain::conversation::ProposedPlanSnapshot),
     {
-        let snapshot = {
-            let mut state = self.state.lock().await;
-            let snapshot = state
-                .snapshots_by_thread
-                .get_mut(thread_id)
-                .ok_or_else(|| AppError::NotFound("Thread conversation is not open.".to_string()))?;
-            let plan = snapshot
-                .proposed_plan
-                .as_mut()
-                .ok_or_else(|| AppError::Validation("There is no proposed plan to update.".to_string()))?;
+        self.mutate_snapshot(thread_id, |snapshot| {
+            let plan = snapshot.proposed_plan.as_mut().ok_or_else(|| {
+                AppError::Validation("There is no proposed plan to update.".to_string())
+            })?;
             mutate(plan);
-            reconcile_snapshot_status(snapshot);
-            snapshot.clone()
-        };
-        self.emit_snapshot(&snapshot);
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
-    async fn push_system_item(&self, thread_id: &str, title: &str, body: &str) -> AppResult<()> {
-        let snapshot = {
-            let mut state = self.state.lock().await;
-            let snapshot = state
-                .snapshots_by_thread
-                .get_mut(thread_id)
-                .ok_or_else(|| AppError::NotFound("Thread conversation is not open.".to_string()))?;
+    async fn push_system_item(
+        &self,
+        thread_id: &str,
+        title: &str,
+        body: &str,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        self.mutate_snapshot(thread_id, |snapshot| {
             upsert_item(
                 &mut snapshot.items,
                 ConversationItem::System(crate::domain::conversation::ConversationSystemItem {
@@ -728,10 +737,30 @@ impl RuntimeSession {
                     body: body.to_string(),
                 }),
             );
+            Ok(())
+        })
+        .await
+    }
+
+    async fn mutate_snapshot<F>(
+        &self,
+        thread_id: &str,
+        mutate: F,
+    ) -> AppResult<ThreadConversationSnapshot>
+    where
+        F: FnOnce(&mut ThreadConversationSnapshot) -> AppResult<()>,
+    {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            let snapshot = state.snapshots_by_thread.get_mut(thread_id).ok_or_else(|| {
+                AppError::NotFound("Thread conversation is not open.".to_string())
+            })?;
+            mutate(snapshot)?;
+            reconcile_snapshot_status(snapshot);
             snapshot.clone()
         };
         self.emit_snapshot(&snapshot);
-        Ok(())
+        Ok(snapshot)
     }
 
     async fn request_typed<T>(&self, method: &str, params: serde_json::Value) -> AppResult<T>
