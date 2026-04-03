@@ -3,6 +3,18 @@
 export type EnvironmentKind = "local" | "managedWorktree" | "permanentWorktree";
 export type ThreadStatus = "active" | "archived";
 export type RuntimeState = "running" | "stopped" | "exited";
+export type GitReviewScope = "uncommitted" | "branch";
+export type GitChangeSection = "staged" | "unstaged" | "untracked" | "branch";
+export type GitChangeKind =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "typeChanged"
+  | "unmerged"
+  | "unknown";
+export type GitDiffLineKind = "hunk" | "context" | "added" | "removed";
 export type SubagentStatus = "running" | "completed" | "failed";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type CollaborationMode = "build" | "plan";
@@ -99,6 +111,71 @@ export type GlobalSettings = {
 export type WorkspaceSnapshot = {
   settings: GlobalSettings;
   projects: ProjectRecord[];
+};
+
+/* ── Git review ── */
+
+export type GitRepoSummary = {
+  environmentId: string;
+  repoPath: string;
+  branch?: string | null;
+  baseBranch?: string | null;
+  upstreamBranch?: string | null;
+  ahead: number;
+  behind: number;
+  dirty: boolean;
+  hasStagedChanges: boolean;
+  hasUnstagedChanges: boolean;
+  hasUntrackedChanges: boolean;
+};
+
+export type GitFileChange = {
+  path: string;
+  oldPath?: string | null;
+  section: GitChangeSection;
+  kind: GitChangeKind;
+  additions?: number | null;
+  deletions?: number | null;
+  canStage: boolean;
+  canUnstage: boolean;
+  canRevert: boolean;
+};
+
+export type GitChangeSectionSnapshot = {
+  id: GitChangeSection;
+  label: string;
+  files: GitFileChange[];
+};
+
+export type GitReviewSnapshot = {
+  environmentId: string;
+  scope: GitReviewScope;
+  summary: GitRepoSummary;
+  sections: GitChangeSectionSnapshot[];
+};
+
+export type GitDiffLine = {
+  kind: GitDiffLineKind;
+  text: string;
+  oldLineNumber?: number | null;
+  newLineNumber?: number | null;
+};
+
+export type GitDiffHunk = {
+  header: string;
+  lines: GitDiffLine[];
+};
+
+export type GitFileDiff = {
+  environmentId: string;
+  scope: GitReviewScope;
+  section: GitChangeSection;
+  path: string;
+  oldPath?: string | null;
+  kind: GitChangeKind;
+  isBinary: boolean;
+  hunks: GitDiffHunk[];
+  emptyMessage?: string | null;
 };
 
 /* ── Bootstrap ── */
@@ -373,6 +450,37 @@ export type RenameThreadRequest = {
 
 export type ArchiveThreadRequest = {
   threadId: string;
+};
+
+export type GitScopeInput = {
+  environmentId: string;
+  scope: GitReviewScope;
+};
+
+export type GitFileInput = {
+  environmentId: string;
+  scope: GitReviewScope;
+  path: string;
+};
+
+export type GitFileDiffInput = {
+  environmentId: string;
+  scope: GitReviewScope;
+  section: GitChangeSection;
+  path: string;
+};
+
+export type GitRevertFileInput = {
+  environmentId: string;
+  scope: GitReviewScope;
+  section: GitChangeSection;
+  path: string;
+};
+
+export type CommitGitInput = {
+  environmentId: string;
+  scope: GitReviewScope;
+  message: string;
 };
 
 export type SendThreadMessageInput = {

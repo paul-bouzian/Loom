@@ -1,12 +1,34 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
+mod actions;
+mod diff;
+mod status;
 
+use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Output};
+
+use crate::domain::git_review::{
+    GitChangeSection, GitFileDiff, GitReviewScope, GitReviewSnapshot,
+};
 use crate::error::{AppError, AppResult};
+
+pub use actions::{
+    commit, fetch, generate_commit_message, pull, push, revert_all, revert_file, stage_all,
+    stage_file, unstage_all, unstage_file,
+};
 
 #[derive(Debug, Clone)]
 pub struct RepoContext {
     pub root_path: PathBuf,
     pub current_branch: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GitEnvironmentContext {
+    pub environment_id: String,
+    pub environment_path: String,
+    pub current_branch: Option<String>,
+    pub base_branch: Option<String>,
+    pub codex_binary_path: Option<String>,
+    pub default_model: String,
 }
 
 pub fn resolve_repo_context(path: &str) -> AppResult<RepoContext> {
@@ -91,7 +113,82 @@ pub fn managed_worktree_path(repo_root: &Path, branch_name: &str) -> PathBuf {
         .join(branch_name)
 }
 
-fn run_git<P, I, A>(path: P, args: I) -> AppResult<()>
+pub fn git_review_snapshot(
+    context: &GitEnvironmentContext,
+    scope: GitReviewScope,
+) -> AppResult<GitReviewSnapshot> {
+    status::read_review_snapshot(context, scope)
+}
+
+pub fn git_file_diff(
+    context: &GitEnvironmentContext,
+    scope: GitReviewScope,
+    section: GitChangeSection,
+    path: &str,
+) -> AppResult<GitFileDiff> {
+    diff::read_file_diff(context, scope, section, path)
+}
+
+pub(crate) fn validate_relative_path(path: &str) -> AppResult<()> {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        return Err(AppError::Validation(
+            "Expected a repository-relative path.".to_string(),
+        ));
+    }
+
+    if candidate.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(AppError::Validation(
+            "Path traversal is not allowed for Git actions.".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn resolve_base_reference(
+    repo_root: &Path,
+    preferred: Option<&str>,
+) -> Option<String> {
+    if let Some(preferred) = preferred.filter(|value| !value.trim().is_empty()) {
+        return Some(preferred.to_string());
+    }
+
+    if let Ok(upstream) = upstream_branch(repo_root) {
+        return Some(upstream);
+    }
+
+    if let Ok(origin_head) = run_git_for_output(repo_root, ["symbolic-ref", "refs/remotes/origin/HEAD"]) {
+        return Some(
+            origin_head
+                .trim_start_matches("refs/remotes/")
+                .to_string(),
+        );
+    }
+
+    ["origin/main", "origin/master", "main", "master"]
+        .into_iter()
+        .find(|candidate| reference_exists(repo_root, candidate))
+        .map(ToString::to_string)
+}
+
+pub(crate) fn upstream_branch(repo_root: &Path) -> AppResult<String> {
+    run_git_for_output(
+        repo_root,
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+    )
+}
+
+pub(crate) fn reference_exists(repo_root: &Path, reference: &str) -> bool {
+    run_git(repo_root, ["rev-parse", "--verify", "--quiet", reference]).is_ok()
+}
+
+pub(crate) fn run_git<P, I, A>(path: P, args: I) -> AppResult<()>
 where
     P: AsRef<Path>,
     I: IntoIterator<Item = A>,
@@ -106,7 +203,7 @@ where
     Err(AppError::Git(stderr_message(&output.stderr)))
 }
 
-fn run_git_for_output<P, I, A>(path: P, args: I) -> AppResult<String>
+pub(crate) fn run_git_for_output<P, I, A>(path: P, args: I) -> AppResult<String>
 where
     P: AsRef<Path>,
     I: IntoIterator<Item = A>,
@@ -125,7 +222,7 @@ where
     Err(AppError::Git(stderr_message(&output.stderr)))
 }
 
-fn command_output<P, I, A>(path: P, args: I) -> AppResult<std::process::Output>
+pub(crate) fn command_output<P, I, A>(path: P, args: I) -> AppResult<Output>
 where
     P: AsRef<Path>,
     I: IntoIterator<Item = A>,
@@ -141,11 +238,11 @@ where
     command.output().map_err(AppError::from)
 }
 
-fn stdout_message(buffer: &[u8]) -> String {
+pub(crate) fn stdout_message(buffer: &[u8]) -> String {
     String::from_utf8_lossy(buffer).trim().to_string()
 }
 
-fn stderr_message(buffer: &[u8]) -> String {
+pub(crate) fn stderr_message(buffer: &[u8]) -> String {
     let message = String::from_utf8_lossy(buffer).trim().to_string();
     if message.is_empty() {
         "Git command failed.".to_string()
@@ -158,7 +255,7 @@ fn stderr_message(buffer: &[u8]) -> String {
 mod tests {
     use std::path::Path;
 
-    use super::{ensure_branch_name, managed_worktree_path};
+    use super::{ensure_branch_name, managed_worktree_path, validate_relative_path};
 
     #[test]
     fn branch_name_is_sanitized_into_a_git_safe_slug() {
@@ -179,5 +276,11 @@ mod tests {
             path,
             Path::new("/tmp/acme/.threadex-worktrees/repo/feature-plan-mode")
         );
+    }
+
+    #[test]
+    fn git_actions_reject_parent_path_segments() {
+        let error = validate_relative_path("../secrets.txt").expect_err("path should be rejected");
+        assert!(error.to_string().contains("Path traversal"));
     }
 }

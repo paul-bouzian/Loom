@@ -1,0 +1,109 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import * as bridge from "../../lib/bridge";
+import {
+  makeConversationSnapshot,
+  makeEnvironment,
+  makeGitReviewSnapshot,
+  makeThread,
+  makeWorkspaceSnapshot,
+} from "../../test/fixtures/conversation";
+import { useConversationStore } from "../../stores/conversation-store";
+import { useGitReviewStore } from "../../stores/git-review-store";
+import { useWorkspaceStore } from "../../stores/workspace-store";
+import { InspectorPanel } from "./InspectorPanel";
+
+const confirmMock = vi.fn();
+
+vi.mock("../../lib/bridge", () => ({
+  getGitReviewSnapshot: vi.fn(),
+  getGitFileDiff: vi.fn(),
+  stageGitFile: vi.fn(),
+  stageGitAll: vi.fn(),
+  unstageGitFile: vi.fn(),
+  unstageGitAll: vi.fn(),
+  revertGitFile: vi.fn(),
+  revertGitAll: vi.fn(),
+  commitGit: vi.fn(),
+  fetchGit: vi.fn(),
+  pullGit: vi.fn(),
+  pushGit: vi.fn(),
+  generateGitCommitMessage: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  confirm: (...args: unknown[]) => confirmMock(...args),
+}));
+
+const mockedBridge = vi.mocked(bridge);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  useGitReviewStore.setState({
+    scopeByEnvironmentId: {},
+    snapshotsByContext: {},
+    selectedFileByContext: {},
+    diffsByContext: {},
+    diffErrorByContext: {},
+    commitMessageByEnvironmentId: {},
+    loadingByContext: {},
+    diffLoadingByContext: {},
+    actionByEnvironmentId: {},
+    generatingCommitMessageByEnvironmentId: {},
+    errorByContext: {},
+  });
+
+  const thread = makeThread();
+  const environment = makeEnvironment({ threads: [thread] });
+  useWorkspaceStore.setState((state) => ({
+    ...state,
+    snapshot: makeWorkspaceSnapshot({
+      projects: [{ ...makeWorkspaceSnapshot().projects[0], environments: [environment] }],
+    }),
+    loadingState: "ready",
+    selectedProjectId: "project-1",
+    selectedEnvironmentId: environment.id,
+    selectedThreadId: thread.id,
+    error: null,
+  }));
+  useConversationStore.setState((state) => ({
+    ...state,
+    snapshotsByThreadId: {
+      [thread.id]: makeConversationSnapshot(),
+    },
+  }));
+});
+
+describe("InspectorPanel", () => {
+  it("renders the Git review pane for the selected environment", async () => {
+    mockedBridge.getGitReviewSnapshot.mockResolvedValue(makeGitReviewSnapshot());
+
+    render(<InspectorPanel />);
+
+    expect(await screen.findByText("Repository")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /src\/app\.ts.*modified/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("+const answer = 2;")).not.toBeInTheDocument();
+  });
+
+  it("confirms before reverting all tracked changes", async () => {
+    confirmMock.mockResolvedValue(false);
+    mockedBridge.getGitReviewSnapshot.mockResolvedValue(makeGitReviewSnapshot());
+
+    render(<InspectorPanel />);
+
+    await screen.findByText("Repository");
+    await userEvent.click(screen.getByRole("button", { name: "Revert all" }));
+
+    await waitFor(() => {
+      expect(confirmMock).toHaveBeenCalledWith(
+        "Are you sure you want to revert all tracked changes?",
+        expect.objectContaining({ title: "Revert All Changes" }),
+      );
+    });
+    expect(mockedBridge.revertGitAll).not.toHaveBeenCalled();
+  });
+});
