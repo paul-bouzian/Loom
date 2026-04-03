@@ -5,10 +5,17 @@ import type {
   AddProjectRequest,
   ArchiveThreadRequest,
   BootstrapStatus,
+  CommitGitInput,
   ConversationEventPayload,
   CreateThreadRequest,
   CreateWorktreeRequest,
   EnvironmentRecord,
+  GitFileDiff,
+  GitFileDiffInput,
+  GitFileInput,
+  GitReviewSnapshot,
+  GitRevertFileInput,
+  GitScopeInput,
   GlobalSettings,
   GlobalSettingsPatch,
   ProjectRecord,
@@ -31,6 +38,84 @@ export function getBootstrapStatus(): Promise<BootstrapStatus> {
 
 export function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
   return invoke<WorkspaceSnapshot>("get_workspace_snapshot");
+}
+
+export function getGitReviewSnapshot(
+  input: GitScopeInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("get_git_review_snapshot", { input });
+}
+
+export function getGitFileDiff(
+  input: GitFileDiffInput,
+): Promise<GitFileDiff> {
+  return invoke<GitFileDiff>("get_git_file_diff", { input });
+}
+
+export function stageGitFile(
+  input: GitFileInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("stage_git_file", { input });
+}
+
+export function stageGitAll(
+  input: GitScopeInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("stage_git_all", { input });
+}
+
+export function unstageGitFile(
+  input: GitFileInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("unstage_git_file", { input });
+}
+
+export function unstageGitAll(
+  input: GitScopeInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("unstage_git_all", { input });
+}
+
+export function revertGitFile(
+  input: GitRevertFileInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("revert_git_file", { input });
+}
+
+export function revertGitAll(
+  input: GitScopeInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("revert_git_all", { input });
+}
+
+export function commitGit(
+  input: CommitGitInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("commit_git", { input });
+}
+
+export function fetchGit(
+  input: GitScopeInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("fetch_git", { input });
+}
+
+export function pullGit(
+  input: GitScopeInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("pull_git", { input });
+}
+
+export function pushGit(
+  input: GitScopeInput,
+): Promise<GitReviewSnapshot> {
+  return invoke<GitReviewSnapshot>("push_git", { input });
+}
+
+export function generateGitCommitMessage(
+  environmentId: string,
+): Promise<string> {
+  return invoke<string>("generate_git_commit_message", { environmentId });
 }
 
 export function openThreadConversation(

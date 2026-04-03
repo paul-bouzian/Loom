@@ -6,6 +6,9 @@ import type {
   ConversationComposerSettings,
   EnvironmentCapabilitiesSnapshot,
   EnvironmentRecord,
+  GitChangeSectionSnapshot,
+  GitFileDiff,
+  GitReviewSnapshot,
   ProjectRecord,
   ThreadConversationSnapshot,
   ThreadRecord,
@@ -259,6 +262,100 @@ export function makeProposedPlan(
     markdown: "## Proposed plan\n\n- Inspect the runtime layer\n- Implement the plan UI\n- Validate interactions",
     status: "ready",
     isAwaitingDecision: true,
+    ...overrides,
+  };
+}
+
+export function makeGitReviewSnapshot(
+  overrides: Partial<GitReviewSnapshot> = {},
+): GitReviewSnapshot {
+  return {
+    environmentId: "env-1",
+    scope: "uncommitted",
+    summary: {
+      environmentId: "env-1",
+      repoPath: "/tmp/threadex",
+      branch: "main",
+      baseBranch: "origin/main",
+      upstreamBranch: "origin/main",
+      ahead: 1,
+      behind: 0,
+      dirty: true,
+      hasStagedChanges: true,
+      hasUnstagedChanges: true,
+      hasUntrackedChanges: false,
+    },
+    sections: [
+      {
+        id: "staged",
+        label: "Staged",
+        files: [
+          {
+            path: "src/app.ts",
+            oldPath: null,
+            section: "staged",
+            kind: "modified",
+            additions: null,
+            deletions: null,
+            canStage: false,
+            canUnstage: true,
+            canRevert: true,
+          },
+        ],
+      },
+      {
+        id: "unstaged",
+        label: "Unstaged",
+        files: [
+          {
+            path: "src/lib.ts",
+            oldPath: null,
+            section: "unstaged",
+            kind: "added",
+            additions: null,
+            deletions: null,
+            canStage: true,
+            canUnstage: false,
+            canRevert: true,
+          },
+        ],
+      },
+    ] satisfies GitChangeSectionSnapshot[],
+    ...overrides,
+  };
+}
+
+export function makeGitFileDiff(
+  overrides: Partial<GitFileDiff> = {},
+): GitFileDiff {
+  return {
+    environmentId: "env-1",
+    scope: "uncommitted",
+    section: "staged",
+    path: "src/app.ts",
+    oldPath: null,
+    kind: "modified",
+    isBinary: false,
+    hunks: [
+      {
+        header: "@@ -1,1 +1,1 @@",
+        lines: [
+          {
+            kind: "removed",
+            text: "-const answer = 1;",
+            oldLineNumber: 1,
+            newLineNumber: null,
+          },
+          {
+            kind: "added",
+            text: "+const answer = 2;",
+            oldLineNumber: null,
+            newLineNumber: 1,
+          },
+        ],
+      },
+    ],
+    emptyMessage: null,
     ...overrides,
   };
 }

@@ -40,6 +40,7 @@
   /* ── Layout ── */
   --tx-rail-width: 48px;
   --tx-sidebar-width: 260px;
+  --tx-diff-width: 420px;
   --tx-inspector-width: 320px;
   --tx-toolbar-height: 44px;
   --tx-statusbar-height: 28px;

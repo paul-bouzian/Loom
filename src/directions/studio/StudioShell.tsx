@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
+import {
+  selectGitReviewScope,
+  selectGitReviewSelectedFile,
+  useGitReviewStore,
+} from "../../stores/git-review-store";
+import { selectSelectedEnvironment, useWorkspaceStore } from "../../stores/workspace-store";
 import { IconRail } from "./IconRail";
 import { TreeSidebar } from "./TreeSidebar";
 import { StudioMain } from "./StudioMain";
 import { InspectorPanel } from "./InspectorPanel";
+import { GitDiffPanel } from "./GitDiffPanel";
 import { StudioStatusBar } from "./StudioStatusBar";
 import "./StudioShell.css";
 
@@ -22,6 +29,14 @@ export function StudioShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [theme, setTheme] = useState<Theme>(readTheme);
+  const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
+  const scope = useGitReviewStore(
+    selectGitReviewScope(selectedEnvironment?.id ?? null),
+  );
+  const selectedFileKey = useGitReviewStore(
+    selectGitReviewSelectedFile(selectedEnvironment?.id ?? null, scope),
+  );
+  const diffPanelOpen = Boolean(selectedFileKey);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -33,7 +48,7 @@ export function StudioShell() {
   }
 
   return (
-    <div className="studio-shell">
+    <div className={`studio-shell ${diffPanelOpen ? "studio-shell--with-diff" : ""}`}>
       <IconRail
         activeSection={activeSection}
         onSectionChange={setActiveSection}
@@ -47,6 +62,7 @@ export function StudioShell() {
         inspectorOpen={inspectorOpen}
         onToggleInspector={() => setInspectorOpen((v) => !v)}
       />
+      {diffPanelOpen && <GitDiffPanel />}
       {inspectorOpen && <InspectorPanel />}
       <StudioStatusBar />
     </div>
