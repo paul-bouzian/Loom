@@ -104,6 +104,80 @@ export function CheckIcon({ size = 16, className }: IconProps) {
   );
 }
 
+export function MagicWandIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path
+        d="M9.5 2.5 10 4l1.5.5L10 5l-.5 1.5L9 5l-1.5-.5L9 4l.5-1.5Z"
+        stroke="currentColor"
+        strokeWidth="1.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m6.4 6.4 3.2 3.2M4 12l1.6-1.6"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M6 4.5 6.25 5.25 7 5.5l-.75.25L6 6.5l-.25-.75L5 5.5l.75-.25L6 4.5Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+export function ArrowUpIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path
+        d="M8 12V4M8 4 5.5 6.5M8 4l2.5 2.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function ArrowDownIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path
+        d="M8 4v8M8 12l-2.5-2.5M8 12l2.5-2.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function MinusIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path d="M3.5 8h9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function UndoIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path
+        d="M6 5H3.5v2.5M4 7c.9-1.8 2.7-3 5-3 3 0 4.5 1.9 4.5 4.4S12 13 9.1 13c-1.6 0-3-.6-4-1.7"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function PanelRightIcon({ size = 16, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>

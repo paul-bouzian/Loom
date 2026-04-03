@@ -14,7 +14,7 @@ use crate::domain::workspace::{
 };
 use crate::error::{AppError, AppResult};
 use crate::infrastructure::database::AppDatabase;
-use crate::services::git;
+use crate::services::git::{self, GitEnvironmentContext};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -373,6 +373,33 @@ impl WorkspaceService {
         let settings = self.read_or_seed_settings(&connection)?;
 
         Ok((environment_path, settings.codex_binary_path))
+    }
+
+    pub fn environment_git_context(&self, environment_id: &str) -> AppResult<GitEnvironmentContext> {
+        let connection = self.database.open()?;
+        let settings = self.read_or_seed_settings(&connection)?;
+
+        connection
+            .query_row(
+                "
+                SELECT id, path, git_branch, base_branch
+                FROM environments
+                WHERE id = ?1
+                ",
+                params![environment_id],
+                |row| {
+                    Ok(GitEnvironmentContext {
+                        environment_id: row.get(0)?,
+                        environment_path: row.get(1)?,
+                        current_branch: row.get(2)?,
+                        base_branch: row.get(3)?,
+                        codex_binary_path: settings.codex_binary_path.clone(),
+                        default_model: settings.default_model.clone(),
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::NotFound("Environment not found.".to_string()))
     }
 
     pub fn thread_runtime_context(&self, thread_id: &str) -> AppResult<ThreadRuntimeContext> {

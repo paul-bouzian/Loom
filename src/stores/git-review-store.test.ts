@@ -1,0 +1,146 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import * as bridge from "../lib/bridge";
+import { makeGitFileDiff, makeGitReviewSnapshot } from "../test/fixtures/conversation";
+import { useGitReviewStore } from "./git-review-store";
+
+vi.mock("../lib/bridge", () => ({
+  getGitReviewSnapshot: vi.fn(),
+  getGitFileDiff: vi.fn(),
+  stageGitFile: vi.fn(),
+  stageGitAll: vi.fn(),
+  unstageGitFile: vi.fn(),
+  unstageGitAll: vi.fn(),
+  revertGitFile: vi.fn(),
+  revertGitAll: vi.fn(),
+  commitGit: vi.fn(),
+  fetchGit: vi.fn(),
+  pullGit: vi.fn(),
+  pushGit: vi.fn(),
+  generateGitCommitMessage: vi.fn(),
+}));
+
+const mockedBridge = vi.mocked(bridge);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  useGitReviewStore.setState({
+    scopeByEnvironmentId: {},
+    snapshotsByContext: {},
+    selectedFileByContext: {},
+    diffsByContext: {},
+    diffErrorByContext: {},
+    commitMessageByEnvironmentId: {},
+    loadingByContext: {},
+    diffLoadingByContext: {},
+    actionByEnvironmentId: {},
+    generatingCommitMessageByEnvironmentId: {},
+    errorByEnvironmentId: {},
+  });
+});
+
+describe("git-review-store", () => {
+  it("loads a review snapshot without auto-opening a diff", async () => {
+    mockedBridge.getGitReviewSnapshot.mockResolvedValue(makeGitReviewSnapshot());
+
+    await useGitReviewStore.getState().loadReview("env-1");
+
+    const state = useGitReviewStore.getState();
+    expect(mockedBridge.getGitReviewSnapshot).toHaveBeenCalledWith({
+      environmentId: "env-1",
+      scope: "uncommitted",
+    });
+    expect(state.selectedFileByContext["env-1:uncommitted"]).toBeNull();
+    expect(state.diffsByContext["env-1:uncommitted"]).toEqual({});
+    expect(mockedBridge.getGitFileDiff).not.toHaveBeenCalled();
+  });
+
+  it("switches scope without auto-opening the branch diff", async () => {
+    mockedBridge.getGitReviewSnapshot.mockResolvedValue(
+      makeGitReviewSnapshot({
+        scope: "branch",
+        sections: [
+          {
+            id: "branch",
+            label: "Branch changes",
+            files: [
+              {
+                path: "src/feature.ts",
+                oldPath: null,
+                section: "branch",
+                kind: "modified",
+                additions: null,
+                deletions: null,
+                canStage: false,
+                canUnstage: false,
+                canRevert: false,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    await useGitReviewStore.getState().selectScope("env-1", "branch");
+
+    const state = useGitReviewStore.getState();
+    expect(state.scopeByEnvironmentId["env-1"]).toBe("branch");
+    expect(state.selectedFileByContext["env-1:branch"]).toBeNull();
+    expect(mockedBridge.getGitFileDiff).not.toHaveBeenCalled();
+  });
+
+  it("stores a generated commit message per environment", async () => {
+    mockedBridge.generateGitCommitMessage.mockResolvedValue("feat: add review pane");
+
+    await useGitReviewStore.getState().generateCommitMessage("env-1");
+
+    expect(useGitReviewStore.getState().commitMessageByEnvironmentId["env-1"]).toBe(
+      "feat: add review pane",
+    );
+  });
+
+  it("keeps the selected file open when it moves between sections", async () => {
+    mockedBridge.getGitReviewSnapshot.mockResolvedValue(makeGitReviewSnapshot());
+    mockedBridge.getGitFileDiff.mockResolvedValue(makeGitFileDiff());
+
+    await useGitReviewStore.getState().selectFile(
+      "env-1",
+      "uncommitted",
+      "unstaged",
+      "src/lib.ts",
+    );
+
+    mockedBridge.getGitReviewSnapshot.mockResolvedValue(
+      makeGitReviewSnapshot({
+        sections: [
+          {
+            id: "staged",
+            label: "Staged",
+            files: [
+              {
+                path: "src/lib.ts",
+                oldPath: null,
+                section: "staged",
+                kind: "added",
+                additions: null,
+                deletions: null,
+                canStage: false,
+                canUnstage: true,
+                canRevert: true,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    mockedBridge.getGitFileDiff.mockResolvedValue(
+      makeGitFileDiff({ section: "staged", path: "src/lib.ts", kind: "added" }),
+    );
+
+    await useGitReviewStore.getState().refreshReview("env-1");
+
+    expect(useGitReviewStore.getState().selectedFileByContext["env-1:uncommitted"]).toBe(
+      "staged:src/lib.ts",
+    );
+  });
+});
