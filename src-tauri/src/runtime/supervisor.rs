@@ -1,73 +1,129 @@
 use std::collections::HashMap;
-use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::Arc;
 
 use chrono::Utc;
+use tauri::AppHandle;
+use tokio::sync::Mutex;
 
+use crate::domain::conversation::{
+    ApprovalResponseInput, RespondToUserInputRequestInput, SubmitPlanDecisionInput,
+    ThreadConversationOpenResponse, ThreadConversationSnapshot,
+};
 use crate::domain::workspace::{RuntimeState, RuntimeStatusSnapshot};
 use crate::error::{AppError, AppResult};
+use crate::runtime::session::{RuntimeSession, SendMessageResult};
+use crate::services::workspace::ThreadRuntimeContext;
 
-#[derive(Debug)]
 struct RunningRuntime {
-    child: Child,
+    session: Arc<RuntimeSession>,
     status: RuntimeStatusSnapshot,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct RuntimeRegistry {
     running: HashMap<String, RunningRuntime>,
     last_known: HashMap<String, RuntimeStatusSnapshot>,
 }
 
-#[derive(Debug, Default)]
 pub struct RuntimeSupervisor {
+    app: AppHandle,
+    app_version: String,
     registry: Mutex<RuntimeRegistry>,
+    start_lock: Mutex<()>,
 }
 
 impl RuntimeSupervisor {
-    pub fn refresh_statuses(&self) -> AppResult<Vec<RuntimeStatusSnapshot>> {
-        let mut registry = self
-            .registry
-            .lock()
-            .map_err(|_| AppError::Runtime("The runtime registry is poisoned.".to_string()))?;
+    pub fn new(app: AppHandle, app_version: String) -> Self {
+        Self {
+            app,
+            app_version,
+            registry: Mutex::new(RuntimeRegistry::default()),
+            start_lock: Mutex::new(()),
+        }
+    }
 
-        let environment_ids = registry.running.keys().cloned().collect::<Vec<_>>();
+    pub async fn refresh_statuses(&self) -> AppResult<Vec<RuntimeStatusSnapshot>> {
+        let sessions = {
+            let registry = self.registry.lock().await;
+            registry
+                .running
+                .iter()
+                .map(|(environment_id, runtime)| {
+                    (
+                        environment_id.clone(),
+                        runtime.session.clone(),
+                        runtime.status.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
 
-        for environment_id in environment_ids {
-            let Some(runtime) = registry.running.get_mut(&environment_id) else {
-                continue;
-            };
-            let exited = runtime.child.try_wait()?;
-
-            if let Some(exit_status) = exited {
-                let Some(removed) = registry.running.remove(&environment_id) else {
-                    continue;
-                };
-                let mut status = removed.status;
-                status.state = RuntimeState::Exited;
-                status.last_exit_code = exit_status.code();
-                registry.last_known.insert(environment_id.clone(), status);
+        let mut exited = Vec::new();
+        for (environment_id, session, status) in sessions {
+            if let Some(last_exit_code) = session.try_wait().await? {
+                exited.push((environment_id, session, status, last_exit_code));
             }
         }
 
-        Ok(registry.last_known.values().cloned().collect())
+        if !exited.is_empty() {
+            let mut finalized = Vec::new();
+            let mut registry = self.registry.lock().await;
+            for (environment_id, session, mut status, last_exit_code) in exited {
+                let should_remove = registry
+                    .running
+                    .get(&environment_id)
+                    .is_some_and(|runtime| Arc::ptr_eq(&runtime.session, &session));
+                if !should_remove {
+                    continue;
+                }
+                registry.running.remove(&environment_id);
+                status.state = RuntimeState::Exited;
+                status.pid = None;
+                status.started_at = None;
+                status.last_exit_code = Some(last_exit_code);
+                registry.last_known.insert(environment_id, status);
+                finalized.push(session);
+            }
+            drop(registry);
+
+            for session in finalized {
+                session.stop().await?;
+            }
+        }
+
+        Ok(self
+            .registry
+            .lock()
+            .await
+            .last_known
+            .values()
+            .cloned()
+            .collect())
     }
 
-    pub fn start(
+    pub async fn start(
         &self,
         environment_id: &str,
         environment_path: &str,
         codex_binary_path: Option<String>,
     ) -> AppResult<RuntimeStatusSnapshot> {
-        self.refresh_statuses()?;
+        Ok(self
+            .ensure_running_runtime(environment_id, environment_path, codex_binary_path)
+            .await?
+            .status)
+    }
 
-        let mut registry = self
-            .registry
-            .lock()
-            .map_err(|_| AppError::Runtime("The runtime registry is poisoned.".to_string()))?;
+    async fn ensure_running_runtime(
+        &self,
+        environment_id: &str,
+        environment_path: &str,
+        codex_binary_path: Option<String>,
+    ) -> AppResult<RunningRuntime> {
+        let _start_guard = self.start_lock.lock().await;
+        self.refresh_statuses().await?;
 
-        if let Some(runtime) = registry.running.get(environment_id) {
-            return Ok(runtime.status.clone());
+        if let Some(runtime) = self.running_runtime(environment_id).await {
+            return Ok(runtime);
         }
 
         let binary_path = match codex_binary_path {
@@ -78,28 +134,31 @@ impl RuntimeSupervisor {
                 .to_string(),
         };
 
-        let mut command = Command::new(&binary_path);
-        command
-            .arg("app-server")
-            .current_dir(environment_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let child = command.spawn()?;
+        let session = Arc::new(
+            RuntimeSession::spawn(
+                self.app.clone(),
+                environment_id.to_string(),
+                environment_path.to_string(),
+                binary_path.clone(),
+                self.app_version.clone(),
+            )
+            .await?,
+        );
+        let pid = session.pid().await;
         let status = RuntimeStatusSnapshot {
             environment_id: environment_id.to_string(),
             state: RuntimeState::Running,
-            pid: Some(child.id()),
+            pid,
             binary_path: Some(binary_path),
             started_at: Some(Utc::now()),
             last_exit_code: None,
         };
 
+        let mut registry = self.registry.lock().await;
         registry.running.insert(
             environment_id.to_string(),
             RunningRuntime {
-                child,
+                session: session.clone(),
                 status: status.clone(),
             },
         );
@@ -107,33 +166,34 @@ impl RuntimeSupervisor {
             .last_known
             .insert(environment_id.to_string(), status.clone());
 
-        Ok(status)
+        Ok(RunningRuntime { session, status })
     }
 
-    pub fn stop(&self, environment_id: &str) -> AppResult<RuntimeStatusSnapshot> {
-        let mut registry = self
-            .registry
-            .lock()
-            .map_err(|_| AppError::Runtime("The runtime registry is poisoned.".to_string()))?;
-
-        if let Some(mut runtime) = registry.running.remove(environment_id) {
-            runtime.child.kill()?;
+    pub async fn stop(&self, environment_id: &str) -> AppResult<RuntimeStatusSnapshot> {
+        let running = self.registry.lock().await.running.remove(environment_id);
+        if let Some(runtime) = running {
+            runtime.session.stop().await?;
 
             let status = RuntimeStatusSnapshot {
                 environment_id: environment_id.to_string(),
                 state: RuntimeState::Stopped,
                 pid: None,
-                binary_path: runtime.status.binary_path.clone(),
+                binary_path: runtime.status.binary_path,
                 started_at: None,
                 last_exit_code: None,
             };
-            registry
+            self.registry
+                .lock()
+                .await
                 .last_known
                 .insert(environment_id.to_string(), status.clone());
             return Ok(status);
         }
 
-        Ok(registry
+        Ok(self
+            .registry
+            .lock()
+            .await
             .last_known
             .get(environment_id)
             .cloned()
@@ -146,51 +206,92 @@ impl RuntimeSupervisor {
                 last_exit_code: None,
             }))
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    pub async fn open_thread(
+        &self,
+        context: ThreadRuntimeContext,
+    ) -> AppResult<ThreadConversationOpenResponse> {
+        let session = self.ensure_runtime(&context).await?;
+        session.open_thread(context).await
+    }
 
-    use super::RuntimeSupervisor;
+    pub async fn send_thread_message(
+        &self,
+        context: ThreadRuntimeContext,
+        text: String,
+    ) -> AppResult<SendMessageResult> {
+        let session = self.ensure_runtime(&context).await?;
+        session.send_message(context, text).await
+    }
 
-    #[test]
-    fn supervisor_can_start_and_stop_a_runtime_process() {
-        let unique = format!(
-            "threadex-supervisor-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        );
-        let temp_dir = std::env::temp_dir().join(unique);
-        fs::create_dir_all(&temp_dir).expect("temp directory should be created");
+    pub async fn interrupt_thread(
+        &self,
+        context: ThreadRuntimeContext,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let session = self.ensure_runtime(&context).await?;
+        session.interrupt_thread(context).await
+    }
 
-        let script_path = temp_dir.join("fake-codex.sh");
-        fs::write(
-            &script_path,
-            "#!/bin/sh\nwhile true; do sleep 1; done\n",
-        )
-        .expect("script should be written");
-        let mut permissions = fs::metadata(&script_path)
-            .expect("script metadata should exist")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script_path, permissions).expect("script should be executable");
+    pub async fn respond_to_approval_request(
+        &self,
+        context: ThreadRuntimeContext,
+        interaction_id: &str,
+        response: ApprovalResponseInput,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let session = self.ensure_runtime(&context).await?;
+        session
+            .respond_to_approval_request(&context.thread_id, interaction_id, response)
+            .await
+    }
 
-        let supervisor = RuntimeSupervisor::default();
-        let started = supervisor
-            .start(
-                "env-1",
-                temp_dir.to_str().expect("temp path should be utf-8"),
-                Some(script_path.to_string_lossy().to_string()),
+    pub async fn respond_to_user_input_request(
+        &self,
+        context: ThreadRuntimeContext,
+        input: RespondToUserInputRequestInput,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let session = self.ensure_runtime(&context).await?;
+        if input.thread_id != context.thread_id {
+            return Err(AppError::Validation(
+                "User input response thread id does not match the active context.".to_string(),
+            ));
+        }
+        session.respond_to_user_input_request(input).await
+    }
+
+    pub async fn submit_plan_decision(
+        &self,
+        context: ThreadRuntimeContext,
+        input: SubmitPlanDecisionInput,
+    ) -> AppResult<SendMessageResult> {
+        let session = self.ensure_runtime(&context).await?;
+        if input.thread_id != context.thread_id {
+            return Err(AppError::Validation(
+                "Plan decision thread id does not match the active context.".to_string(),
+            ));
+        }
+        session.submit_plan_decision(context, input).await
+    }
+
+    async fn running_runtime(&self, environment_id: &str) -> Option<RunningRuntime> {
+        self.registry
+            .lock()
+            .await
+            .running
+            .get(environment_id)
+            .map(|runtime| RunningRuntime {
+                session: runtime.session.clone(),
+                status: runtime.status.clone(),
+            })
+    }
+
+    async fn ensure_runtime(&self, context: &ThreadRuntimeContext) -> AppResult<Arc<RuntimeSession>> {
+        Ok(self
+            .ensure_running_runtime(
+                &context.environment_id,
+                &context.environment_path,
+                context.codex_binary_path.clone(),
             )
-            .expect("runtime should start");
-        assert!(started.pid.is_some());
-
-        let stopped = supervisor.stop("env-1").expect("runtime should stop");
-        assert!(matches!(stopped.state, crate::domain::workspace::RuntimeState::Stopped));
-
-        let _ = fs::remove_file(script_path);
-        let _ = fs::remove_dir_all(temp_dir);
+            .await?
+            .session)
     }
 }

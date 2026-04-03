@@ -23,6 +23,12 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::conversation::open_thread_conversation,
+            commands::conversation::send_thread_message,
+            commands::conversation::interrupt_thread_turn,
+            commands::conversation::respond_to_approval_request,
+            commands::conversation::respond_to_user_input_request,
+            commands::conversation::submit_plan_decision,
             commands::system::get_bootstrap_status,
             commands::system::get_project_icon,
             commands::workspace::get_workspace_snapshot,

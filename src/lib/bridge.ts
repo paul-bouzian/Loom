@@ -1,18 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   AddProjectRequest,
   ArchiveThreadRequest,
   BootstrapStatus,
+  ConversationEventPayload,
   CreateThreadRequest,
   CreateWorktreeRequest,
   EnvironmentRecord,
   GlobalSettings,
   GlobalSettingsPatch,
   ProjectRecord,
+  RespondToApprovalRequestInput,
+  RespondToUserInputRequestInput,
   RenameProjectRequest,
   RenameThreadRequest,
   RuntimeStatusSnapshot,
+  SendThreadMessageInput,
+  SubmitPlanDecisionInput,
+  ThreadConversationOpenResponse,
+  ThreadConversationSnapshot,
   ThreadRecord,
   WorkspaceSnapshot,
 } from "./types";
@@ -23,6 +31,55 @@ export function getBootstrapStatus(): Promise<BootstrapStatus> {
 
 export function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
   return invoke<WorkspaceSnapshot>("get_workspace_snapshot");
+}
+
+export function openThreadConversation(
+  threadId: string,
+): Promise<ThreadConversationOpenResponse> {
+  return invoke<ThreadConversationOpenResponse>("open_thread_conversation", {
+    threadId,
+  });
+}
+
+export function sendThreadMessage(
+  input: SendThreadMessageInput,
+): Promise<ThreadConversationSnapshot> {
+  return invoke<ThreadConversationSnapshot>("send_thread_message", { input });
+}
+
+export function interruptThreadTurn(
+  threadId: string,
+): Promise<ThreadConversationSnapshot> {
+  return invoke<ThreadConversationSnapshot>("interrupt_thread_turn", {
+    threadId,
+  });
+}
+
+export function respondToApprovalRequest(
+  input: RespondToApprovalRequestInput,
+): Promise<ThreadConversationSnapshot> {
+  return invoke<ThreadConversationSnapshot>("respond_to_approval_request", { input });
+}
+
+export function respondToUserInputRequest(
+  input: RespondToUserInputRequestInput,
+): Promise<ThreadConversationSnapshot> {
+  return invoke<ThreadConversationSnapshot>("respond_to_user_input_request", { input });
+}
+
+export function submitPlanDecision(
+  input: SubmitPlanDecisionInput,
+): Promise<ThreadConversationSnapshot> {
+  return invoke<ThreadConversationSnapshot>("submit_plan_decision", { input });
+}
+
+export function listenToConversationEvents(
+  callback: (payload: ConversationEventPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<ConversationEventPayload>(
+    "threadex://conversation-event",
+    (event) => callback(event.payload),
+  );
 }
 
 export function updateGlobalSettings(
