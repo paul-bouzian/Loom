@@ -113,7 +113,7 @@ describe("ThreadConversation", () => {
 
     render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
 
-    expect(await screen.findByText(/2 subagents running/i)).toBeInTheDocument();
+    expect(await screen.findByText(/2 subagents \(1 running\)/i)).toBeInTheDocument();
     expect(screen.getByLabelText("Context window 0.3% used")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Subagents/i }));
     expect(screen.getByText("Scout")).toBeInTheDocument();

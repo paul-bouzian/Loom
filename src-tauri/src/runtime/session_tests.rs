@@ -890,6 +890,45 @@ async fn streamed_notifications_update_the_open_snapshot() {
 }
 
 #[tokio::test]
+async fn submit_plan_decision_requires_an_actionable_plan_before_sending() {
+    let (session, harness) = FakeCodexHarness::new().await;
+
+    session
+        .open_thread(context(
+            "thread-local-no-plan",
+            None,
+            CollaborationMode::Plan,
+            ApprovalPolicy::AskToEdit,
+        ))
+        .await
+        .expect("thread should open");
+
+    let error = session
+        .submit_plan_decision(
+            context(
+                "thread-local-no-plan",
+                None,
+                CollaborationMode::Plan,
+                ApprovalPolicy::AskToEdit,
+            ),
+            crate::domain::conversation::SubmitPlanDecisionInput {
+                thread_id: "thread-local-no-plan".to_string(),
+                action: crate::domain::conversation::PlanDecisionAction::Approve,
+                composer: None,
+                feedback: None,
+            },
+        )
+        .await
+        .expect_err("approving without a plan should fail");
+    assert!(error
+        .to_string()
+        .contains("There is no proposed plan to update"));
+
+    let requests = harness.requests().await;
+    assert!(!requests.iter().any(|request| request.method == "turn/start"));
+}
+
+#[tokio::test]
 async fn collab_agent_notifications_update_subagent_strip_without_timeline_noise() {
     let (session, harness) = FakeCodexHarness::new().await;
 

@@ -192,12 +192,20 @@ impl RuntimeSession {
             stderr_task: Mutex::new(Some(stderr_task)),
         };
 
-        session
+        if let Err(error) = session
             .send_request("initialize", initialize_params(&app_version))
-            .await?;
-        session
+            .await
+        {
+            let _ = session.stop().await;
+            return Err(error);
+        }
+        if let Err(error) = session
             .send_notification("initialized", initialized_notification())
-            .await?;
+            .await
+        {
+            let _ = session.stop().await;
+            return Err(error);
+        }
         Ok(session)
     }
 
@@ -366,6 +374,8 @@ impl RuntimeSession {
         mut context: ThreadRuntimeContext,
         input: SubmitPlanDecisionInput,
     ) -> AppResult<SendMessageResult> {
+        self.ensure_pending_plan(&context.thread_id).await?;
+
         if let Some(composer) = input.composer {
             context.composer = composer;
         }
@@ -737,6 +747,24 @@ impl RuntimeSession {
         .await
     }
 
+    async fn ensure_pending_plan(&self, thread_id: &str) -> AppResult<()> {
+        let state = self.state.lock().await;
+        let snapshot = state.snapshots_by_thread.get(thread_id).ok_or_else(|| {
+            AppError::NotFound("Thread conversation is not open.".to_string())
+        })?;
+        let plan = snapshot.proposed_plan.as_ref().ok_or_else(|| {
+            AppError::Validation("There is no proposed plan to update.".to_string())
+        })?;
+
+        if !plan.is_awaiting_decision {
+            return Err(AppError::Validation(
+                "The current plan is no longer awaiting a decision.".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     async fn push_system_item(
         &self,
         thread_id: &str,
@@ -909,7 +937,10 @@ impl RuntimeSession {
             "method": method,
             "params": params
         });
-        self.write_message(request).await?;
+        if let Err(error) = self.write_message(request).await {
+            self.pending.lock().await.remove(&id);
+            return Err(error);
+        }
 
         match timeout(REQUEST_TIMEOUT, receiver).await {
             Ok(Ok(result)) => result,
@@ -977,7 +1008,10 @@ where
                 Ok(Some(line)) => match parse_incoming_message(&line) {
                     Ok(IncomingMessage::Response(response)) => {
                         if let Some(sender) = pending.lock().await.remove(&response.id) {
-                            let _ = sender.send(Ok(response.result));
+                            let _ = sender.send(match response.error {
+                                Some(message) => Err(AppError::Runtime(message)),
+                                None => Ok(response.result),
+                            });
                         }
                     }
                     Ok(IncomingMessage::Request(request)) => {

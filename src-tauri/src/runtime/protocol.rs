@@ -30,6 +30,7 @@ pub enum IncomingMessage {
 pub struct ResponseEnvelope {
     pub id: u64,
     pub result: Value,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -108,11 +109,14 @@ pub struct ThreadStatusWire {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ThreadSpawnSourceWire {
+    #[serde(alias = "parentThreadId")]
     pub parent_thread_id: String,
     pub depth: i32,
     #[serde(default)]
+    #[serde(alias = "agentNickname")]
     pub agent_nickname: Option<String>,
     #[serde(default)]
+    #[serde(alias = "agentRole")]
     pub agent_role: Option<String>,
 }
 
@@ -433,17 +437,16 @@ pub fn parse_incoming_message(line: &str) -> AppResult<IncomingMessage> {
         .id
         .as_u64()
         .ok_or_else(|| AppError::Runtime("App-server response id is not numeric.".to_string()))?;
-
-    if let Some(error) = response.error {
-        return Err(AppError::Runtime(match error.message {
-            Some(message) => message,
-            None => "App-server returned an unknown error.".to_string(),
-        }));
-    }
+    let error = response.error.map(|error| {
+        error
+            .message
+            .unwrap_or_else(|| "App-server returned an unknown error.".to_string())
+    });
 
     Ok(IncomingMessage::Response(ResponseEnvelope {
         id,
         result: response.result.unwrap_or(Value::Null),
+        error,
     }))
 }
 
@@ -1471,8 +1474,13 @@ fn is_hidden_control_message(text: &str) -> bool {
 }
 
 fn thread_spawn_source(source: &Value) -> Option<ThreadSpawnSourceWire> {
+    let subagent = source.get("subAgent")?;
+    let thread_spawn = subagent
+        .get("thread_spawn")
+        .or_else(|| subagent.get("threadSpawn"))?;
+
     serde_json::from_value::<ThreadSpawnSourceWire>(
-        source.get("subAgent")?.get("thread_spawn")?.clone(),
+        thread_spawn.clone(),
     )
     .ok()
 }

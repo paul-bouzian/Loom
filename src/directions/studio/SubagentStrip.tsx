@@ -70,7 +70,8 @@ function buildSummary(
 ) {
   const names = subagents.slice(0, 3).map(labelForSubagent).join(", ");
   const countLabel = `${subagents.length} subagent${subagents.length === 1 ? "" : "s"}`;
-  const statusLabel = runningCount > 0 ? `${countLabel} running` : countLabel;
+  const statusLabel =
+    runningCount > 0 ? `${countLabel} (${runningCount} running)` : countLabel;
 
   return names ? `${statusLabel} · ${names}` : statusLabel;
 }

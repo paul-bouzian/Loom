@@ -29,7 +29,13 @@ fn composer() -> ConversationComposerSettings {
 fn parses_json_rpc_responses_and_notifications() {
     let response = parse_incoming_message(r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#)
         .expect("response should parse");
-    assert!(matches!(response, IncomingMessage::Response(envelope) if envelope.id == 7));
+    assert!(matches!(
+        response,
+        IncomingMessage::Response(envelope)
+            if envelope.id == 7
+                && envelope.error.is_none()
+                && envelope.result["ok"] == json!(true)
+    ));
 
     let notification = parse_incoming_message(
         r#"{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thr_1"}}"#,
@@ -38,6 +44,24 @@ fn parses_json_rpc_responses_and_notifications() {
     assert!(matches!(
         notification,
         IncomingMessage::Notification(envelope) if envelope.method == "turn/started"
+    ));
+}
+
+#[test]
+fn preserves_json_rpc_error_responses_for_pending_requests() {
+    let response = parse_incoming_message(
+        r#"{"jsonrpc":"2.0","id":9,"error":{"message":"request failed"}}"#,
+    )
+    .expect("error response should parse");
+
+    assert!(matches!(
+        response,
+        IncomingMessage::Response(envelope)
+            if envelope.id == 9
+                && envelope
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.contains("request failed"))
     ));
 }
 
@@ -237,6 +261,35 @@ fn discovers_loaded_subagent_descendants_for_a_primary_thread() {
         subagents[1].status,
         crate::domain::conversation::SubagentStatus::Completed
     );
+}
+
+#[test]
+fn discovers_loaded_subagents_from_camel_case_spawn_fields() {
+    let subagents = loaded_subagents_for_primary(
+        "thr-parent",
+        &["thr-child".to_string()],
+        vec![ThreadListEntryWire {
+            id: "thr-child".to_string(),
+            agent_nickname: Some("Scout".to_string()),
+            agent_role: Some("explorer".to_string()),
+            source: json!({
+                "subAgent": {
+                    "threadSpawn": {
+                        "parentThreadId": "thr-parent",
+                        "depth": 1,
+                        "agentNickname": "Scout",
+                        "agentRole": "explorer"
+                    }
+                }
+            }),
+            status: ThreadStatusWire {
+                kind: "active".to_string(),
+            },
+        }],
+    );
+
+    assert_eq!(subagents.len(), 1);
+    assert_eq!(subagents[0].nickname.as_deref(), Some("Scout"));
 }
 
 #[test]

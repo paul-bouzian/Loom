@@ -4,6 +4,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use tauri::AppHandle;
 use tokio::sync::Mutex;
+use tracing::warn;
 
 use crate::domain::conversation::{
     ApprovalResponseInput, RespondToUserInputRequestInput, SubmitPlanDecisionInput,
@@ -87,7 +88,9 @@ impl RuntimeSupervisor {
             drop(registry);
 
             for session in finalized {
-                session.stop().await?;
+                if let Err(error) = session.stop().await {
+                    warn!("failed to stop finalized runtime session: {error}");
+                }
             }
         }
 
