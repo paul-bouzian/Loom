@@ -29,6 +29,7 @@ pub struct RuntimeSupervisor {
     app: AppHandle,
     app_version: String,
     registry: Mutex<RuntimeRegistry>,
+    start_lock: Mutex<()>,
 }
 
 impl RuntimeSupervisor {
@@ -37,6 +38,7 @@ impl RuntimeSupervisor {
             app,
             app_version,
             registry: Mutex::new(RuntimeRegistry::default()),
+            start_lock: Mutex::new(()),
         }
     }
 
@@ -98,6 +100,7 @@ impl RuntimeSupervisor {
         environment_path: &str,
         codex_binary_path: Option<String>,
     ) -> AppResult<RuntimeStatusSnapshot> {
+        let _start_guard = self.start_lock.lock().await;
         self.refresh_statuses().await?;
 
         if let Some(status) = self.running_status(environment_id).await {

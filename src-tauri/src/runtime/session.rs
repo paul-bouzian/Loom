@@ -610,9 +610,11 @@ impl RuntimeSession {
                 .ok_or_else(|| {
                     AppError::Runtime("Conversation snapshot disappeared unexpectedly.".to_string())
                 })?;
+            let status = conversation_status_from_turn_status(&turn_response.turn.status);
             snapshot.composer = context.composer.clone();
-            snapshot.active_turn_id = Some(turn_response.turn.id);
-            snapshot.status = conversation_status_from_turn_status(&turn_response.turn.status);
+            snapshot.active_turn_id = matches!(status, ConversationStatus::Running)
+                .then_some(turn_response.turn.id);
+            snapshot.status = status;
             snapshot.error = turn_response.turn.error.map(error_snapshot);
             reconcile_snapshot_status(snapshot);
             snapshot.clone()

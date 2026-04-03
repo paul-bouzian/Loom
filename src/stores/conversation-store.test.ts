@@ -147,4 +147,12 @@ describe("conversation store", () => {
 
     expect(useConversationStore.getState().listenerReady).toBe(true);
   });
+
+  it("ignores composer patches before a thread snapshot exists", () => {
+    useConversationStore.getState().updateComposer("thread-missing", {
+      collaborationMode: "plan",
+    });
+
+    expect(useConversationStore.getState().composerByThreadId["thread-missing"]).toBeUndefined();
+  });
 });

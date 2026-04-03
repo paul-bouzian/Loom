@@ -129,16 +129,23 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   },
 
   updateComposer: (threadId, patch) =>
-    set((state) => ({
-      composerByThreadId: {
-        ...state.composerByThreadId,
-        [threadId]: {
-          ...(state.composerByThreadId[threadId] ??
-            state.snapshotsByThreadId[threadId]?.composer),
-          ...patch,
+    set((state) => {
+      const baseComposer =
+        state.composerByThreadId[threadId] ?? state.snapshotsByThreadId[threadId]?.composer;
+      if (!baseComposer) {
+        return state;
+      }
+
+      return {
+        composerByThreadId: {
+          ...state.composerByThreadId,
+          [threadId]: {
+            ...baseComposer,
+            ...patch,
+          },
         },
-      },
-    })),
+      };
+    }),
 
   sendMessage: async (threadId, text) => {
     set((state) => ({

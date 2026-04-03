@@ -45,6 +45,9 @@ pub async fn send_thread_message(
             .workspace
             .persist_codex_thread_id(&input.thread_id, &codex_thread_id)?;
     }
+    state
+        .workspace
+        .persist_thread_composer_settings(&result.snapshot.thread_id, &result.snapshot.composer)?;
 
     Ok(result.snapshot)
 }
