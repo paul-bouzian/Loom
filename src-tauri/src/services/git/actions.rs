@@ -1,8 +1,9 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::domain::git_review::{GitChangeSection, GitReviewScope};
@@ -182,6 +183,7 @@ pub fn generate_commit_message(context: &GitEnvironmentContext) -> AppResult<Str
         "threadex-commit-message-{}.txt",
         uuid::Uuid::now_v7()
     ));
+    let output_guard = TempFileGuard::new(output_path.clone());
 
     let mut command = Command::new(&binary);
     command
@@ -204,16 +206,18 @@ pub fn generate_commit_message(context: &GitEnvironmentContext) -> AppResult<Str
         .stderr(Stdio::piped());
 
     let mut child = command.spawn().map_err(AppError::from)?;
+    let readers = ChildPipeReaders::spawn(&mut child);
     if let Some(mut stdin) = child.stdin.take() {
         if let Err(error) = stdin.write_all(prompt.as_bytes()) {
             let _ = child.kill();
-            let _ = child.wait();
+            let _ = reap_child_output(child, readers);
             return Err(AppError::from(error));
         }
     }
 
     let output = wait_for_child_output(
         child,
+        readers,
         COMMIT_MESSAGE_TIMEOUT,
         "Codex timed out while generating a commit message.",
     )?;
@@ -221,8 +225,7 @@ pub fn generate_commit_message(context: &GitEnvironmentContext) -> AppResult<Str
         return Err(AppError::Runtime(stderr_message(&output.stderr)));
     }
 
-    let message = fs::read_to_string(&output_path).map_err(AppError::from)?;
-    let _ = fs::remove_file(&output_path);
+    let message = fs::read_to_string(output_guard.path()).map_err(AppError::from)?;
     let message = message.trim().to_string();
     if message.is_empty() {
         return Err(AppError::Runtime(
@@ -258,21 +261,64 @@ fn has_untracked_files(repo_root: &Path) -> AppResult<bool> {
     .is_empty())
 }
 
+struct TempFileGuard {
+    path: std::path::PathBuf,
+}
+
+impl TempFileGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+struct ChildPipeReaders {
+    stdout: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
+    stderr: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
+}
+
+impl ChildPipeReaders {
+    fn spawn(child: &mut Child) -> Self {
+        Self {
+            stdout: child.stdout.take().map(spawn_pipe_reader),
+            stderr: child.stderr.take().map(spawn_pipe_reader),
+        }
+    }
+
+    fn finish(self, status: ExitStatus) -> AppResult<Output> {
+        Ok(Output {
+            status,
+            stdout: join_pipe_reader(self.stdout)?,
+            stderr: join_pipe_reader(self.stderr)?,
+        })
+    }
+}
+
 fn wait_for_child_output(
-    mut child: std::process::Child,
+    mut child: Child,
+    readers: ChildPipeReaders,
     timeout: Duration,
     timeout_message: &str,
-) -> AppResult<std::process::Output> {
+) -> AppResult<Output> {
     let deadline = Instant::now() + timeout;
 
     loop {
-        if child.try_wait().map_err(AppError::from)?.is_some() {
-            return child.wait_with_output().map_err(AppError::from);
+        if let Some(status) = child.try_wait().map_err(AppError::from)? {
+            return readers.finish(status);
         }
 
         if Instant::now() >= deadline {
             let _ = child.kill();
-            let output = child.wait_with_output().map_err(AppError::from)?;
+            let output = reap_child_output(child, readers)?;
             let details = stderr_message(&output.stderr);
             let message = if details.is_empty() {
                 timeout_message.to_string()
@@ -283,6 +329,34 @@ fn wait_for_child_output(
         }
 
         thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn reap_child_output(mut child: Child, readers: ChildPipeReaders) -> AppResult<Output> {
+    let status = child.wait().map_err(AppError::from)?;
+    readers.finish(status)
+}
+
+fn spawn_pipe_reader<R>(mut reader: R) -> JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer)?;
+        Ok(buffer)
+    })
+}
+
+fn join_pipe_reader(handle: Option<JoinHandle<std::io::Result<Vec<u8>>>>) -> AppResult<Vec<u8>> {
+    match handle {
+        Some(handle) => match handle.join() {
+            Ok(result) => result.map_err(AppError::from),
+            Err(_) => Err(AppError::Runtime(
+                "Failed to collect process output from Codex.".to_string(),
+            )),
+        },
+        None => Ok(Vec::new()),
     }
 }
 
@@ -305,7 +379,10 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
-    use super::{commit, revert_file, stage_file, unstage_all, unstage_file, wait_for_child_output};
+    use super::{
+        commit, revert_file, stage_file, unstage_all, unstage_file, wait_for_child_output,
+        ChildPipeReaders,
+    };
     use crate::domain::git_review::GitChangeSection;
     use crate::error::AppResult;
 
@@ -418,17 +495,64 @@ mod tests {
 
     #[test]
     fn wait_for_child_output_times_out() {
-        let child = Command::new("git")
+        let mut child = Command::new("git")
             .args(["hash-object", "--stdin"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn");
+        let readers = ChildPipeReaders::spawn(&mut child);
 
-        let error = wait_for_child_output(child, Duration::from_millis(10), "Timed out")
-            .expect_err("process should time out");
+        let error =
+            wait_for_child_output(child, readers, Duration::from_millis(10), "Timed out")
+                .expect_err("process should time out");
         assert!(error.to_string().contains("Timed out"));
+    }
+
+    #[test]
+    fn wait_for_child_output_drains_large_stdout_without_timing_out() -> AppResult<()> {
+        let fixture_dir = std::env::temp_dir().join(format!(
+            "threadex-git-actions-diff-{}",
+            uuid::Uuid::now_v7()
+        ));
+        fs::create_dir_all(&fixture_dir)?;
+        let before = fixture_dir.join("before.txt");
+        let after = fixture_dir.join("after.txt");
+        let original = (0..8_000)
+            .map(|index| format!("before line {index}\n"))
+            .collect::<String>();
+        let changed = (0..8_000)
+            .map(|index| format!("after line {index}\n"))
+            .collect::<String>();
+        fs::write(&before, original)?;
+        fs::write(&after, changed)?;
+
+        let mut child = Command::new("git")
+            .args([
+                "diff",
+                "--no-index",
+                "--",
+                before.to_str().expect("before path"),
+                after.to_str().expect("after path"),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        let readers = ChildPipeReaders::spawn(&mut child);
+
+        let output = wait_for_child_output(
+            child,
+            readers,
+            Duration::from_secs(2),
+            "Timed out",
+        )?;
+        let _ = fs::remove_dir_all(&fixture_dir);
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.len() > 65_536);
+        Ok(())
     }
 
     struct TestRepo {

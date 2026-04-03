@@ -37,7 +37,7 @@ beforeEach(() => {
     diffRequestIdByContext: {},
     actionByEnvironmentId: {},
     generatingCommitMessageByEnvironmentId: {},
-    errorByEnvironmentId: {},
+    errorByContext: {},
   });
 });
 
@@ -161,6 +161,27 @@ describe("git-review-store", () => {
     ).toBe(2);
   });
 
+  it("keeps stale scope errors out of the active review scope", async () => {
+    let rejectUncommitted: ((reason?: unknown) => void) | undefined;
+    mockedBridge.getGitReviewSnapshot.mockImplementation(({ scope }) => {
+      if (scope === "uncommitted") {
+        return new Promise((_, reject) => {
+          rejectUncommitted = reject;
+        });
+      }
+      return Promise.resolve(makeGitReviewSnapshot({ scope: "branch" }));
+    });
+
+    const first = useGitReviewStore.getState().loadReview("env-1");
+    await useGitReviewStore.getState().selectScope("env-1", "branch");
+    rejectUncommitted?.(new Error("stale uncommitted failure"));
+    await first;
+
+    const state = useGitReviewStore.getState();
+    expect(state.errorByContext["env-1:branch"]).toBeNull();
+    expect(state.errorByContext["env-1:uncommitted"]).toBe("stale uncommitted failure");
+  });
+
   it("stores a generated commit message per environment", async () => {
     mockedBridge.generateGitCommitMessage.mockResolvedValue("feat: add review pane");
 
@@ -182,7 +203,7 @@ describe("git-review-store", () => {
 
     const state = useGitReviewStore.getState();
     expect(state.commitMessageByEnvironmentId["env-1"]).toBe("feat: keep me");
-    expect(state.errorByEnvironmentId["env-1"]).toBe("push rejected");
+    expect(state.errorByContext["env-1:uncommitted"]).toBe("push rejected");
   });
 
   it("keeps the selected file open when it moves between sections", async () => {

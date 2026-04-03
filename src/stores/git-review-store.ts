@@ -23,7 +23,7 @@ type GitReviewState = {
   diffRequestIdByContext: Record<string, number>;
   actionByEnvironmentId: Record<string, string | null>;
   generatingCommitMessageByEnvironmentId: Record<string, boolean>;
-  errorByEnvironmentId: Record<string, string | null>;
+  errorByContext: Record<string, string | null>;
 
   loadReview: (environmentId: string, scope?: GitReviewScope) => Promise<void>;
   refreshReview: (environmentId: string) => Promise<void>;
@@ -75,7 +75,7 @@ export const useGitReviewStore = create<GitReviewState>((set, get) => ({
   diffRequestIdByContext: {},
   actionByEnvironmentId: {},
   generatingCommitMessageByEnvironmentId: {},
-  errorByEnvironmentId: {},
+  errorByContext: {},
 
   loadReview: async (environmentId, explicitScope) => {
     const scope = explicitScope ?? get().scopeByEnvironmentId[environmentId] ?? "uncommitted";
@@ -94,9 +94,9 @@ export const useGitReviewStore = create<GitReviewState>((set, get) => ({
         ...state.loadingByContext,
         [contextKey]: true,
       },
-      errorByEnvironmentId: {
-        ...state.errorByEnvironmentId,
-        [environmentId]: null,
+      errorByContext: {
+        ...state.errorByContext,
+        [contextKey]: null,
       },
     }));
 
@@ -113,9 +113,9 @@ export const useGitReviewStore = create<GitReviewState>((set, get) => ({
                 ...state.loadingByContext,
                 [contextKey]: false,
               },
-              errorByEnvironmentId: {
-                ...state.errorByEnvironmentId,
-                [environmentId]: message,
+              errorByContext: {
+                ...state.errorByContext,
+                [contextKey]: message,
               },
             }
           : {}),
@@ -186,14 +186,16 @@ export const useGitReviewStore = create<GitReviewState>((set, get) => ({
     })),
 
   generateCommitMessage: async (environmentId) => {
+    const scope = get().scopeByEnvironmentId[environmentId] ?? "uncommitted";
+    const contextKey = reviewContextKey(environmentId, scope);
     set((state) => ({
       generatingCommitMessageByEnvironmentId: {
         ...state.generatingCommitMessageByEnvironmentId,
         [environmentId]: true,
       },
-      errorByEnvironmentId: {
-        ...state.errorByEnvironmentId,
-        [environmentId]: null,
+      errorByContext: {
+        ...state.errorByContext,
+        [contextKey]: null,
       },
     }));
     try {
@@ -208,9 +210,9 @@ export const useGitReviewStore = create<GitReviewState>((set, get) => ({
       const message =
         cause instanceof Error ? cause.message : "Failed to generate a commit message";
       set((state) => ({
-        errorByEnvironmentId: {
-          ...state.errorByEnvironmentId,
-          [environmentId]: message,
+        errorByContext: {
+          ...state.errorByContext,
+          [contextKey]: message,
         },
       }));
     } finally {
@@ -328,9 +330,13 @@ export function selectGitReviewDiffError(environmentId: string | null, scope: Gi
     null;
 }
 
-export function selectGitReviewError(environmentId: string | null) {
+export function selectGitReviewError(
+  environmentId: string | null,
+  scope: GitReviewScope,
+) {
   return (state: GitReviewState) =>
-    (environmentId ? state.errorByEnvironmentId[environmentId] : null) ?? null;
+    (environmentId ? state.errorByContext[reviewContextKey(environmentId, scope)] : null) ??
+    null;
 }
 
 async function runReviewMutation(
@@ -352,9 +358,9 @@ async function runReviewMutation(
       ...state.reviewRequestIdByContext,
       [contextKey]: requestId,
     },
-    errorByEnvironmentId: {
-      ...state.errorByEnvironmentId,
-      [environmentId]: null,
+    errorByContext: {
+      ...state.errorByContext,
+      [contextKey]: null,
     },
   }));
 
@@ -368,9 +374,9 @@ async function runReviewMutation(
     set((state) => ({
       ...(state.reviewRequestIdByContext[contextKey] === requestId
         ? {
-            errorByEnvironmentId: {
-              ...state.errorByEnvironmentId,
-              [environmentId]: message,
+            errorByContext: {
+              ...state.errorByContext,
+              [contextKey]: message,
             },
           }
         : {}),

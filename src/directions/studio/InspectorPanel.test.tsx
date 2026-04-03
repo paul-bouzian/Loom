@@ -52,7 +52,7 @@ beforeEach(() => {
     diffLoadingByContext: {},
     actionByEnvironmentId: {},
     generatingCommitMessageByEnvironmentId: {},
-    errorByEnvironmentId: {},
+    errorByContext: {},
   });
 
   const thread = makeThread();

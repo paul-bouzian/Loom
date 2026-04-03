@@ -42,10 +42,12 @@ beforeEach(() => {
     diffErrorByContext: {},
     commitMessageByEnvironmentId: {},
     loadingByContext: {},
+    reviewRequestIdByContext: {},
     diffLoadingByContext: {},
+    diffRequestIdByContext: {},
     actionByEnvironmentId: {},
     generatingCommitMessageByEnvironmentId: {},
-    errorByEnvironmentId: {},
+    errorByContext: {},
   });
 });
 

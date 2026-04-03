@@ -36,7 +36,7 @@ export function InspectorPanel() {
   const selectedFileKey = useGitReviewStore(
     selectGitReviewSelectedFile(selectedEnvironmentId, scope),
   );
-  const error = useGitReviewStore(selectGitReviewError(selectedEnvironmentId));
+  const error = useGitReviewStore(selectGitReviewError(selectedEnvironmentId, scope));
 
   const loadReview = useGitReviewStore((state) => state.loadReview);
   const refreshReview = useGitReviewStore((state) => state.refreshReview);
