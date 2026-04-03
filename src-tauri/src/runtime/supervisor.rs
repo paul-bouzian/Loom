@@ -224,6 +224,14 @@ impl RuntimeSupervisor {
         session.send_message(context, text).await
     }
 
+    pub async fn refresh_thread(
+        &self,
+        context: ThreadRuntimeContext,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let session = self.ensure_runtime(&context).await?;
+        session.refresh_thread(context).await
+    }
+
     pub async fn interrupt_thread(
         &self,
         context: ThreadRuntimeContext,

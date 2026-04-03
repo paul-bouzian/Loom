@@ -25,18 +25,19 @@ use crate::error::{AppError, AppResult};
 use crate::runtime::protocol::{
     CONVERSATION_EVENT_NAME, CollaborationModeListResponse, ErrorNotification, IncomingMessage,
     ItemDeltaNotification, ItemNotification, ModelListResponse, PlanDeltaNotification,
-    ReasoningBoundaryNotification, ThreadReadResponse, ThreadStartResponse,
-    TokenUsageNotification, TurnCompletedNotification, TurnPlanUpdatedNotification, TurnResponse,
-    TurnStartedNotification, append_agent_delta, append_plan_delta, append_reasoning_boundary,
-    append_reasoning_content, append_reasoning_summary, append_tool_output,
-    approval_policy_value, build_history_snapshot, clear_streaming_flags,
-    collaboration_mode_options_from_response, collaboration_mode_payload,
-    complete_proposed_plan, conversation_status_from_turn_status, error_snapshot,
-    initialize_params, initialized_notification, mark_plan_approved, mark_plan_superseded,
-    model_options_from_response, normalize_item, normalize_server_interaction,
-    parse_incoming_message, plan_approval_message, proposed_plan_from_item,
-    proposed_plan_from_turn_update, sandbox_policy_value, token_usage_snapshot, upsert_item,
-    user_input_payload,
+    ReasoningBoundaryNotification, ThreadListResponse, ThreadLoadedListResponse,
+    ThreadReadResponse, ThreadStartResponse, TokenUsageNotification,
+    TurnCompletedNotification, TurnPlanUpdatedNotification, TurnResponse,
+    TurnStartedNotification, append_agent_delta, append_plan_delta,
+    append_reasoning_boundary, append_reasoning_content, append_reasoning_summary,
+    append_tool_output, approval_policy_value, build_history_snapshot,
+    clear_streaming_flags, collaboration_mode_options_from_response,
+    collaboration_mode_payload, complete_proposed_plan, conversation_status_from_turn_status,
+    error_snapshot, initialize_params, initialized_notification, loaded_subagents_for_primary,
+    mark_plan_approved, mark_plan_superseded, model_options_from_response, normalize_item,
+    normalize_server_interaction, parse_incoming_message, plan_approval_message,
+    proposed_plan_from_item, proposed_plan_from_turn_update, sandbox_policy_value,
+    subagents_from_collab_item, token_usage_snapshot, upsert_item, user_input_payload,
 };
 use crate::services::workspace::ThreadRuntimeContext;
 
@@ -206,7 +207,7 @@ impl RuntimeSession {
     ) -> AppResult<ThreadConversationOpenResponse> {
         let capabilities = self.ensure_capabilities().await?;
 
-        {
+        let existing_snapshot = {
             let mut state = self.state.lock().await;
             if let Some(snapshot) = state.snapshots_by_thread.get_mut(&context.thread_id) {
                 snapshot.composer = context.composer.clone();
@@ -217,11 +218,17 @@ impl RuntimeSession {
                         .local_thread_by_codex_id
                         .insert(codex_thread_id.clone(), context.thread_id.clone());
                 }
-                return Ok(ThreadConversationOpenResponse {
-                    snapshot: snapshot_clone,
-                    capabilities,
-                });
+                Some(snapshot_clone)
+            } else {
+                None
             }
+        };
+
+        if let Some(snapshot) = existing_snapshot {
+            let snapshot = self
+                .refresh_thread_metadata(context.clone(), Some(snapshot))
+                .await?;
+            return Ok(ThreadConversationOpenResponse { snapshot, capabilities });
         }
 
         let snapshot = match context.codex_thread_id.clone() {
@@ -276,10 +283,18 @@ impl RuntimeSession {
             }
         };
 
-        Ok(ThreadConversationOpenResponse {
-            snapshot,
-            capabilities,
-        })
+        let snapshot = self
+            .refresh_thread_metadata(context, Some(snapshot))
+            .await?;
+
+        Ok(ThreadConversationOpenResponse { snapshot, capabilities })
+    }
+
+    pub async fn refresh_thread(
+        &self,
+        context: ThreadRuntimeContext,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        self.refresh_thread_metadata(context, None).await
     }
 
     pub async fn send_message(
@@ -434,6 +449,7 @@ impl RuntimeSession {
                     AppError::Runtime("Conversation snapshot disappeared unexpectedly.".to_string())
                 })?;
             snapshot.active_turn_id = None;
+            snapshot.subagents.clear();
             snapshot.status = ConversationStatus::Interrupted;
             clear_streaming_flags(&mut snapshot.items);
             snapshot.clone()
@@ -763,6 +779,34 @@ impl RuntimeSession {
         Ok(snapshot)
     }
 
+    async fn refresh_thread_metadata(
+        &self,
+        context: ThreadRuntimeContext,
+        existing_snapshot: Option<ThreadConversationSnapshot>,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let snapshot = match existing_snapshot {
+            Some(snapshot) => snapshot,
+            None => self
+                .state
+                .lock()
+                .await
+                .snapshots_by_thread
+                .get(&context.thread_id)
+                .cloned()
+                .ok_or_else(|| AppError::NotFound("Thread conversation is not open.".to_string()))?,
+        };
+
+        let subagents = self
+            .load_subagents(snapshot.codex_thread_id.as_deref(), &context.environment_path)
+            .await?;
+
+        self.mutate_snapshot(&context.thread_id, |snapshot| {
+            apply_subagent_updates(snapshot, subagents);
+            Ok(())
+        })
+        .await
+    }
+
     async fn request_typed<T>(&self, method: &str, params: serde_json::Value) -> AppResult<T>
     where
         T: serde::de::DeserializeOwned,
@@ -773,6 +817,81 @@ impl RuntimeSession {
                 "Failed to decode `{method}` response from Codex app-server: {error}"
             ))
         })
+    }
+
+    async fn load_subagents(
+        &self,
+        codex_thread_id: Option<&str>,
+        environment_path: &str,
+    ) -> AppResult<Vec<crate::domain::conversation::SubagentThreadSnapshot>> {
+        let Some(codex_thread_id) = codex_thread_id else {
+            return Ok(Vec::new());
+        };
+
+        let loaded_thread_ids = self.load_all_loaded_thread_ids().await?;
+        if loaded_thread_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let subagent_threads = self.load_all_subagent_threads(environment_path).await?;
+        Ok(loaded_subagents_for_primary(
+            codex_thread_id,
+            &loaded_thread_ids,
+            subagent_threads,
+        ))
+    }
+
+    async fn load_all_loaded_thread_ids(&self) -> AppResult<Vec<String>> {
+        let mut cursor = None;
+        let mut thread_ids = Vec::new();
+
+        loop {
+            let response = self
+                .request_typed::<ThreadLoadedListResponse>(
+                    "thread/loaded/list",
+                    serde_json::json!({
+                        "cursor": cursor,
+                        "limit": 200
+                    }),
+                )
+                .await?;
+            thread_ids.extend(response.data);
+
+            match response.next_cursor {
+                Some(next_cursor) => cursor = Some(next_cursor),
+                None => return Ok(thread_ids),
+            }
+        }
+    }
+
+    async fn load_all_subagent_threads(
+        &self,
+        environment_path: &str,
+    ) -> AppResult<Vec<crate::runtime::protocol::ThreadListEntryWire>> {
+        let mut cursor = None;
+        let mut threads = Vec::new();
+
+        loop {
+            let response = self
+                .request_typed::<ThreadListResponse>(
+                    "thread/list",
+                    serde_json::json!({
+                        "archived": false,
+                        "cwd": environment_path,
+                        "cursor": cursor,
+                        "limit": 200,
+                        "sortKey": "updated_at",
+                        "sourceKinds": ["subAgentThreadSpawn"]
+                    }),
+                )
+                .await?;
+            threads.extend(response.data);
+
+            match response.next_cursor {
+                Some(next_cursor) => cursor = Some(next_cursor),
+                None => return Ok(threads),
+            }
+        }
     }
 
     async fn send_request(
@@ -977,6 +1096,7 @@ async fn handle_notification(
                     &event.thread_id,
                     |snapshot| {
                         snapshot.active_turn_id = None;
+                        snapshot.subagents.clear();
                         snapshot.status = conversation_status_from_turn_status(&event.turn.status);
                         snapshot.error = event.turn.error.clone().map(error_snapshot);
                         clear_streaming_flags(&mut snapshot.items);
@@ -1043,6 +1163,12 @@ async fn handle_notification(
                                     );
                                 }
                             }
+                            reconcile_snapshot_status(snapshot);
+                            return;
+                        }
+                        let collab_subagents = subagents_from_collab_item(&event.item);
+                        if !collab_subagents.is_empty() {
+                            apply_subagent_updates(snapshot, collab_subagents);
                             reconcile_snapshot_status(snapshot);
                             return;
                         }
@@ -1183,6 +1309,7 @@ async fn handle_notification(
                         &thread_id,
                         |snapshot| {
                             snapshot.error = Some(error_snapshot(event.error.clone()));
+                            snapshot.subagents.clear();
                             reconcile_snapshot_status(snapshot);
                         },
                         app,
@@ -1258,6 +1385,75 @@ fn reconcile_snapshot_status(snapshot: &mut ThreadConversationSnapshot) {
     } else {
         ConversationStatus::Completed
     };
+}
+
+fn merge_subagent_snapshots(
+    existing: &[crate::domain::conversation::SubagentThreadSnapshot],
+    incoming: Vec<crate::domain::conversation::SubagentThreadSnapshot>,
+) -> Vec<crate::domain::conversation::SubagentThreadSnapshot> {
+    let mut merged = existing
+        .iter()
+        .cloned()
+        .map(|subagent| (subagent.thread_id.clone(), subagent))
+        .collect::<HashMap<_, _>>();
+
+    for subagent in incoming {
+        merged
+            .entry(subagent.thread_id.clone())
+            .and_modify(|current| {
+                if subagent.nickname.is_some() {
+                    current.nickname = subagent.nickname.clone();
+                }
+                if subagent.role.is_some() {
+                    current.role = subagent.role.clone();
+                }
+                if subagent.depth > 0 {
+                    current.depth = subagent.depth;
+                }
+                current.status = subagent.status;
+            })
+            .or_insert(subagent);
+    }
+
+    let mut values = merged.into_values().collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        left.depth
+            .cmp(&right.depth)
+            .then_with(|| subagent_sort_label(left).cmp(subagent_sort_label(right)))
+            .then_with(|| left.thread_id.cmp(&right.thread_id))
+    });
+    values
+}
+
+fn apply_subagent_updates(
+    snapshot: &mut ThreadConversationSnapshot,
+    incoming: Vec<crate::domain::conversation::SubagentThreadSnapshot>,
+) {
+    snapshot.subagents = merge_subagent_snapshots(&snapshot.subagents, incoming);
+    if !has_live_subagents(&snapshot.subagents) {
+        snapshot.subagents.clear();
+    }
+}
+
+fn has_live_subagents(
+    subagents: &[crate::domain::conversation::SubagentThreadSnapshot],
+) -> bool {
+    subagents.iter().any(|subagent| {
+        matches!(
+            subagent.status,
+            crate::domain::conversation::SubagentStatus::Running
+        )
+    })
+}
+
+fn subagent_sort_label(
+    subagent: &crate::domain::conversation::SubagentThreadSnapshot,
+) -> &str {
+    subagent
+        .nickname
+        .as_deref()
+        .or(subagent.role.as_deref())
+        .unwrap_or(subagent.thread_id.as_str())
 }
 
 fn interaction_id_for(interaction: &ConversationInteraction) -> &str {
@@ -1394,6 +1590,7 @@ async fn mark_runtime_disconnected(app: &Option<AppHandle>, state: &Arc<Mutex<Se
             .values_mut()
             .map(|snapshot| {
                 snapshot.status = ConversationStatus::Failed;
+                snapshot.subagents.clear();
                 snapshot.pending_interactions.clear();
                 snapshot.error = Some(crate::domain::conversation::ConversationErrorSnapshot {
                     message: "The Codex runtime disconnected unexpectedly.".to_string(),
