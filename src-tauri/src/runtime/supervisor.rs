@@ -66,6 +66,7 @@ impl RuntimeSupervisor {
         }
 
         if !exited.is_empty() {
+            let mut finalized = Vec::new();
             let mut registry = self.registry.lock().await;
             for (environment_id, session, mut status, last_exit_code) in exited {
                 let should_remove = registry
@@ -81,6 +82,12 @@ impl RuntimeSupervisor {
                 status.started_at = None;
                 status.last_exit_code = Some(last_exit_code);
                 registry.last_known.insert(environment_id, status);
+                finalized.push(session);
+            }
+            drop(registry);
+
+            for session in finalized {
+                session.stop().await?;
             }
         }
 
@@ -100,11 +107,23 @@ impl RuntimeSupervisor {
         environment_path: &str,
         codex_binary_path: Option<String>,
     ) -> AppResult<RuntimeStatusSnapshot> {
+        Ok(self
+            .ensure_running_runtime(environment_id, environment_path, codex_binary_path)
+            .await?
+            .status)
+    }
+
+    async fn ensure_running_runtime(
+        &self,
+        environment_id: &str,
+        environment_path: &str,
+        codex_binary_path: Option<String>,
+    ) -> AppResult<RunningRuntime> {
         let _start_guard = self.start_lock.lock().await;
         self.refresh_statuses().await?;
 
-        if let Some(status) = self.running_status(environment_id).await {
-            return Ok(status);
+        if let Some(runtime) = self.running_runtime(environment_id).await {
+            return Ok(runtime);
         }
 
         let binary_path = match codex_binary_path {
@@ -139,7 +158,7 @@ impl RuntimeSupervisor {
         registry.running.insert(
             environment_id.to_string(),
             RunningRuntime {
-                session,
+                session: session.clone(),
                 status: status.clone(),
             },
         );
@@ -147,7 +166,7 @@ impl RuntimeSupervisor {
             .last_known
             .insert(environment_id.to_string(), status.clone());
 
-        Ok(status)
+        Ok(RunningRuntime { session, status })
     }
 
     pub async fn stop(&self, environment_id: &str) -> AppResult<RuntimeStatusSnapshot> {
@@ -253,29 +272,26 @@ impl RuntimeSupervisor {
         session.submit_plan_decision(context, input).await
     }
 
-    async fn running_status(&self, environment_id: &str) -> Option<RuntimeStatusSnapshot> {
+    async fn running_runtime(&self, environment_id: &str) -> Option<RunningRuntime> {
         self.registry
             .lock()
             .await
             .running
             .get(environment_id)
-            .map(|runtime| runtime.status.clone())
+            .map(|runtime| RunningRuntime {
+                session: runtime.session.clone(),
+                status: runtime.status.clone(),
+            })
     }
 
     async fn ensure_runtime(&self, context: &ThreadRuntimeContext) -> AppResult<Arc<RuntimeSession>> {
-        self.start(
-            &context.environment_id,
-            &context.environment_path,
-            context.codex_binary_path.clone(),
-        )
-        .await?;
-
-        self.registry
-            .lock()
-            .await
-            .running
-            .get(&context.environment_id)
-            .map(|runtime| runtime.session.clone())
-            .ok_or_else(|| AppError::Runtime("The Codex runtime did not start correctly.".to_string()))
+        Ok(self
+            .ensure_running_runtime(
+                &context.environment_id,
+                &context.environment_path,
+                context.codex_binary_path.clone(),
+            )
+            .await?
+            .session)
     }
 }

@@ -1246,7 +1246,10 @@ fn reconcile_snapshot_status(snapshot: &mut ThreadConversationSnapshot) {
         return;
     }
 
-    if matches!(snapshot.status, ConversationStatus::Interrupted) {
+    if matches!(
+        snapshot.status,
+        ConversationStatus::Interrupted | ConversationStatus::Failed
+    ) {
         return;
     }
 
@@ -1440,6 +1443,33 @@ mod tests {
         ConversationComposerSettings, ConversationItemStatus, ConversationToolItem,
     };
     use crate::domain::settings::{ApprovalPolicy, ReasoningEffort};
+
+    #[test]
+    fn reconcile_snapshot_status_preserves_failed_without_error_payload() {
+        let mut snapshot = ThreadConversationSnapshot::new(
+            "thread-1".to_string(),
+            "env-1".to_string(),
+            Some("thr_codex".to_string()),
+            ConversationComposerSettings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: ReasoningEffort::High,
+                collaboration_mode: CollaborationMode::Build,
+                approval_policy: ApprovalPolicy::AskToEdit,
+            },
+        );
+        snapshot.status = ConversationStatus::Failed;
+        snapshot.error = None;
+        snapshot.items.push(ConversationItem::Message(ConversationMessageItem {
+            id: "assistant-1".to_string(),
+            role: ConversationRole::Assistant,
+            text: "Something went wrong".to_string(),
+            is_streaming: false,
+        }));
+
+        reconcile_snapshot_status(&mut snapshot);
+
+        assert!(matches!(snapshot.status, ConversationStatus::Failed));
+    }
 
     #[tokio::test]
     async fn handle_notification_updates_reasoning_and_tool_output() {
