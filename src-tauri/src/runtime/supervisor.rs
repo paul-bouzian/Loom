@@ -10,7 +10,7 @@ use crate::domain::conversation::{
     ApprovalResponseInput, RespondToUserInputRequestInput, SubmitPlanDecisionInput,
     ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
-use crate::domain::workspace::{RuntimeState, RuntimeStatusSnapshot};
+use crate::domain::workspace::{CodexRateLimitSnapshot, RuntimeState, RuntimeStatusSnapshot};
 use crate::error::{AppError, AppResult};
 use crate::runtime::session::{RuntimeSession, SendMessageResult};
 use crate::services::workspace::ThreadRuntimeContext;
@@ -116,6 +116,36 @@ impl RuntimeSupervisor {
             .status)
     }
 
+    pub async fn read_account_rate_limits(
+        &self,
+        environment_id: &str,
+        environment_path: &str,
+        codex_binary_path: Option<String>,
+    ) -> AppResult<CodexRateLimitSnapshot> {
+        self.refresh_statuses().await?;
+
+        if let Some(runtime) = self.running_runtime(environment_id).await {
+            return runtime.session.read_account_rate_limits().await;
+        }
+
+        let binary_path = resolve_binary_path(codex_binary_path)?;
+        let session = RuntimeSession::spawn_headless(
+            environment_id.to_string(),
+            environment_path.to_string(),
+            binary_path,
+            self.app_version.clone(),
+        )
+        .await?;
+        let result = session.read_account_rate_limits().await;
+        let stop_result = session.stop().await;
+
+        match (result, stop_result) {
+            (Ok(rate_limits), Ok(())) => Ok(rate_limits),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+        }
+    }
+
     async fn ensure_running_runtime(
         &self,
         environment_id: &str,
@@ -129,15 +159,7 @@ impl RuntimeSupervisor {
             return Ok(runtime);
         }
 
-        let binary_path = match codex_binary_path {
-            Some(path) => path,
-            None => which::which("codex")
-                .map_err(|_| {
-                    AppError::Runtime("Unable to resolve the Codex CLI binary.".to_string())
-                })?
-                .to_string_lossy()
-                .to_string(),
-        };
+        let binary_path = resolve_binary_path(codex_binary_path)?;
 
         let session = Arc::new(
             RuntimeSession::spawn(
@@ -309,5 +331,14 @@ impl RuntimeSupervisor {
             )
             .await?
             .session)
+    }
+}
+
+fn resolve_binary_path(codex_binary_path: Option<String>) -> AppResult<String> {
+    match codex_binary_path {
+        Some(path) => Ok(path),
+        None => which::which("codex")
+            .map_err(|_| AppError::Runtime("Unable to resolve the Codex CLI binary.".to_string()))
+            .map(|path| path.to_string_lossy().to_string()),
     }
 }

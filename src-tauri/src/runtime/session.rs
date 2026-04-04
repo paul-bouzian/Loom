@@ -21,6 +21,7 @@ use crate::domain::conversation::{
     ThreadConversationSnapshot,
 };
 use crate::domain::settings::CollaborationMode;
+use crate::domain::workspace::{CodexRateLimitSnapshot, CodexUsageEventPayload};
 use crate::error::{AppError, AppResult};
 use crate::runtime::protocol::{
     append_agent_delta, append_plan_delta, append_reasoning_boundary, append_reasoning_content,
@@ -32,11 +33,12 @@ use crate::runtime::protocol::{
     normalize_server_interaction, parse_incoming_message, plan_approval_message,
     proposed_plan_from_item, proposed_plan_from_turn_update, sandbox_policy_value,
     subagents_from_collab_item, token_usage_snapshot, upsert_item, user_input_payload,
+    AccountRateLimitsReadResponse, AccountRateLimitsUpdatedNotification,
     CollaborationModeListResponse, ErrorNotification, IncomingMessage, ItemDeltaNotification,
     ItemNotification, ModelListResponse, PlanDeltaNotification, ReasoningBoundaryNotification,
     ThreadListResponse, ThreadLoadedListResponse, ThreadReadResponse, ThreadStartResponse,
     TokenUsageNotification, TurnCompletedNotification, TurnPlanUpdatedNotification, TurnResponse,
-    TurnStartedNotification, CONVERSATION_EVENT_NAME,
+    TurnStartedNotification, CODEX_USAGE_EVENT_NAME, CONVERSATION_EVENT_NAME,
 };
 use crate::services::workspace::ThreadRuntimeContext;
 
@@ -96,6 +98,32 @@ impl RuntimeSession {
         binary_path: String,
         app_version: String,
     ) -> AppResult<Self> {
+        Self::spawn_with_app(
+            Some(app),
+            environment_id,
+            environment_path,
+            binary_path,
+            app_version,
+        )
+        .await
+    }
+
+    pub async fn spawn_headless(
+        environment_id: String,
+        environment_path: String,
+        binary_path: String,
+        app_version: String,
+    ) -> AppResult<Self> {
+        Self::spawn_with_app(None, environment_id, environment_path, binary_path, app_version).await
+    }
+
+    async fn spawn_with_app(
+        app: Option<AppHandle>,
+        environment_id: String,
+        environment_path: String,
+        binary_path: String,
+        app_version: String,
+    ) -> AppResult<Self> {
         let mut command = Command::new(&binary_path);
         command
             .arg("app-server")
@@ -116,7 +144,7 @@ impl RuntimeSession {
         })?;
 
         Self::from_transport(
-            Some(app),
+            app,
             environment_id,
             app_version,
             SessionTransport {
@@ -513,6 +541,16 @@ impl RuntimeSession {
     pub async fn pid(&self) -> Option<u32> {
         let child = self.child.as_ref()?;
         child.lock().await.id()
+    }
+
+    pub async fn read_account_rate_limits(&self) -> AppResult<CodexRateLimitSnapshot> {
+        Ok(self
+            .request_typed::<AccountRateLimitsReadResponse>(
+                "account/rateLimits/read",
+                serde_json::json!({}),
+            )
+            .await?
+            .rate_limits)
     }
 
     async fn ensure_capabilities(&self) -> AppResult<EnvironmentCapabilitiesSnapshot> {
@@ -1011,6 +1049,7 @@ impl RuntimeSession {
             warn!("failed to emit conversation snapshot: {error}");
         }
     }
+
 }
 
 fn spawn_stdout_task<R>(
@@ -1369,6 +1408,13 @@ async fn handle_notification(
                 .await;
             }
         }
+        "account/rateLimits/updated" => {
+            if let Ok(event) =
+                serde_json::from_value::<AccountRateLimitsUpdatedNotification>(notification.params)
+            {
+                emit_usage_from_handle(app, environment_id, event.rate_limits);
+            }
+        }
         "error" => {
             if let Ok(event) = serde_json::from_value::<ErrorNotification>(notification.params) {
                 if let Some(thread_id) = event.thread_id {
@@ -1683,6 +1729,23 @@ fn emit_snapshot_from_handle(app: &Option<AppHandle>, snapshot: ThreadConversati
     };
     if let Err(error) = app.emit(CONVERSATION_EVENT_NAME, payload) {
         warn!("failed to emit conversation snapshot: {error}");
+    }
+}
+
+fn emit_usage_from_handle(
+    app: &Option<AppHandle>,
+    environment_id: &str,
+    rate_limits: CodexRateLimitSnapshot,
+) {
+    let Some(app) = app.as_ref() else {
+        return;
+    };
+    let payload = CodexUsageEventPayload {
+        environment_id: environment_id.to_string(),
+        rate_limits,
+    };
+    if let Err(error) = app.emit(CODEX_USAGE_EVENT_NAME, payload) {
+        warn!("failed to emit codex usage snapshot: {error}");
     }
 }
 
