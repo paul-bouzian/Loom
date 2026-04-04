@@ -11,6 +11,16 @@ vi.mock("../lib/bridge", () => ({
 
 const mockedBridge = vi.mocked(bridge);
 
+function deferredPromise<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
@@ -101,5 +111,91 @@ describe("codex usage store", () => {
       72,
     );
     expect(useCodexUsageStore.getState().loadingByEnvironmentId["env-1"]).toBe(false);
+  });
+
+  it("ignores stale fetch responses after a newer live update", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-04T10:00:00Z"));
+
+    const deferred = deferredPromise<{
+      primary: { usedPercent: number };
+    }>();
+    let callback: ((payload: CodexUsageEventPayload) => void) | null = null;
+
+    mockedBridge.getEnvironmentCodexRateLimits.mockReturnValue(deferred.promise);
+    mockedBridge.listenToCodexUsageEvents.mockImplementation(async (handler) => {
+      callback = handler;
+      return () => undefined;
+    });
+
+    await useCodexUsageStore.getState().initializeListener();
+
+    const refreshPromise = useCodexUsageStore
+      .getState()
+      .refreshEnvironmentUsage("env-1");
+
+    vi.setSystemTime(new Date("2026-04-04T10:00:01Z"));
+    callback!({
+      environmentId: "env-1",
+      rateLimits: {
+        primary: { usedPercent: 72, windowDurationMins: 300 },
+        secondary: { usedPercent: 44, windowDurationMins: 10_080 },
+      },
+    });
+
+    deferred.resolve({
+      primary: { usedPercent: 18 },
+    });
+    await refreshPromise;
+
+    const snapshot = useCodexUsageStore.getState().snapshotsByEnvironmentId["env-1"];
+    expect(snapshot?.primary?.usedPercent).toBe(72);
+    expect(snapshot?.secondary?.usedPercent).toBe(44);
+  });
+
+  it("merges partial live usage updates into the existing snapshot", async () => {
+    let callback: ((payload: CodexUsageEventPayload) => void) | null = null;
+    mockedBridge.listenToCodexUsageEvents.mockImplementation(async (handler) => {
+      callback = handler;
+      return () => undefined;
+    });
+    mockedBridge.getEnvironmentCodexRateLimits.mockResolvedValue({
+      planType: "pro",
+      primary: {
+        usedPercent: 18,
+        windowDurationMins: 300,
+        resetsAt: 1_775_306_400,
+      },
+      secondary: {
+        usedPercent: 55,
+        windowDurationMins: 10_080,
+        resetsAt: 1_775_910_400,
+      },
+    });
+
+    await useCodexUsageStore.getState().initializeListener();
+    await useCodexUsageStore.getState().ensureEnvironmentUsage("env-1");
+
+    callback!({
+      environmentId: "env-1",
+      rateLimits: {
+        primary: {
+          usedPercent: 72,
+        },
+      },
+    });
+
+    const snapshot = useCodexUsageStore.getState().snapshotsByEnvironmentId["env-1"];
+    expect(snapshot?.planType).toBe("pro");
+    expect(snapshot?.primary).toEqual({
+      usedPercent: 72,
+      windowDurationMins: 300,
+      resetsAt: 1_775_306_400,
+    });
+    expect(snapshot?.secondary).toEqual({
+      usedPercent: 55,
+      windowDurationMins: 10_080,
+      resetsAt: 1_775_910_400,
+    });
   });
 });

@@ -20,6 +20,11 @@ struct RunningRuntime {
     status: RuntimeStatusSnapshot,
 }
 
+enum RateLimitReadTarget {
+    Running(Arc<RuntimeSession>),
+    Headless(Box<RuntimeSession>),
+}
+
 #[derive(Default)]
 struct RuntimeRegistry {
     running: HashMap<String, RunningRuntime>,
@@ -30,7 +35,7 @@ pub struct RuntimeSupervisor {
     app: AppHandle,
     app_version: String,
     registry: Mutex<RuntimeRegistry>,
-    start_lock: Mutex<()>,
+    environment_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl RuntimeSupervisor {
@@ -39,7 +44,7 @@ impl RuntimeSupervisor {
             app,
             app_version,
             registry: Mutex::new(RuntimeRegistry::default()),
-            start_lock: Mutex::new(()),
+            environment_locks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -122,28 +127,38 @@ impl RuntimeSupervisor {
         environment_path: &str,
         codex_binary_path: Option<String>,
     ) -> AppResult<CodexRateLimitSnapshot> {
-        let _start_guard = self.start_lock.lock().await;
-        self.refresh_statuses().await?;
+        let read_target = {
+            let environment_lock = self.environment_lock(environment_id).await;
+            let _environment_guard = environment_lock.lock().await;
+            self.refresh_statuses().await?;
 
-        if let Some(runtime) = self.running_runtime(environment_id).await {
-            return runtime.session.read_account_rate_limits().await;
-        }
+            if let Some(runtime) = self.running_runtime(environment_id).await {
+                RateLimitReadTarget::Running(runtime.session)
+            } else {
+                let binary_path = resolve_binary_path(codex_binary_path)?;
+                let session = RuntimeSession::spawn_headless(
+                    environment_id.to_string(),
+                    environment_path.to_string(),
+                    binary_path,
+                    self.app_version.clone(),
+                )
+                .await?;
+                RateLimitReadTarget::Headless(Box::new(session))
+            }
+        };
 
-        let binary_path = resolve_binary_path(codex_binary_path)?;
-        let session = RuntimeSession::spawn_headless(
-            environment_id.to_string(),
-            environment_path.to_string(),
-            binary_path,
-            self.app_version.clone(),
-        )
-        .await?;
-        let result = session.read_account_rate_limits().await;
-        let stop_result = session.stop().await;
+        match read_target {
+            RateLimitReadTarget::Running(session) => session.read_account_rate_limits().await,
+            RateLimitReadTarget::Headless(session) => {
+                let result = session.read_account_rate_limits().await;
+                let stop_result = session.stop().await;
 
-        match (result, stop_result) {
-            (Ok(rate_limits), Ok(())) => Ok(rate_limits),
-            (Err(error), _) => Err(error),
-            (Ok(_), Err(error)) => Err(error),
+                match (result, stop_result) {
+                    (Ok(rate_limits), Ok(())) => Ok(rate_limits),
+                    (Err(error), _) => Err(error),
+                    (Ok(_), Err(error)) => Err(error),
+                }
+            }
         }
     }
 
@@ -153,7 +168,8 @@ impl RuntimeSupervisor {
         environment_path: &str,
         codex_binary_path: Option<String>,
     ) -> AppResult<RunningRuntime> {
-        let _start_guard = self.start_lock.lock().await;
+        let environment_lock = self.environment_lock(environment_id).await;
+        let _environment_guard = environment_lock.lock().await;
         self.refresh_statuses().await?;
 
         if let Some(runtime) = self.running_runtime(environment_id).await {
@@ -195,6 +211,14 @@ impl RuntimeSupervisor {
             .insert(environment_id.to_string(), status.clone());
 
         Ok(RunningRuntime { session, status })
+    }
+
+    async fn environment_lock(&self, environment_id: &str) -> Arc<Mutex<()>> {
+        let mut environment_locks = self.environment_locks.lock().await;
+        environment_locks
+            .entry(environment_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     pub async fn stop(&self, environment_id: &str) -> AppResult<RuntimeStatusSnapshot> {

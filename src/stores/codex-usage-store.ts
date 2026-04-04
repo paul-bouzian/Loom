@@ -80,10 +80,16 @@ export const useCodexUsageStore = create<CodexUsageState>((set, get) => ({
   },
 
   refreshEnvironmentUsage: async (environmentId) => {
+    const requestStartedAt = Date.now();
     setUsageLoading(set, environmentId);
 
     try {
       const snapshot = await bridge.getEnvironmentCodexRateLimits(environmentId);
+      const latestAppliedAt =
+        get().lastFetchedAtByEnvironmentId[environmentId] ?? Number.NEGATIVE_INFINITY;
+      if (latestAppliedAt > requestStartedAt) {
+        return;
+      }
       setUsageSnapshot(set, environmentId, snapshot);
     } catch (cause: unknown) {
       const message =
@@ -126,7 +132,10 @@ function setUsageSnapshot(
   set((state) => ({
     snapshotsByEnvironmentId: {
       ...state.snapshotsByEnvironmentId,
-      [environmentId]: snapshot,
+      [environmentId]: mergeUsageSnapshot(
+        state.snapshotsByEnvironmentId[environmentId] ?? null,
+        snapshot,
+      ),
     },
     loadingByEnvironmentId: {
       ...state.loadingByEnvironmentId,
@@ -141,6 +150,44 @@ function setUsageSnapshot(
       [environmentId]: fetchedAt,
     },
   }));
+}
+
+function mergeUsageSnapshot(
+  previous: CodexRateLimitSnapshot | null,
+  next: CodexRateLimitSnapshot,
+): CodexRateLimitSnapshot {
+  return {
+    credits: mergeUsageValue(previous?.credits, next.credits),
+    limitId: mergeUsageValue(previous?.limitId, next.limitId),
+    limitName: mergeUsageValue(previous?.limitName, next.limitName),
+    planType: mergeUsageValue(previous?.planType, next.planType),
+    primary: mergeUsageWindow(previous?.primary, next.primary),
+    secondary: mergeUsageWindow(previous?.secondary, next.secondary),
+  };
+}
+
+function mergeUsageValue<T>(
+  previous: T | null | undefined,
+  next: T | null | undefined,
+) {
+  return next === undefined ? previous : next;
+}
+
+function mergeUsageWindow(
+  previous: CodexRateLimitSnapshot["primary"] | undefined,
+  next: CodexRateLimitSnapshot["primary"] | undefined,
+) {
+  if (next === undefined) {
+    return previous;
+  }
+  if (next === null) {
+    return null;
+  }
+
+  return {
+    ...previous,
+    ...next,
+  };
 }
 
 function setUsageError(
