@@ -242,3 +242,7 @@ export function getProjectIcon(
 ): Promise<string | null> {
   return invoke<string | null>("get_project_icon", { rootPath });
 }
+
+export function restartApp(): Promise<void> {
+  return invoke<void>("restart_app");
+}

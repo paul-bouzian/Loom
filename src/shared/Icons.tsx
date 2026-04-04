@@ -156,6 +156,20 @@ export function ArrowDownIcon({ size = 16, className }: IconProps) {
   );
 }
 
+export function DownloadIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path
+        d="M8 3.5v6M8 9.5l-2.5-2.5M8 9.5l2.5-2.5M3.5 12.5h9"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function MinusIcon({ size = 16, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>

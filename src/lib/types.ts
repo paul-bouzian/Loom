@@ -192,6 +192,23 @@ export type BootstrapStatus = {
   threadCount: number;
 };
 
+/* ── App updates ── */
+
+export type AppUpdateState =
+  | "idle"
+  | "checking"
+  | "available"
+  | "installing"
+  | "dismissed";
+
+export type AppUpdateSnapshot = {
+  currentVersion: string;
+  availableVersion: string;
+  releaseDate?: string | null;
+  notes?: string | null;
+  releaseUrl: string;
+};
+
 /* ── Conversation ── */
 
 export type ConversationComposerSettings = {

@@ -10,6 +10,7 @@ import { TreeSidebar } from "./TreeSidebar";
 import { StudioMain } from "./StudioMain";
 import { InspectorPanel } from "./InspectorPanel";
 import { GitDiffPanel } from "./GitDiffPanel";
+import { AppUpdateNotice } from "./AppUpdateNotice";
 import { StudioStatusBar } from "./StudioStatusBar";
 import "./StudioShell.css";
 
@@ -64,6 +65,7 @@ export function StudioShell() {
       />
       {diffPanelOpen && <GitDiffPanel />}
       {inspectorOpen && <InspectorPanel />}
+      <AppUpdateNotice />
       <StudioStatusBar />
     </div>
   );

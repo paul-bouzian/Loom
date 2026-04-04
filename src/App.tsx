@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useConversationStore } from "./stores/conversation-store";
+import { useAppUpdateStore } from "./stores/app-update-store";
 import { useWorkspaceStore } from "./stores/workspace-store";
 import { LoadingState } from "./shared/LoadingState";
 import { StudioShell } from "./directions/studio/StudioShell";
@@ -12,6 +13,7 @@ function App() {
   const initializeConversationListener = useConversationStore(
     (s) => s.initializeListener,
   );
+  const initializeUpdates = useAppUpdateStore((s) => s.initialize);
 
   useEffect(() => {
     void initialize();
@@ -20,6 +22,10 @@ function App() {
   useEffect(() => {
     void initializeConversationListener();
   }, [initializeConversationListener]);
+
+  useEffect(() => {
+    void initializeUpdates();
+  }, [initializeUpdates]);
 
   if (loadingState === "idle" || loadingState === "loading") {
     return (
