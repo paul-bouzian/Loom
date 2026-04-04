@@ -401,6 +401,30 @@ describe("ThreadConversation", () => {
     ).toHaveStyle({ zIndex: "50" });
   });
 
+  it("preserves backend collaboration labels in the composer", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot(),
+      capabilities: {
+        ...capabilitiesFixture,
+        collaborationModes: [
+          { id: "build", label: "Execute", mode: "build" },
+          { id: "plan", label: "Strategize", mode: "plan" },
+        ],
+      },
+    });
+
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
+
+    const modePicker = await screen.findByRole("button", { name: "Mode picker" });
+    expect(modePicker).toHaveTextContent("Execute");
+
+    await userEvent.click(modePicker);
+
+    expect(screen.getByRole("option", { name: "Execute" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Strategize" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Build" })).toBeNull();
+  });
+
   it("renders plan markdown even when markdown contains empty list markers", () => {
     render(
       <ConversationPlanCard

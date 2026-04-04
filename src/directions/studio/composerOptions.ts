@@ -74,9 +74,13 @@ export function labelForCollaborationMode(
   value: string,
   fallback = value,
 ): string {
+  if (fallback !== value) {
+    return fallback;
+  }
+
   return (
     COLLABORATION_OPTIONS.find((option) => option.value === value)?.label ??
-    fallback
+    value
   );
 }
 
