@@ -10,9 +10,13 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt().with_target(false).compact().init();
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .compact()
+        .init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -45,6 +49,7 @@ pub fn run() {
             commands::git_review::generate_git_commit_message,
             commands::system::get_bootstrap_status,
             commands::system::get_project_icon,
+            commands::system::restart_app,
             commands::workspace::get_workspace_snapshot,
             commands::workspace::update_global_settings,
             commands::workspace::add_project,

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::state::AppState;
 
@@ -44,11 +44,20 @@ pub async fn get_bootstrap_status(
         backend: "registry-ready".to_string(),
         platform: std::env::consts::OS.to_string(),
         app_data_dir: state.app_data_dir.to_string_lossy().to_string(),
-        database_path: state.workspace.database_path().to_string_lossy().to_string(),
+        database_path: state
+            .workspace
+            .database_path()
+            .to_string_lossy()
+            .to_string(),
         project_count: snapshot.projects.len(),
         environment_count,
         thread_count,
     })
+}
+
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
 }
 
 const ICON_CANDIDATES: &[&str] = &[
