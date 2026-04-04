@@ -122,6 +122,7 @@ impl RuntimeSupervisor {
         environment_path: &str,
         codex_binary_path: Option<String>,
     ) -> AppResult<CodexRateLimitSnapshot> {
+        let _start_guard = self.start_lock.lock().await;
         self.refresh_statuses().await?;
 
         if let Some(runtime) = self.running_runtime(environment_id).await {

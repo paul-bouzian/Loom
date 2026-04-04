@@ -148,7 +148,6 @@ function setUsageError(
   environmentId: string,
   message: string,
 ) {
-  const fetchedAt = Date.now();
   set((state) => ({
     loadingByEnvironmentId: {
       ...state.loadingByEnvironmentId,
@@ -160,7 +159,7 @@ function setUsageError(
     },
     lastFetchedAtByEnvironmentId: {
       ...state.lastFetchedAtByEnvironmentId,
-      [environmentId]: fetchedAt,
+      [environmentId]: null,
     },
   }));
 }

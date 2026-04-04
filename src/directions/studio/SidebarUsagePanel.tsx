@@ -24,7 +24,13 @@ export function SidebarUsagePanel() {
   }, [ensureEnvironmentUsage, selectedEnvironment?.id]);
 
   const rows = buildCodexUsageRows(snapshot);
-  const placeholder = resolveUsagePlaceholder(selectedEnvironment !== null, loading, error, rows);
+  const placeholder = resolveUsagePlaceholder(
+    selectedEnvironment !== null,
+    snapshot !== null,
+    loading,
+    error,
+    rows,
+  );
 
   return (
     <section className="sidebar-usage" aria-label="Codex usage">
@@ -73,6 +79,7 @@ export function SidebarUsagePanel() {
 
 function resolveUsagePlaceholder(
   hasEnvironment: boolean,
+  hasSnapshot: boolean,
   loading: boolean,
   error: string | null,
   rows: ReturnType<typeof buildCodexUsageRows>,
@@ -80,7 +87,7 @@ function resolveUsagePlaceholder(
   if (!hasEnvironment) {
     return "Select an environment to inspect Codex usage.";
   }
-  if (!loading && (error || rows.every((row) => row.percentUsed === null))) {
+  if (!loading && (error || (hasSnapshot && rows.every((row) => row.percentUsed === null)))) {
     return "Usage unavailable for this environment.";
   }
   return null;

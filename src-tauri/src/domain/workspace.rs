@@ -115,6 +115,7 @@ pub enum CodexPlanType {
     EnterpriseCbpUsageBased,
     Enterprise,
     Edu,
+    #[serde(other)]
     Unknown,
 }
 

@@ -81,4 +81,11 @@ describe("SidebarUsagePanel", () => {
     expect(screen.getByText("Usage unavailable for this environment.")).toBeInTheDocument();
     expect(screen.getAllByText("--")).toHaveLength(2);
   });
+
+  it("does not show an unavailable placeholder before the first fetch starts", () => {
+    render(<SidebarUsagePanel />);
+
+    expect(screen.queryByText("Usage unavailable for this environment.")).toBeNull();
+    expect(screen.getAllByText("--")).toHaveLength(2);
+  });
 });

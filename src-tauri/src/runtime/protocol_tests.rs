@@ -96,6 +96,24 @@ fn decodes_account_rate_limit_payloads() {
 }
 
 #[test]
+fn unknown_plan_types_fall_back_to_unknown() {
+    let response = serde_json::from_value::<AccountRateLimitsReadResponse>(json!({
+        "rateLimits": {
+            "planType": "brand_new_plan",
+            "primary": {
+                "usedPercent": 25
+            }
+        }
+    }))
+    .expect("unknown plan types should still decode");
+
+    assert_eq!(
+        response.rate_limits.plan_type,
+        Some(crate::domain::workspace::CodexPlanType::Unknown)
+    );
+}
+
+#[test]
 fn preserves_json_rpc_error_responses_for_pending_requests() {
     let response =
         parse_incoming_message(r#"{"jsonrpc":"2.0","id":9,"error":{"message":"request failed"}}"#)

@@ -62,6 +62,25 @@ describe("codex usage store", () => {
     expect(mockedBridge.getEnvironmentCodexRateLimits).toHaveBeenCalledTimes(1);
   });
 
+  it("does not cache failed usage fetches as fresh snapshots", async () => {
+    mockedBridge.getEnvironmentCodexRateLimits
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce({
+        primary: { usedPercent: 21 },
+        secondary: { usedPercent: 48 },
+      });
+
+    await useCodexUsageStore.getState().ensureEnvironmentUsage("env-1");
+    expect(useCodexUsageStore.getState().lastFetchedAtByEnvironmentId["env-1"]).toBeNull();
+
+    await useCodexUsageStore.getState().ensureEnvironmentUsage("env-1");
+
+    expect(mockedBridge.getEnvironmentCodexRateLimits).toHaveBeenCalledTimes(2);
+    expect(useCodexUsageStore.getState().snapshotsByEnvironmentId["env-1"]?.primary?.usedPercent).toBe(
+      21,
+    );
+  });
+
   it("applies live usage updates from the runtime event stream", async () => {
     let callback: ((payload: CodexUsageEventPayload) => void) | null = null;
     mockedBridge.listenToCodexUsageEvents.mockImplementation(async (handler) => {
