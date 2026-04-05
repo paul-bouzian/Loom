@@ -1129,6 +1129,110 @@ async fn streamed_notifications_update_the_open_snapshot() {
 }
 
 #[tokio::test]
+async fn build_turn_plan_updates_surface_as_task_progress_without_approval_state() {
+    let (session, harness) = FakeCodexHarness::new().await;
+
+    session
+        .send_message(
+            context(
+                "thread-local-build",
+                None,
+                CollaborationMode::Build,
+                ApprovalPolicy::AskToEdit,
+            ),
+            "Implement the requested changes".to_string(),
+        )
+        .await
+        .expect("build message should send");
+
+    harness
+        .emit_notification(
+            "turn/plan/updated",
+            json!({
+                "threadId": "thr-new",
+                "turnId": "turn-live-1",
+                "explanation": "Codex is working through the implementation.",
+                "plan": [
+                    { "step": "Inspect runtime", "status": "completed" },
+                    { "step": "Wire task UI", "status": "inProgress" }
+                ]
+            }),
+        )
+        .await;
+    harness
+        .emit_notification(
+            "item/completed",
+            json!({
+                "threadId": "thr-new",
+                "turnId": "turn-live-1",
+                "item": {
+                    "id": "plan-item-1",
+                    "type": "plan",
+                    "text": "## Tasks\n\n- Inspect runtime\n- Wire task UI"
+                }
+            }),
+        )
+        .await;
+    harness
+        .emit_notification(
+            "turn/completed",
+            json!({
+                "threadId": "thr-new",
+                "turn": {
+                    "id": "turn-live-1",
+                    "status": "completed",
+                    "error": null
+                }
+            }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let snapshot = session
+        .open_thread(context(
+            "thread-local-build",
+            Some("thr-new"),
+            CollaborationMode::Build,
+            ApprovalPolicy::AskToEdit,
+        ))
+        .await
+        .expect("snapshot should reopen")
+        .snapshot;
+
+    assert!(snapshot.proposed_plan.is_none());
+    assert!(matches!(
+        snapshot.task_plan.as_ref().map(|plan| plan.status),
+        Some(crate::domain::conversation::ConversationTaskStatus::Completed)
+    ));
+    assert!(matches!(
+        snapshot.status,
+        crate::domain::conversation::ConversationStatus::Completed
+    ));
+
+    let error = session
+        .submit_plan_decision(
+            context(
+                "thread-local-build",
+                Some("thr-new"),
+                CollaborationMode::Build,
+                ApprovalPolicy::AskToEdit,
+            ),
+            crate::domain::conversation::SubmitPlanDecisionInput {
+                thread_id: "thread-local-build".to_string(),
+                action: crate::domain::conversation::PlanDecisionAction::Approve,
+                composer: None,
+                feedback: None,
+                mention_bindings: None,
+            },
+        )
+        .await
+        .expect_err("task progress should not be actionable as a proposed plan");
+    assert!(error
+        .to_string()
+        .contains("There is no proposed plan to update"));
+}
+
+#[tokio::test]
 async fn submit_plan_decision_requires_an_actionable_plan_before_sending() {
     let (session, harness) = FakeCodexHarness::new().await;
 

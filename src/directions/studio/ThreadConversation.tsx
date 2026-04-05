@@ -19,6 +19,7 @@ import { ConversationInteractionPanel } from "./ConversationInteractionPanel";
 import { ConversationMarkdown } from "./ConversationMarkdown";
 import { ConversationMeta } from "./ConversationMeta";
 import { ConversationPlanCard } from "./ConversationPlanCard";
+import { ConversationTaskCard } from "./ConversationTaskCard";
 import { SubagentStrip } from "./SubagentStrip";
 import { InlineComposer } from "./composer/InlineComposer";
 import type { ComposerDraftMentionBinding } from "./composer/composer-mention-bindings";
@@ -71,6 +72,7 @@ export function ThreadConversation({ environment, thread }: Props) {
     snapshot?.status,
     snapshot?.pendingInteractions.length,
     snapshot?.proposedPlan?.status,
+    snapshot?.taskPlan?.status,
   ]);
 
   useEffect(() => {
@@ -120,9 +122,16 @@ export function ThreadConversation({ environment, thread }: Props) {
     resolvedComposer.reasoningEffort,
   ];
   const activePlan = snapshot.proposedPlan;
+  const activeTaskPlan = snapshot.taskPlan;
   const interaction = snapshot.pendingInteractions[0] ?? null;
   const shouldRenderPlanCard = Boolean(
     activePlan && (activePlan.isAwaitingDecision || activePlan.status === "streaming"),
+  );
+  const shouldRenderTaskCard = Boolean(
+    activeTaskPlan &&
+      (activeTaskPlan.steps.length > 0 ||
+        activeTaskPlan.markdown.trim().length > 0 ||
+        activeTaskPlan.explanation.trim().length > 0),
   );
   const composerLocked =
     Boolean(interaction) || Boolean(activePlan?.isAwaitingDecision && !isRefiningPlan);
@@ -212,6 +221,9 @@ export function ThreadConversation({ environment, thread }: Props) {
             onApprove={() => void handleApprovePlan()}
             onRefine={() => setIsRefiningPlan(true)}
           />
+        ) : null}
+        {shouldRenderTaskCard && activeTaskPlan ? (
+          <ConversationTaskCard taskPlan={activeTaskPlan} />
         ) : null}
         {snapshot.error ? (
           <ConversationBanner

@@ -11,6 +11,7 @@ import {
   makeEnvironment,
   makeProposedPlan,
   makeSubagent,
+  makeTaskPlan,
   makeThread,
   makeUserInputRequest,
 } from "../../test/fixtures/conversation";
@@ -392,6 +393,34 @@ describe("ThreadConversation", () => {
 
     expect(screen.queryByPlaceholderText("Refine the proposed plan...")).toBeNull();
     expect(screen.getByPlaceholderText("Message ThreadEx...")).toBeInTheDocument();
+  });
+
+  it("renders task progress inline without proposal actions and keeps the composer available", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "completed",
+        composer: { ...baseComposer, collaborationMode: "build" },
+        taskPlan: makeTaskPlan({
+          status: "completed",
+          steps: [
+            { step: "Inspect the runtime layer", status: "completed" },
+            { step: "Implement the task UI", status: "completed" },
+          ],
+          markdown: "## Tasks\n\n- Inspect the runtime layer\n- Implement the task UI",
+        }),
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
+
+    expect((await screen.findAllByText("Tasks")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Codex is working through the implementation.")).toBeInTheDocument();
+    expect(screen.getAllByText("Inspect the runtime layer").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Approve plan" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refine" })).toBeNull();
+    expect(screen.queryByText("Codex is still shaping the plan…")).toBeNull();
+    expect(screen.getByPlaceholderText("Message ThreadEx...")).not.toBeDisabled();
   });
 
   it("renders approval actions and sends the selected approval response", async () => {
