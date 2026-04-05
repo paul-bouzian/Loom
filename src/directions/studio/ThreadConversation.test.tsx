@@ -423,6 +423,26 @@ describe("ThreadConversation", () => {
     expect(screen.getByPlaceholderText("Message ThreadEx...")).not.toBeDisabled();
   });
 
+  it("hides the first-turn empty state when a task tracker is the only visible output", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        items: [],
+        status: "completed",
+        composer: { ...baseComposer, collaborationMode: "build" },
+        taskPlan: makeTaskPlan({
+          status: "completed",
+          markdown: "## Tasks\n\n- Inspect the runtime layer",
+        }),
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
+
+    expect((await screen.findAllByText("Inspect the runtime layer")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Ready for the first turn")).toBeNull();
+  });
+
   it("renders approval actions and sends the selected approval response", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({

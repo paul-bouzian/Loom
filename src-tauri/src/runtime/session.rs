@@ -16,8 +16,7 @@ use uuid::Uuid;
 use crate::domain::conversation::{
     ApprovalResponseInput, CommandApprovalDecisionInput, ComposerMentionBindingInput,
     ConversationEventPayload, ConversationInteraction, ConversationItem, ConversationMessageItem,
-    ConversationRole, ConversationStatus, ConversationTaskStatus,
-    EnvironmentCapabilitiesSnapshot,
+    ConversationRole, ConversationStatus, ConversationTaskStatus, EnvironmentCapabilitiesSnapshot,
     FileChangeApprovalDecisionInput, PermissionGrantScope, PermissionsApprovalDecisionInput,
     PlanDecisionAction, RespondToUserInputRequestInput, SubmitPlanDecisionInput,
     ThreadComposerCatalog, ThreadConversationOpenResponse, ThreadConversationSnapshot,
@@ -267,12 +266,18 @@ impl RuntimeSession {
             if let Some(snapshot) = state.snapshots_by_thread.get_mut(&context.thread_id) {
                 snapshot.composer = context.composer.clone();
                 snapshot.codex_thread_id = context.codex_thread_id.clone();
+                let active_turn_mode = snapshot.active_turn_id.as_deref().map(|turn_id| {
+                    snapshot_mode_for_turn(snapshot, turn_id, context.composer.collaboration_mode)
+                });
                 let active_turn_id = snapshot.active_turn_id.clone();
                 let snapshot_clone = snapshot.clone();
-                if let Some(active_turn_id) = active_turn_id {
+                if let (Some(active_turn_id), Some(active_turn_mode)) =
+                    (active_turn_id, active_turn_mode)
+                {
                     state
                         .turn_modes_by_id
-                        .insert(active_turn_id, context.composer.collaboration_mode);
+                        .entry(active_turn_id)
+                        .or_insert(active_turn_mode);
                 }
                 if let Some(codex_thread_id) = context.codex_thread_id.as_ref() {
                     state
@@ -327,9 +332,14 @@ impl RuntimeSession {
                     .local_thread_by_codex_id
                     .insert(codex_thread_id, context.thread_id.clone());
                 if let Some(active_turn_id) = snapshot.active_turn_id.clone() {
+                    let active_turn_mode = snapshot_mode_for_turn(
+                        &snapshot,
+                        &active_turn_id,
+                        context.composer.collaboration_mode,
+                    );
                     state
                         .turn_modes_by_id
-                        .insert(active_turn_id, context.composer.collaboration_mode);
+                        .insert(active_turn_id, active_turn_mode);
                 }
                 state
                     .snapshots_by_thread
@@ -869,11 +879,9 @@ impl RuntimeSession {
                 })?;
             let status = conversation_status_from_turn_status(&turn_response.turn.status);
             snapshot.composer = context.composer.clone();
+            snapshot.task_plan = None;
             snapshot.active_turn_id =
                 matches!(status, ConversationStatus::Running).then_some(turn_response.turn.id);
-            if matches!(status, ConversationStatus::Running) {
-                snapshot.task_plan = None;
-            }
             snapshot.status = status;
             snapshot.error = turn_response.turn.error.map(error_snapshot);
             reconcile_snapshot_status(snapshot);
@@ -1496,7 +1504,8 @@ async fn handle_notification(
             if let Ok(event) =
                 serde_json::from_value::<TurnPlanUpdatedNotification>(notification.params)
             {
-                let plan_target = plan_target_for_turn(state, &event.thread_id, &event.turn_id).await;
+                let plan_target =
+                    plan_target_for_turn(state, &event.thread_id, &event.turn_id).await;
                 update_snapshot_for_codex_thread(
                     state,
                     &event.thread_id,
@@ -1525,13 +1534,12 @@ async fn handle_notification(
         "item/started" | "item/completed" => {
             if let Ok(event) = serde_json::from_value::<ItemNotification>(notification.params) {
                 let is_started = notification.method == "item/started";
-                let plan_target = if event.item.get("type").and_then(serde_json::Value::as_str)
-                    == Some("plan")
-                {
-                    Some(plan_target_for_turn(state, &event.thread_id, &event.turn_id).await)
-                } else {
-                    None
-                };
+                let plan_target =
+                    if event.item.get("type").and_then(serde_json::Value::as_str) == Some("plan") {
+                        Some(plan_target_for_turn(state, &event.thread_id, &event.turn_id).await)
+                    } else {
+                        None
+                    };
                 update_snapshot_for_codex_thread(
                     state,
                     &event.thread_id,
@@ -1621,7 +1629,8 @@ async fn handle_notification(
         "item/plan/delta" => {
             if let Ok(event) = serde_json::from_value::<PlanDeltaNotification>(notification.params)
             {
-                let plan_target = plan_target_for_turn(state, &event.thread_id, &event.turn_id).await;
+                let plan_target =
+                    plan_target_for_turn(state, &event.thread_id, &event.turn_id).await;
                 update_snapshot_for_codex_thread(
                     state,
                     &event.thread_id,
@@ -1801,7 +1810,11 @@ async fn plan_target_for_turn(
     let Some(local_thread_id) = state.local_thread_by_codex_id.get(codex_thread_id) else {
         return PlanTarget::Task;
     };
-    if let Some(mode) = state.pending_turn_mode_by_thread.get(local_thread_id).copied() {
+    if let Some(mode) = state
+        .pending_turn_mode_by_thread
+        .get(local_thread_id)
+        .copied()
+    {
         return plan_target_from_mode(mode);
     }
     state
@@ -1827,6 +1840,28 @@ fn task_status_from_snapshot(snapshot: &ThreadConversationSnapshot) -> Conversat
         | ConversationStatus::Running
         | ConversationStatus::WaitingForExternalAction => ConversationTaskStatus::Running,
     }
+}
+
+fn snapshot_mode_for_turn(
+    snapshot: &ThreadConversationSnapshot,
+    turn_id: &str,
+    fallback: CollaborationMode,
+) -> CollaborationMode {
+    if snapshot
+        .proposed_plan
+        .as_ref()
+        .is_some_and(|plan| plan.turn_id == turn_id)
+    {
+        return CollaborationMode::Plan;
+    }
+    if snapshot
+        .task_plan
+        .as_ref()
+        .is_some_and(|plan| plan.turn_id == turn_id)
+    {
+        return CollaborationMode::Build;
+    }
+    fallback
 }
 
 async fn update_snapshot_for_codex_thread<F>(
@@ -1883,11 +1918,39 @@ fn reconcile_snapshot_status(snapshot: &mut ThreadConversationSnapshot) {
         return;
     }
 
-    snapshot.status = if snapshot.items.is_empty() {
-        ConversationStatus::Idle
-    } else {
+    snapshot.status = if snapshot_has_visible_content(snapshot) {
         ConversationStatus::Completed
+    } else {
+        ConversationStatus::Idle
     };
+}
+
+fn snapshot_has_visible_content(snapshot: &ThreadConversationSnapshot) -> bool {
+    !snapshot.items.is_empty()
+        || snapshot
+            .proposed_plan
+            .as_ref()
+            .is_some_and(plan_snapshot_has_visible_content)
+        || snapshot
+            .task_plan
+            .as_ref()
+            .is_some_and(task_snapshot_has_visible_content)
+}
+
+fn plan_snapshot_has_visible_content(
+    plan: &crate::domain::conversation::ProposedPlanSnapshot,
+) -> bool {
+    !plan.markdown.trim().is_empty()
+        || !plan.steps.is_empty()
+        || !plan.explanation.trim().is_empty()
+}
+
+fn task_snapshot_has_visible_content(
+    plan: &crate::domain::conversation::ConversationTaskSnapshot,
+) -> bool {
+    !plan.markdown.trim().is_empty()
+        || !plan.steps.is_empty()
+        || !plan.explanation.trim().is_empty()
 }
 
 fn merge_subagent_snapshots(
@@ -2189,6 +2252,34 @@ mod tests {
         reconcile_snapshot_status(&mut snapshot);
 
         assert!(matches!(snapshot.status, ConversationStatus::Failed));
+    }
+
+    #[test]
+    fn reconcile_snapshot_status_keeps_task_only_history_completed() {
+        let mut snapshot = ThreadConversationSnapshot::new(
+            "thread-1".to_string(),
+            "env-1".to_string(),
+            Some("thr_codex".to_string()),
+            ConversationComposerSettings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: ReasoningEffort::High,
+                collaboration_mode: CollaborationMode::Build,
+                approval_policy: ApprovalPolicy::AskToEdit,
+            },
+        );
+        snapshot.status = ConversationStatus::Completed;
+        snapshot.task_plan = Some(crate::domain::conversation::ConversationTaskSnapshot {
+            turn_id: "turn-1".to_string(),
+            item_id: Some("plan-item-1".to_string()),
+            explanation: "Codex finished the task list.".to_string(),
+            steps: Vec::new(),
+            markdown: "## Tasks\n\n- Inspect runtime".to_string(),
+            status: crate::domain::conversation::ConversationTaskStatus::Completed,
+        });
+
+        reconcile_snapshot_status(&mut snapshot);
+
+        assert!(matches!(snapshot.status, ConversationStatus::Completed));
     }
 
     #[test]

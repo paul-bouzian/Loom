@@ -7,12 +7,12 @@ use crate::domain::conversation::{
     ConversationMessageItem, ConversationReasoningItem, ConversationRole, ConversationStatus,
     ConversationSystemItem, ConversationTaskSnapshot, ConversationTaskStatus, ConversationTone,
     ConversationToolItem, FileSystemPermissionSnapshot, ModelOption,
-    NetworkApprovalContextSnapshot, NetworkPermissionSnapshot,
-    NetworkPolicyAmendmentSnapshot, NetworkPolicyRuleAction, PendingApprovalRequest,
-    PendingUserInputOption, PendingUserInputQuestion, PendingUserInputRequest,
-    PermissionProfileSnapshot, ProposedPlanSnapshot, ProposedPlanStatus, ProposedPlanStep,
-    ProposedPlanStepStatus, SubagentStatus, SubagentThreadSnapshot, ThreadConversationSnapshot,
-    ThreadTokenUsageSnapshot, TokenUsageBreakdown, UnsupportedInteractionRequest,
+    NetworkApprovalContextSnapshot, NetworkPermissionSnapshot, NetworkPolicyAmendmentSnapshot,
+    NetworkPolicyRuleAction, PendingApprovalRequest, PendingUserInputOption,
+    PendingUserInputQuestion, PendingUserInputRequest, PermissionProfileSnapshot,
+    ProposedPlanSnapshot, ProposedPlanStatus, ProposedPlanStep, ProposedPlanStepStatus,
+    SubagentStatus, SubagentThreadSnapshot, ThreadConversationSnapshot, ThreadTokenUsageSnapshot,
+    TokenUsageBreakdown, UnsupportedInteractionRequest,
 };
 use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort};
 use crate::domain::workspace::CodexRateLimitSnapshot;
@@ -655,7 +655,7 @@ pub fn build_history_snapshot(
     composer: ConversationComposerSettings,
     thread: ThreadWire,
 ) -> ThreadConversationSnapshot {
-    let collaboration_mode = composer.collaboration_mode;
+    let fallback_mode = composer.collaboration_mode;
     let mut snapshot = ThreadConversationSnapshot::new(
         thread_id,
         environment_id,
@@ -688,12 +688,12 @@ pub fn build_history_snapshot(
         }
         if index == last_turn_index {
             if let Some(item) = latest_turn_plan.as_ref() {
-                match collaboration_mode {
-                    CollaborationMode::Plan => {
+                match history_plan_target_from_item(item, fallback_mode) {
+                    HistoryPlanTarget::Proposed => {
                         snapshot.proposed_plan =
                             proposed_plan_from_item(&turn.id, item, ProposedPlanStatus::Ready);
                     }
-                    CollaborationMode::Build => {
+                    HistoryPlanTarget::Task => {
                         snapshot.task_plan = task_plan_from_item(
                             &turn.id,
                             item,
@@ -708,6 +708,41 @@ pub fn build_history_snapshot(
     snapshot.status = last_status;
     snapshot.error = last_error;
     snapshot
+}
+
+#[derive(Clone, Copy)]
+enum HistoryPlanTarget {
+    Proposed,
+    Task,
+}
+
+fn history_plan_target_from_item(
+    value: &Value,
+    fallback_mode: CollaborationMode,
+) -> HistoryPlanTarget {
+    match leading_plan_heading(value) {
+        Some("proposed plan") => HistoryPlanTarget::Proposed,
+        Some("tasks") => HistoryPlanTarget::Task,
+        _ => match fallback_mode {
+            CollaborationMode::Plan => HistoryPlanTarget::Proposed,
+            CollaborationMode::Build => HistoryPlanTarget::Task,
+        },
+    }
+}
+
+fn leading_plan_heading(value: &Value) -> Option<&'static str> {
+    let markdown = rich_text_field(value, "text");
+    let heading = markdown.lines().find(|line| !line.trim().is_empty())?;
+    let normalized = heading
+        .trim()
+        .trim_start_matches('#')
+        .trim()
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "proposed plan" => Some("proposed plan"),
+        "tasks" => Some("tasks"),
+        _ => None,
+    }
 }
 
 pub fn model_options_from_response(response: ModelListResponse) -> Vec<ModelOption> {

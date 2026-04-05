@@ -72,6 +72,9 @@ export function ThreadConversation({ environment, thread }: Props) {
     snapshot?.status,
     snapshot?.pendingInteractions.length,
     snapshot?.proposedPlan?.status,
+    snapshot?.taskPlan?.steps.length,
+    snapshot?.taskPlan?.markdown,
+    snapshot?.taskPlan?.explanation,
     snapshot?.taskPlan?.status,
   ]);
 
@@ -210,7 +213,9 @@ export function ThreadConversation({ environment, thread }: Props) {
         thread={thread}
       />
       <div ref={timelineRef} className="tx-conversation__timeline">
-        {snapshot.items.length === 0 && !activePlan ? <ConversationEmpty /> : null}
+        {snapshot.items.length === 0 && !activePlan && !activeTaskPlan ? (
+          <ConversationEmpty />
+        ) : null}
         {snapshot.items.map((item) => (
           <ConversationItemRow key={item.id} item={item} />
         ))}
