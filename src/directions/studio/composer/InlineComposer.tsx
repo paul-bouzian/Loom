@@ -91,6 +91,7 @@ export function InlineComposer({
   const nextMode: ConversationComposerSettings["collaborationMode"] = isPlanMode
     ? "build"
     : "plan";
+  const canToggleMode = collaborationModes.some((option) => option.id === nextMode);
   const inputDisabled = isBusy || isSending || (disabled && !isRefiningPlan);
   const controlsDisabled = isBusy || isSending || disabled;
   const placeholder = isRefiningPlan
@@ -387,10 +388,13 @@ export function InlineComposer({
             type="button"
             className={`tx-composer__toggle ${isPlanMode ? "tx-composer__toggle--accent" : ""}`}
             aria-label="Mode toggle"
-            title={`Switch to ${nextModeLabel}`}
+            title={canToggleMode ? `Switch to ${nextModeLabel}` : currentModeLabel}
             aria-pressed={isPlanMode}
-            disabled={controlsDisabled}
+            disabled={controlsDisabled || !canToggleMode}
             onClick={() => {
+              if (!canToggleMode) {
+                return;
+              }
               onUpdateComposer({
                 collaborationMode: nextMode,
               });

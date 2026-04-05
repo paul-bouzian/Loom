@@ -735,6 +735,27 @@ describe("ThreadConversation", () => {
     expect(screen.queryByRole("option", { name: "Build" })).toBeNull();
   });
 
+  it("disables the mode toggle when the target collaboration mode is unsupported", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot(),
+      capabilities: {
+        ...capabilitiesFixture,
+        collaborationModes: [{ id: "build", label: "Execute", mode: "build" }],
+      },
+    });
+
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
+
+    const modeToggle = await screen.findByRole("button", { name: "Mode toggle" });
+    expect(modeToggle).toBeDisabled();
+    expect(modeToggle).toHaveTextContent("Execute");
+    expect(modeToggle).toHaveAttribute("title", "Execute");
+
+    await userEvent.click(modeToggle);
+
+    expect(modeToggle).toHaveTextContent("Execute");
+  });
+
   it("renders plan markdown even when markdown contains empty list markers", () => {
     render(
       <ConversationPlanCard

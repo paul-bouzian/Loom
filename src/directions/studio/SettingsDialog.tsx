@@ -132,8 +132,15 @@ export function SettingsDialog({ open, onClose }: Props) {
         </div>
 
         <div className="settings-dialog__layout">
-          <div className="settings-dialog__sidebar" aria-hidden="true">
-            <div className="settings-dialog__tab settings-dialog__tab--active">
+          <div
+            className="settings-dialog__sidebar"
+            role="navigation"
+            aria-label="Settings sections"
+          >
+            <div
+              className="settings-dialog__tab settings-dialog__tab--active"
+              aria-current="page"
+            >
               Codex
             </div>
           </div>
