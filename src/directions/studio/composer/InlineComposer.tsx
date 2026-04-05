@@ -44,10 +44,12 @@ type Props = {
   isBusy: boolean;
   isSending: boolean;
   isRefiningPlan: boolean;
+  mentionBindings: ComposerDraftMentionBinding[];
   modelOptions: ModelOption[];
   tokenUsage?: ThreadTokenUsageSnapshot | null;
   onCancelRefine: () => void;
   onChangeDraft: (value: string) => void;
+  onChangeMentionBindings: (bindings: ComposerDraftMentionBinding[]) => void;
   onInterrupt: () => void;
   onSend: (text: string, mentionBindings: ComposerMentionBindingInput[]) => void;
   onUpdateComposer: (patch: Partial<ConversationComposerSettings>) => void;
@@ -64,10 +66,12 @@ export function InlineComposer({
   isBusy,
   isSending,
   isRefiningPlan,
+  mentionBindings,
   modelOptions,
   tokenUsage,
   onCancelRefine,
   onChangeDraft,
+  onChangeMentionBindings,
   onInterrupt,
   onSend,
   onUpdateComposer,
@@ -78,7 +82,6 @@ export function InlineComposer({
   const previousDraftRef = useRef(draft);
   const [catalog, setCatalog] = useState<ThreadComposerCatalog | null>(null);
   const [fileResults, setFileResults] = useState<ComposerFileSearchResult[]>([]);
-  const [mentionBindings, setMentionBindings] = useState<ComposerDraftMentionBinding[]>([]);
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [scrollTop, setScrollTop] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -141,16 +144,11 @@ export function InlineComposer({
     if (previousDraftRef.current === draft) {
       return;
     }
-    setMentionBindings((current) =>
-      rebaseComposerMentionBindings(previousDraftRef.current, draft, current),
+    onChangeMentionBindings(
+      rebaseComposerMentionBindings(previousDraftRef.current, draft, mentionBindings),
     );
     previousDraftRef.current = draft;
-  }, [draft]);
-
-  useEffect(() => {
-    previousDraftRef.current = "";
-    setMentionBindings([]);
-  }, [threadId]);
+  }, [draft, mentionBindings, onChangeMentionBindings]);
 
   useEffect(() => {
     if (!activeToken || activeToken.kind !== "file") {
@@ -238,7 +236,7 @@ export function InlineComposer({
     const replacement = replaceComposerToken(draft, activeToken, item);
     const rebasedBindings = rebaseComposerMentionBindings(draft, replacement.text, mentionBindings);
     const nextBindings = addComposerMentionBinding(rebasedBindings, item, activeToken.start);
-    setMentionBindings(nextBindings);
+    onChangeMentionBindings(nextBindings);
     previousDraftRef.current = replacement.text;
     onChangeDraft(replacement.text);
     setPendingCursor(replacement.cursor);
@@ -328,8 +326,8 @@ export function InlineComposer({
               disabled={inputDisabled}
               onChange={(event) => {
                 const nextDraft = event.target.value;
-                setMentionBindings((current) =>
-                  rebaseComposerMentionBindings(draft, nextDraft, current),
+                onChangeMentionBindings(
+                  rebaseComposerMentionBindings(draft, nextDraft, mentionBindings),
                 );
                 previousDraftRef.current = nextDraft;
                 onChangeDraft(nextDraft);

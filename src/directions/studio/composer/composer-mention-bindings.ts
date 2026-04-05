@@ -35,6 +35,14 @@ export function rebaseComposerMentionBindings(
           },
         ];
       }
+      if (binding.start < prefixLength && binding.end > previousEditEnd) {
+        return [
+          {
+            ...binding,
+            end: binding.end + delta,
+          },
+        ];
+      }
       return [];
     })
     .filter((binding) => isValidMentionBinding(nextText, binding))
@@ -50,13 +58,17 @@ export function addComposerMentionBinding(
     return bindings;
   }
 
+  const nextBinding = {
+    ...item.mentionBinding,
+    start: tokenStart,
+    end: tokenStart + item.insertText.length,
+  };
+
   return [
-    ...bindings,
-    {
-      ...item.mentionBinding,
-      start: tokenStart,
-      end: tokenStart + item.insertText.length,
-    },
+    ...bindings.filter(
+      (binding) => binding.start !== nextBinding.start || binding.end !== nextBinding.end,
+    ),
+    nextBinding,
   ].sort((left, right) => left.start - right.start);
 }
 
@@ -95,7 +107,10 @@ function commonSuffixLength(left: string, right: string, prefixLength: number) {
 }
 
 function isValidMentionBinding(text: string, binding: ComposerDraftMentionBinding) {
-  if (text.slice(binding.start, binding.end) !== `$${binding.mention}`) {
+  if (
+    text.slice(binding.start, binding.end).toLowerCase() !==
+    `$${binding.mention}`.toLowerCase()
+  ) {
     return false;
   }
 

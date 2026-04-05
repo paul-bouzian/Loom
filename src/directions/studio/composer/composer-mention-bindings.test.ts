@@ -51,6 +51,31 @@ describe("composer-mention-bindings", () => {
     ).toEqual([]);
   });
 
+  it("keeps bindings when the token casing changes", () => {
+    const bindings = [
+      {
+        mention: "github",
+        kind: "app" as const,
+        path: "app://github",
+        start: 4,
+        end: 11,
+      },
+    ];
+
+    expect(
+      prepareComposerMentionBindingsForSend(
+        "Use $GitHub",
+        rebaseComposerMentionBindings("Use $github", "Use $GitHub", bindings),
+      ),
+    ).toEqual([
+      {
+        mention: "github",
+        kind: "app",
+        path: "app://github",
+      },
+    ]);
+  });
+
   it("adds autocomplete-selected bindings at the inserted token range", () => {
     const item: ComposerAutocompleteItem = {
       id: "app:github",
@@ -66,6 +91,45 @@ describe("composer-mention-bindings", () => {
     };
 
     expect(addComposerMentionBinding([], item, 4)).toEqual([
+      {
+        mention: "github",
+        kind: "app",
+        path: "app://github",
+        start: 4,
+        end: 11,
+      },
+    ]);
+  });
+
+  it("replaces an existing binding at the same token range", () => {
+    const skillItem: ComposerAutocompleteItem = {
+      id: "skill:github",
+      group: "Skills",
+      label: "github",
+      insertText: "$github",
+      appendSpace: true,
+      mentionBinding: {
+        mention: "github",
+        kind: "skill",
+        path: "/tmp/threadex/.codex/skills/github/SKILL.md",
+      },
+    };
+    const appItem: ComposerAutocompleteItem = {
+      id: "app:github",
+      group: "Apps",
+      label: "github",
+      insertText: "$github",
+      appendSpace: true,
+      mentionBinding: {
+        mention: "github",
+        kind: "app",
+        path: "app://github",
+      },
+    };
+
+    expect(
+      addComposerMentionBinding(addComposerMentionBinding([], skillItem, 4), appItem, 4),
+    ).toEqual([
       {
         mention: "github",
         kind: "app",

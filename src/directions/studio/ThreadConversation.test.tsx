@@ -537,12 +537,89 @@ describe("ThreadConversation", () => {
     const user = userEvent.setup();
     const input = await screen.findByPlaceholderText("Message ThreadEx...");
     await user.type(input, "Use $git");
+    expect(await screen.findAllByRole("option", { name: /github/i })).toHaveLength(2);
     await user.keyboard("{ArrowDown}{Tab}{Enter}");
 
     await waitFor(() => {
       expect(mockedBridge.sendThreadMessage).toHaveBeenCalledWith({
         threadId: "thread-1",
         text: "Use $github",
+        composer: expect.objectContaining({
+          collaborationMode: "build",
+        }),
+        mentionBindings: [
+          {
+            mention: "github",
+            kind: "app",
+            path: "app://github",
+          },
+        ],
+      });
+    });
+  });
+
+  it("preserves selected mention bindings when switching threads with a pending draft", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({ status: "idle" }),
+      capabilities: capabilitiesFixture,
+    });
+    mockedBridge.getThreadComposerCatalog.mockResolvedValue({
+      prompts: [],
+      skills: [
+        {
+          name: "github",
+          description: "GitHub CLI skill",
+          path: "/tmp/threadex/.codex/skills/github/SKILL.md",
+        },
+      ],
+      apps: [
+        {
+          id: "github-app",
+          name: "GitHub",
+          description: "GitHub connector",
+          slug: "github",
+          path: "app://github",
+        },
+      ],
+    });
+    mockedBridge.sendThreadMessage.mockResolvedValue(
+      makeConversationSnapshot({
+        status: "running",
+        activeTurnId: "turn-live-1",
+      }),
+    );
+
+    const { rerender } = render(
+      <ThreadConversation environment={makeEnvironment()} thread={makeThread()} />,
+    );
+
+    const user = userEvent.setup();
+    const input = await screen.findByPlaceholderText("Message ThreadEx...");
+    await user.type(input, "Use $git");
+    expect(await screen.findAllByRole("option", { name: /github/i })).toHaveLength(2);
+    await user.keyboard("{ArrowDown}{Tab}");
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Use $github ");
+    });
+
+    rerender(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread({ id: "thread-2" })}
+      />,
+    );
+
+    const switchedInput = await screen.findByPlaceholderText("Message ThreadEx...");
+    expect(switchedInput).toHaveValue("Use $github ");
+
+    await user.type(switchedInput, "now");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockedBridge.sendThreadMessage).toHaveBeenCalledWith({
+        threadId: "thread-2",
+        text: "Use $github now",
         composer: expect.objectContaining({
           collaborationMode: "build",
         }),

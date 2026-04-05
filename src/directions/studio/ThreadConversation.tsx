@@ -20,6 +20,7 @@ import { ConversationMeta } from "./ConversationMeta";
 import { ConversationPlanCard } from "./ConversationPlanCard";
 import { SubagentStrip } from "./SubagentStrip";
 import { InlineComposer } from "./composer/InlineComposer";
+import type { ComposerDraftMentionBinding } from "./composer/composer-mention-bindings";
 import "./ThreadConversation.css";
 
 type Props = {
@@ -48,6 +49,7 @@ export function ThreadConversation({ environment, thread }: Props) {
   );
   const submitPlanDecision = useConversationStore((state) => state.submitPlanDecision);
   const [draft, setDraft] = useState("");
+  const [mentionBindings, setMentionBindings] = useState<ComposerDraftMentionBinding[]>([]);
   const [isRefiningPlan, setIsRefiningPlan] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -146,14 +148,20 @@ export function ThreadConversation({ environment, thread }: Props) {
           ...(mentionBindings.length > 0 ? { mentionBindings } : {}),
         });
         if (sent) {
-          startTransition(() => setDraft(""));
+          startTransition(() => {
+            setDraft("");
+            setMentionBindings([]);
+          });
           setIsRefiningPlan(false);
         }
         return;
       }
       const sent = await sendMessage(thread.id, message, mentionBindings);
       if (sent) {
-        startTransition(() => setDraft(""));
+        startTransition(() => {
+          setDraft("");
+          setMentionBindings([]);
+        });
       }
     } finally {
       submitInFlightRef.current = false;
@@ -173,7 +181,10 @@ export function ThreadConversation({ environment, thread }: Props) {
       });
       if (sent) {
         setIsRefiningPlan(false);
-        startTransition(() => setDraft(""));
+        startTransition(() => {
+          setDraft("");
+          setMentionBindings([]);
+        });
       }
     } finally {
       submitInFlightRef.current = false;
@@ -234,13 +245,16 @@ export function ThreadConversation({ environment, thread }: Props) {
         isBusy={isRunning || isPending}
         isSending={isSubmitting}
         isRefiningPlan={isRefiningPlan}
+        mentionBindings={mentionBindings}
         modelOptions={capabilities?.models ?? []}
         tokenUsage={snapshot.tokenUsage}
         onCancelRefine={() => {
           setDraft("");
+          setMentionBindings([]);
           setIsRefiningPlan(false);
         }}
         onChangeDraft={setDraft}
+        onChangeMentionBindings={setMentionBindings}
         onInterrupt={() => void interruptThread(thread.id)}
         onSend={(text, mentionBindings) => void handleSend(text, mentionBindings)}
         onUpdateComposer={(patch) => {
