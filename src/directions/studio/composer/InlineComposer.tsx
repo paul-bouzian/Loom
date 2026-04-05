@@ -327,7 +327,11 @@ export function InlineComposer({
               onChange={(event) => {
                 const nextDraft = event.target.value;
                 onChangeMentionBindings(
-                  rebaseComposerMentionBindings(draft, nextDraft, mentionBindings),
+                  rebaseComposerMentionBindings(
+                    previousDraftRef.current,
+                    nextDraft,
+                    mentionBindings,
+                  ),
                 );
                 previousDraftRef.current = nextDraft;
                 onChangeDraft(nextDraft);

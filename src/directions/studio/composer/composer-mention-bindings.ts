@@ -35,7 +35,7 @@ export function rebaseComposerMentionBindings(
           },
         ];
       }
-      if (binding.start < prefixLength && binding.end > previousEditEnd) {
+      if (binding.start < prefixLength && binding.end >= previousEditEnd) {
         return [
           {
             ...binding,

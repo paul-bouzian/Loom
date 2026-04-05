@@ -76,6 +76,31 @@ describe("composer-mention-bindings", () => {
     ]);
   });
 
+  it("keeps bindings when the last token character changes casing", () => {
+    const bindings = [
+      {
+        mention: "github",
+        kind: "app" as const,
+        path: "app://github",
+        start: 4,
+        end: 11,
+      },
+    ];
+
+    expect(
+      prepareComposerMentionBindingsForSend(
+        "Use $github",
+        rebaseComposerMentionBindings("Use $githuB", "Use $github", bindings),
+      ),
+    ).toEqual([
+      {
+        mention: "github",
+        kind: "app",
+        path: "app://github",
+      },
+    ]);
+  });
+
   it("adds autocomplete-selected bindings at the inserted token range", () => {
     const item: ComposerAutocompleteItem = {
       id: "app:github",
