@@ -156,7 +156,7 @@ export function ComposerPicker({
         onClick={() => setOpen((current) => !current)}
       >
         <span className={valueClassName}>{selected?.label ?? value}</span>
-        <ChevronRightIcon size={12} className={chevronClassName} />
+        <ChevronRightIcon size={compact ? 8 : 12} className={chevronClassName} />
       </button>
       {open && menuPosition
         ? createPortal(

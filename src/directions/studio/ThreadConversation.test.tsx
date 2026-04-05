@@ -720,7 +720,9 @@ describe("ThreadConversation", () => {
 
     render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
 
-    const modeToggle = await screen.findByRole("button", { name: "Mode toggle" });
+    const modeToggle = await screen.findByRole("button", {
+      name: "Collaboration mode: Execute. Switch to Strategize",
+    });
     expect(modeToggle).toHaveTextContent("Execute");
     expect(modeToggle).toHaveAttribute("title", "Switch to Strategize");
 
@@ -746,7 +748,9 @@ describe("ThreadConversation", () => {
 
     render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
 
-    const modeToggle = await screen.findByRole("button", { name: "Mode toggle" });
+    const modeToggle = await screen.findByRole("button", {
+      name: "Collaboration mode: Execute",
+    });
     expect(modeToggle).toBeDisabled();
     expect(modeToggle).toHaveTextContent("Execute");
     expect(modeToggle).toHaveAttribute("title", "Execute");

@@ -387,7 +387,11 @@ export function InlineComposer({
           <button
             type="button"
             className={`tx-composer__toggle ${isPlanMode ? "tx-composer__toggle--accent" : ""}`}
-            aria-label="Mode toggle"
+            aria-label={
+              canToggleMode
+                ? `Collaboration mode: ${currentModeLabel}. Switch to ${nextModeLabel}`
+                : `Collaboration mode: ${currentModeLabel}`
+            }
             title={canToggleMode ? `Switch to ${nextModeLabel}` : currentModeLabel}
             aria-pressed={isPlanMode}
             disabled={controlsDisabled || !canToggleMode}
