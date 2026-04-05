@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub fn resolve_auto_binary_path() -> Option<PathBuf> {
     which::which("codex").ok().or_else(|| {
@@ -36,6 +37,19 @@ pub fn build_codex_process_path(binary_path: &str) -> OsString {
 
 pub fn missing_codex_binary_message() -> String {
     "Unable to resolve the Codex CLI binary. ThreadEx can auto-detect Codex from official Homebrew and npm/global install locations, but apps launched from Finder do not inherit your shell PATH. Install `codex` in a standard binary directory or set Settings -> Codex binary to its absolute path.".to_string()
+}
+
+pub fn sync_process_path_from_login_shell() {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let Some(shell) = resolve_login_shell() else {
+            return;
+        };
+        let Some(path) = read_path_from_login_shell(&shell) else {
+            return;
+        };
+        std::env::set_var("PATH", path);
+    }
 }
 
 fn codex_binary_candidates(home: Option<&Path>) -> Vec<PathBuf> {
@@ -122,6 +136,37 @@ fn push_unique(paths: &mut Vec<PathBuf>, candidate: PathBuf) {
     if !paths.contains(&candidate) {
         paths.push(candidate);
     }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn resolve_login_shell() -> Option<PathBuf> {
+    let shell = std::env::var_os("SHELL").map(PathBuf::from);
+    let shell = shell.filter(|path| path.is_absolute() && path.exists());
+    shell.or_else(|| {
+        ["/bin/zsh", "/bin/bash", "/bin/sh"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|path| path.exists())
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn read_path_from_login_shell(shell: &Path) -> Option<OsString> {
+    let output = Command::new(shell)
+        .arg("-l")
+        .arg("-c")
+        .arg("printf %s \"$PATH\"")
+        .env("TERM", "dumb")
+        .output()
+        .ok()?;
+
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+
+    Some(OsString::from(
+        String::from_utf8_lossy(&output.stdout).trim(),
+    ))
 }
 
 #[cfg(test)]
