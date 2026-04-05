@@ -441,13 +441,16 @@ function findStrongToken(text: string, startIndex: number): InlineTokenMatch | n
 function findEmphasisToken(text: string, startIndex: number): InlineTokenMatch | null {
   let tokenStart = text.indexOf("*", startIndex);
   while (tokenStart !== -1) {
-    if (text[tokenStart - 1] === "*" || text[tokenStart + 1] === "*") {
+    if (isAsteriskAt(text, tokenStart - 1) || isAsteriskAt(text, tokenStart + 1)) {
       tokenStart = text.indexOf("*", tokenStart + 1);
       continue;
     }
 
     let tokenEnd = text.indexOf("*", tokenStart + 1);
-    while (tokenEnd !== -1 && (text[tokenEnd - 1] === "*" || text[tokenEnd + 1] === "*")) {
+    while (
+      tokenEnd !== -1 &&
+      (isAsteriskAt(text, tokenEnd - 1) || isAsteriskAt(text, tokenEnd + 1))
+    ) {
       tokenEnd = text.indexOf("*", tokenEnd + 1);
     }
 
@@ -464,4 +467,8 @@ function findEmphasisToken(text: string, startIndex: number): InlineTokenMatch |
   }
 
   return null;
+}
+
+function isAsteriskAt(text: string, index: number) {
+  return index >= 0 && index < text.length && text[index] === "*";
 }

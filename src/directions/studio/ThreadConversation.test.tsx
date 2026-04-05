@@ -879,4 +879,14 @@ describe("ThreadConversation", () => {
     );
     expect(screen.getByText("bold").tagName).toBe("STRONG");
   });
+
+  it("renders single-asterisk emphasis and keeps current mixed-asterisk behavior", () => {
+    render(
+      <ConversationMarkdown markdown={"*text*\n\n*text**more*\n\n**text*"} />,
+    );
+
+    expect(screen.getByText("text").tagName).toBe("EM");
+    expect(screen.getByText("text**more").tagName).toBe("EM");
+    expect(screen.getByText("**text*").tagName).toBe("P");
+  });
 });
