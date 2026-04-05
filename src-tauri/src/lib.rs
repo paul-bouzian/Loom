@@ -10,6 +10,8 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    runtime::codex_paths::sync_process_path_from_login_shell();
+
     tracing_subscriber::fmt()
         .with_target(false)
         .compact()
