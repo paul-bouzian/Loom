@@ -720,13 +720,19 @@ fn history_plan_target_from_item(
     value: &Value,
     fallback_mode: CollaborationMode,
 ) -> HistoryPlanTarget {
+    match collaboration_mode_from_plan_item_heading(value).unwrap_or(fallback_mode) {
+        CollaborationMode::Plan => HistoryPlanTarget::Proposed,
+        CollaborationMode::Build => HistoryPlanTarget::Task,
+    }
+}
+
+pub(crate) fn collaboration_mode_from_plan_item_heading(
+    value: &Value,
+) -> Option<CollaborationMode> {
     match leading_plan_heading(value) {
-        Some("proposed plan") => HistoryPlanTarget::Proposed,
-        Some("tasks") => HistoryPlanTarget::Task,
-        _ => match fallback_mode {
-            CollaborationMode::Plan => HistoryPlanTarget::Proposed,
-            CollaborationMode::Build => HistoryPlanTarget::Task,
-        },
+        Some("proposed plan") => Some(CollaborationMode::Plan),
+        Some("tasks") => Some(CollaborationMode::Build),
+        _ => None,
     }
 }
 

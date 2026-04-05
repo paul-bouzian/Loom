@@ -1360,6 +1360,77 @@ async fn reopening_an_active_plan_turn_with_build_selected_keeps_plan_updates_ac
 }
 
 #[tokio::test]
+async fn reopening_a_plan_turn_before_plan_progress_exists_still_uses_item_heading() {
+    let (session, harness) = FakeCodexHarness::new().await;
+
+    session
+        .send_message(
+            context(
+                "thread-local-heading-reopen",
+                None,
+                CollaborationMode::Plan,
+                ApprovalPolicy::AskToEdit,
+            ),
+            "Draft a plan".to_string(),
+        )
+        .await
+        .expect("plan turn should start");
+
+    session
+        .open_thread(context(
+            "thread-local-heading-reopen",
+            Some("thr-new"),
+            CollaborationMode::Build,
+            ApprovalPolicy::AskToEdit,
+        ))
+        .await
+        .expect("thread should reopen with build selected");
+
+    harness
+        .emit_notification(
+            "item/completed",
+            json!({
+                "threadId": "thr-new",
+                "turnId": "turn-live-1",
+                "item": {
+                    "id": "plan-item-1",
+                    "type": "plan",
+                    "text": "## Proposed plan\n\n- Inspect runtime"
+                }
+            }),
+        )
+        .await;
+
+    let snapshot = wait_for_snapshot(
+        &session,
+        context(
+            "thread-local-heading-reopen",
+            Some("thr-new"),
+            CollaborationMode::Build,
+            ApprovalPolicy::AskToEdit,
+        ),
+        |snapshot| {
+            snapshot.task_plan.is_none()
+                && matches!(
+                    snapshot.proposed_plan.as_ref().map(|plan| plan.status),
+                    Some(crate::domain::conversation::ProposedPlanStatus::Ready)
+                )
+                && snapshot
+                    .proposed_plan
+                    .as_ref()
+                    .is_some_and(|plan| plan.markdown.contains("## Proposed plan"))
+        },
+    )
+    .await;
+
+    assert!(snapshot.task_plan.is_none());
+    assert!(matches!(
+        snapshot.proposed_plan.as_ref().map(|plan| plan.status),
+        Some(crate::domain::conversation::ProposedPlanStatus::Ready)
+    ));
+}
+
+#[tokio::test]
 async fn immediate_turn_start_results_clear_the_previous_task_tracker() {
     let (session, harness) = FakeCodexHarness::new().await;
 

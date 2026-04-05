@@ -443,6 +443,27 @@ describe("ThreadConversation", () => {
     expect(screen.queryByText("Ready for the first turn")).toBeNull();
   });
 
+  it("shows the empty state when a task plan exists without renderable content", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        items: [],
+        status: "completed",
+        composer: { ...baseComposer, collaborationMode: "build" },
+        taskPlan: makeTaskPlan({
+          steps: [],
+          markdown: "",
+          explanation: "",
+        }),
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
+
+    expect(await screen.findByText("Ready for the first turn")).toBeInTheDocument();
+    expect(screen.queryByText("Tasks")).toBeNull();
+  });
+
   it("renders approval actions and sends the selected approval response", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({

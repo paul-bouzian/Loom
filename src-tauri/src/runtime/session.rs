@@ -28,9 +28,9 @@ use crate::runtime::codex_paths::build_codex_process_path;
 use crate::runtime::protocol::{
     append_agent_delta, append_plan_delta, append_reasoning_boundary, append_reasoning_content,
     append_reasoning_summary, append_task_plan_delta, append_tool_output, approval_policy_value,
-    build_history_snapshot, clear_streaming_flags, collaboration_mode_options_from_response,
-    collaboration_mode_payload, complete_proposed_plan, complete_task_plan,
-    conversation_status_from_turn_status, error_snapshot, initialize_params,
+    build_history_snapshot, clear_streaming_flags, collaboration_mode_from_plan_item_heading,
+    collaboration_mode_options_from_response, collaboration_mode_payload, complete_proposed_plan,
+    complete_task_plan, conversation_status_from_turn_status, error_snapshot, initialize_params,
     initialized_notification, loaded_subagents_for_primary, mark_plan_approved,
     mark_plan_superseded, model_options_from_response, normalize_item,
     normalize_server_interaction, parse_incoming_message, plan_approval_message,
@@ -866,10 +866,13 @@ impl RuntimeSession {
 
         let snapshot = {
             let mut state = self.state.lock().await;
-            state.pending_turn_mode_by_thread.remove(&context.thread_id);
-            state.turn_modes_by_id.insert(
-                turn_response.turn.id.clone(),
+            let status = conversation_status_from_turn_status(&turn_response.turn.status);
+            update_turn_mode_tracking(
+                &mut state,
+                &context.thread_id,
+                &turn_response.turn.id,
                 context.composer.collaboration_mode,
+                status,
             );
             let snapshot = state
                 .snapshots_by_thread
@@ -877,7 +880,6 @@ impl RuntimeSession {
                 .ok_or_else(|| {
                     AppError::Runtime("Conversation snapshot disappeared unexpectedly.".to_string())
                 })?;
-            let status = conversation_status_from_turn_status(&turn_response.turn.status);
             snapshot.composer = context.composer.clone();
             snapshot.task_plan = None;
             snapshot.active_turn_id =
@@ -1536,7 +1538,15 @@ async fn handle_notification(
                 let is_started = notification.method == "item/started";
                 let plan_target =
                     if event.item.get("type").and_then(serde_json::Value::as_str) == Some("plan") {
-                        Some(plan_target_for_turn(state, &event.thread_id, &event.turn_id).await)
+                        Some(
+                            plan_target_for_item_or_turn(
+                                state,
+                                &event.thread_id,
+                                &event.turn_id,
+                                &event.item,
+                            )
+                            .await,
+                        )
                     } else {
                         None
                     };
@@ -1824,10 +1834,34 @@ async fn plan_target_for_turn(
         .unwrap_or(PlanTarget::Task)
 }
 
+async fn plan_target_for_item_or_turn(
+    state: &Arc<Mutex<SessionState>>,
+    codex_thread_id: &str,
+    turn_id: &str,
+    item: &Value,
+) -> PlanTarget {
+    collaboration_mode_from_plan_item_heading(item)
+        .map(plan_target_from_mode)
+        .unwrap_or(plan_target_for_turn(state, codex_thread_id, turn_id).await)
+}
+
 fn plan_target_from_mode(mode: CollaborationMode) -> PlanTarget {
     match mode {
         CollaborationMode::Plan => PlanTarget::Proposed,
         CollaborationMode::Build => PlanTarget::Task,
+    }
+}
+
+fn update_turn_mode_tracking(
+    state: &mut SessionState,
+    thread_id: &str,
+    turn_id: &str,
+    mode: CollaborationMode,
+    status: ConversationStatus,
+) {
+    state.pending_turn_mode_by_thread.remove(thread_id);
+    if matches!(status, ConversationStatus::Running) {
+        state.turn_modes_by_id.insert(turn_id.to_string(), mode);
     }
 }
 
@@ -2153,6 +2187,17 @@ async fn mark_runtime_disconnected(app: &Option<AppHandle>, state: &Arc<Mutex<Se
             .snapshots_by_thread
             .values_mut()
             .map(|snapshot| {
+                if let Some(task_plan) = snapshot.task_plan.as_mut() {
+                    let is_active_task = snapshot
+                        .active_turn_id
+                        .as_deref()
+                        .is_some_and(|turn_id| turn_id == task_plan.turn_id);
+                    if is_active_task || matches!(task_plan.status, ConversationTaskStatus::Running)
+                    {
+                        task_plan.status = ConversationTaskStatus::Failed;
+                    }
+                }
+                snapshot.active_turn_id = None;
                 snapshot.status = ConversationStatus::Failed;
                 snapshot.subagents.clear();
                 snapshot.pending_interactions.clear();
@@ -2280,6 +2325,73 @@ mod tests {
         reconcile_snapshot_status(&mut snapshot);
 
         assert!(matches!(snapshot.status, ConversationStatus::Completed));
+    }
+
+    #[test]
+    fn update_turn_mode_tracking_only_keeps_running_turns() {
+        let mut state = SessionState::default();
+        state
+            .pending_turn_mode_by_thread
+            .insert("thread-1".to_string(), CollaborationMode::Build);
+
+        update_turn_mode_tracking(
+            &mut state,
+            "thread-1",
+            "turn-1",
+            CollaborationMode::Build,
+            ConversationStatus::Completed,
+        );
+
+        assert!(state.pending_turn_mode_by_thread.is_empty());
+        assert!(state.turn_modes_by_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mark_runtime_disconnected_fails_active_task_trackers() {
+        let mut snapshot = ThreadConversationSnapshot::new(
+            "thread-1".to_string(),
+            "env-1".to_string(),
+            Some("thr_codex".to_string()),
+            ConversationComposerSettings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: ReasoningEffort::High,
+                collaboration_mode: CollaborationMode::Build,
+                approval_policy: ApprovalPolicy::AskToEdit,
+            },
+        );
+        snapshot.active_turn_id = Some("turn-1".to_string());
+        snapshot.status = ConversationStatus::Running;
+        snapshot.task_plan = Some(crate::domain::conversation::ConversationTaskSnapshot {
+            turn_id: "turn-1".to_string(),
+            item_id: Some("plan-item-1".to_string()),
+            explanation: "Codex is working through the implementation.".to_string(),
+            steps: Vec::new(),
+            markdown: "## Tasks\n\n- Inspect runtime".to_string(),
+            status: crate::domain::conversation::ConversationTaskStatus::Running,
+        });
+
+        let state = Arc::new(Mutex::new(SessionState {
+            snapshots_by_thread: HashMap::from([("thread-1".to_string(), snapshot)]),
+            local_thread_by_codex_id: HashMap::new(),
+            capabilities: None,
+            pending_server_requests: HashMap::new(),
+            turn_modes_by_id: HashMap::new(),
+            pending_turn_mode_by_thread: HashMap::new(),
+        }));
+
+        mark_runtime_disconnected(&None, &state).await;
+
+        let state = state.lock().await;
+        let snapshot = state
+            .snapshots_by_thread
+            .get("thread-1")
+            .expect("snapshot should exist");
+        assert!(matches!(snapshot.status, ConversationStatus::Failed));
+        assert!(matches!(
+            snapshot.task_plan.as_ref().map(|plan| plan.status),
+            Some(crate::domain::conversation::ConversationTaskStatus::Failed)
+        ));
+        assert!(snapshot.active_turn_id.is_none());
     }
 
     #[test]

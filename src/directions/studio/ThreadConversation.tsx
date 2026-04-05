@@ -130,7 +130,7 @@ export function ThreadConversation({ environment, thread }: Props) {
   const shouldRenderPlanCard = Boolean(
     activePlan && (activePlan.isAwaitingDecision || activePlan.status === "streaming"),
   );
-  const shouldRenderTaskCard = Boolean(
+  const hasRenderableTaskPlan = Boolean(
     activeTaskPlan &&
       (activeTaskPlan.steps.length > 0 ||
         activeTaskPlan.markdown.trim().length > 0 ||
@@ -213,7 +213,7 @@ export function ThreadConversation({ environment, thread }: Props) {
         thread={thread}
       />
       <div ref={timelineRef} className="tx-conversation__timeline">
-        {snapshot.items.length === 0 && !activePlan && !activeTaskPlan ? (
+        {snapshot.items.length === 0 && !activePlan && !hasRenderableTaskPlan ? (
           <ConversationEmpty />
         ) : null}
         {snapshot.items.map((item) => (
@@ -227,7 +227,7 @@ export function ThreadConversation({ environment, thread }: Props) {
             onRefine={() => setIsRefiningPlan(true)}
           />
         ) : null}
-        {shouldRenderTaskCard && activeTaskPlan ? (
+        {hasRenderableTaskPlan && activeTaskPlan ? (
           <ConversationTaskCard taskPlan={activeTaskPlan} />
         ) : null}
         {snapshot.error ? (
