@@ -114,3 +114,29 @@
   justify-content: center;
   flex-shrink: 0;
 }
+
+.tx-picker--compact {
+  gap: 0;
+}
+
+.tx-picker--compact .tx-picker__trigger {
+  min-height: 28px;
+  padding: 4px 8px;
+  border-color: transparent;
+  background: transparent;
+  font-size: var(--tx-text-xs);
+  font-weight: var(--tx-weight-semibold);
+  border-radius: var(--tx-radius-sm);
+  gap: 4px;
+}
+
+.tx-picker--compact .tx-picker__trigger:hover:not(:disabled),
+.tx-picker--compact.tx-picker--open .tx-picker__trigger {
+  background: var(--tx-bg-hover);
+  border-color: transparent;
+}
+
+.tx-picker--compact .tx-picker__chevron {
+  width: 8px;
+  height: 8px;
+}

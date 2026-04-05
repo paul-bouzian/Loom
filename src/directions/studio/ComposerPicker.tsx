@@ -13,6 +13,7 @@ type Props = {
   label: string;
   value: string;
   options: ComposerPickerOption[];
+  compact?: boolean;
   disabled?: boolean;
   menuZIndex?: number;
   tone?: "default" | "accent";
@@ -31,6 +32,7 @@ export function ComposerPicker({
   label,
   value,
   options,
+  compact = false,
   disabled = false,
   menuZIndex = 50,
   tone = "default",
@@ -65,7 +67,11 @@ export function ComposerPicker({
         140,
         Math.min(openUpward ? availableAbove : availableBelow, 280),
       );
-      const width = Math.min(rect.width, window.innerWidth - margin * 2);
+      const minMenuWidth = compact ? 160 : 0;
+      const width = Math.min(
+        Math.max(rect.width, minMenuWidth),
+        window.innerWidth - margin * 2,
+      );
       const left = Math.max(
         margin,
         Math.min(rect.left, window.innerWidth - width - margin),
@@ -121,8 +127,8 @@ export function ComposerPicker({
   }, [open]);
 
   return (
-    <div ref={rootRef} className={`tx-picker ${open ? "tx-picker--open" : ""}`}>
-      <span className="tx-picker__label">{label}</span>
+    <div ref={rootRef} className={`tx-picker ${open ? "tx-picker--open" : ""} ${compact ? "tx-picker--compact" : ""}`}>
+      {!compact && <span className="tx-picker__label">{label}</span>}
       <button
         ref={triggerRef}
         type="button"
