@@ -244,7 +244,7 @@ export function InlineComposer({
   }
 
   return (
-    <div className="tx-composer">
+    <div className={`tx-composer ${composer.collaborationMode === "plan" ? "tx-composer--plan" : ""}`}>
       {autocompleteItems.length > 0 ? (
         <div ref={menuRef}>
           <ComposerAutocompleteMenu

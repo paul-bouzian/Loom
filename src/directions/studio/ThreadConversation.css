@@ -494,6 +494,19 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--tx-accent) 18%, transparent);
 }
 
+.tx-composer--plan {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--tx-accent) 35%, var(--tx-border-subtle));
+  background:
+    color-mix(in srgb, var(--tx-accent) 4%, transparent),
+    color-mix(in srgb, var(--tx-bg-raised) 82%, transparent);
+}
+
+.tx-composer--plan:focus-within {
+  border-color: color-mix(in srgb, var(--tx-accent) 55%, var(--tx-border-subtle));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tx-accent) 12%, transparent);
+}
+
 .tx-composer__controls {
   display: flex;
   align-items: center;
