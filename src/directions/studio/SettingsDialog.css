@@ -105,6 +105,7 @@
   background: color-mix(in srgb, var(--tx-accent) 12%, var(--tx-bg-hover));
   color: var(--tx-text-primary);
   font-weight: var(--tx-weight-semibold);
+  cursor: default;
 }
 
 .settings-dialog__body {

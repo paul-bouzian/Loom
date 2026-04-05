@@ -31,12 +31,6 @@ type Props = {
   onClose: () => void;
 };
 
-type SettingsTab = "codex";
-
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
-  { id: "codex", label: "Codex" },
-];
-
 const SETTINGS_PICKER_Z_INDEX = 1310;
 const SETTINGS_REFRESH_ERROR =
   "Settings were saved, but the workspace snapshot could not be refreshed.";
@@ -51,7 +45,6 @@ export function SettingsDialog({ open, onClose }: Props) {
   );
   const refreshSnapshot = useWorkspaceStore((state) => state.refreshSnapshot);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<SettingsTab>("codex");
   const modelOptions = useMemo(
     () =>
       settings
@@ -139,31 +132,24 @@ export function SettingsDialog({ open, onClose }: Props) {
         </div>
 
         <div className="settings-dialog__layout">
-          <nav className="settings-dialog__sidebar">
-            {SETTINGS_TABS.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={`settings-dialog__tab ${activeTab === tab.id ? "settings-dialog__tab--active" : ""}`}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
+          <div className="settings-dialog__sidebar" aria-hidden="true">
+            <div className="settings-dialog__tab settings-dialog__tab--active">
+              Codex
+            </div>
+          </div>
           <div className="settings-dialog__body">
             {actionError ? (
               <p className="settings-dialog__notice">{actionError}</p>
             ) : null}
-            {activeTab === "codex" && settings ? (
+            {settings ? (
               <SettingsContent
                 settings={settings}
                 modelOptions={modelOptions}
                 onChange={handleChange}
               />
-            ) : !settings ? (
+            ) : (
               <p className="settings-dialog__empty">Loading...</p>
-            ) : null}
+            )}
           </div>
         </div>
       </section>

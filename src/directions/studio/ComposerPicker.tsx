@@ -44,6 +44,10 @@ export function ComposerPicker({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const isAccent = tone === "accent";
+  const pickerClassName = `tx-picker ${open ? "tx-picker--open" : ""} ${compact ? "tx-picker--compact" : ""}`;
+  const triggerClassName = `tx-picker__trigger ${isAccent ? "tx-picker__trigger--accent" : ""}`;
+  const valueClassName = `tx-picker__value ${isAccent ? "tx-picker__value--accent" : ""}`;
+  const chevronClassName = `tx-picker__chevron ${open ? "tx-picker__chevron--open" : ""}`;
 
   const selected = useMemo(() => {
     return options.find((option) => option.value === value) ?? null;
@@ -124,29 +128,22 @@ export function ComposerPicker({
       window.removeEventListener("scroll", updateMenuPosition, true);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open]);
+  }, [compact, open]);
 
   return (
-    <div ref={rootRef} className={`tx-picker ${open ? "tx-picker--open" : ""} ${compact ? "tx-picker--compact" : ""}`}>
+    <div ref={rootRef} className={pickerClassName}>
       {!compact && <span className="tx-picker__label">{label}</span>}
       <button
         ref={triggerRef}
         type="button"
-        className={`tx-picker__trigger ${isAccent ? "tx-picker__trigger--accent" : ""}`}
+        className={triggerClassName}
         disabled={disabled}
         aria-expanded={open}
         aria-label={`${label} picker`}
         onClick={() => setOpen((current) => !current)}
       >
-        <span
-          className={`tx-picker__value ${isAccent ? "tx-picker__value--accent" : ""}`}
-        >
-          {selected?.label ?? value}
-        </span>
-        <ChevronRightIcon
-          size={12}
-          className={`tx-picker__chevron ${open ? "tx-picker__chevron--open" : ""}`}
-        />
+        <span className={valueClassName}>{selected?.label ?? value}</span>
+        <ChevronRightIcon size={12} className={chevronClassName} />
       </button>
       {open && menuPosition
         ? createPortal(

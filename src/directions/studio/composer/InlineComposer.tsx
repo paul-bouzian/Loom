@@ -87,6 +87,7 @@ export function InlineComposer({
   const [activeIndex, setActiveIndex] = useState(0);
   const [dismissedTokenKey, setDismissedTokenKey] = useState<string | null>(null);
   const [pendingCursor, setPendingCursor] = useState<number | null>(null);
+  const isPlanMode = composer.collaborationMode === "plan";
   const inputDisabled = isBusy || isSending || (disabled && !isRefiningPlan);
   const controlsDisabled = isBusy || isSending || disabled;
   const placeholder = isRefiningPlan
@@ -189,6 +190,7 @@ export function InlineComposer({
           ),
     [activeToken, activeTokenKey, catalog, dismissedTokenKey, fileResults],
   );
+  const hasAutocompleteItems = autocompleteItems.length > 0;
 
   useEffect(() => {
     setActiveIndex((current) =>
@@ -243,9 +245,16 @@ export function InlineComposer({
     setDismissedTokenKey(null);
   }
 
+  function sendDraft() {
+    onSend(
+      draft,
+      prepareComposerMentionBindingsForSend(draft, mentionBindings),
+    );
+  }
+
   return (
-    <div className={`tx-composer ${composer.collaborationMode === "plan" ? "tx-composer--plan" : ""}`}>
-      {autocompleteItems.length > 0 ? (
+    <div className={`tx-composer ${isPlanMode ? "tx-composer--plan" : ""}`}>
+      {hasAutocompleteItems ? (
         <div ref={menuRef}>
           <ComposerAutocompleteMenu
             items={autocompleteItems}
@@ -298,7 +307,7 @@ export function InlineComposer({
               if (event.nativeEvent.isComposing) {
                 return;
               }
-              if (autocompleteItems.length > 0) {
+              if (hasAutocompleteItems) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
                   setActiveIndex((current) => (current + 1) % autocompleteItems.length);
@@ -330,10 +339,7 @@ export function InlineComposer({
               }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                onSend(
-                  draft,
-                  prepareComposerMentionBindingsForSend(draft, mentionBindings),
-                );
+                sendDraft();
               }
             }}
           />
@@ -408,12 +414,7 @@ export function InlineComposer({
               className="tx-composer__send-button"
               aria-label={isRefiningPlan ? "Refine plan" : "Send message"}
               disabled={draft.trim().length === 0 || inputDisabled}
-              onClick={() =>
-                onSend(
-                  draft,
-                  prepareComposerMentionBindingsForSend(draft, mentionBindings),
-                )
-              }
+              onClick={sendDraft}
             >
               <SendIcon size={12} />
             </button>
