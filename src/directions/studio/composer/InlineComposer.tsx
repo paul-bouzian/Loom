@@ -88,6 +88,9 @@ export function InlineComposer({
   const [dismissedTokenKey, setDismissedTokenKey] = useState<string | null>(null);
   const [pendingCursor, setPendingCursor] = useState<number | null>(null);
   const isPlanMode = composer.collaborationMode === "plan";
+  const nextMode: ConversationComposerSettings["collaborationMode"] = isPlanMode
+    ? "build"
+    : "plan";
   const inputDisabled = isBusy || isSending || (disabled && !isRefiningPlan);
   const controlsDisabled = isBusy || isSending || disabled;
   const placeholder = isRefiningPlan
@@ -252,6 +255,18 @@ export function InlineComposer({
     );
   }
 
+  function collaborationModeLabel(
+    mode: ConversationComposerSettings["collaborationMode"],
+  ) {
+    return (
+      collaborationModes.find((option) => option.id === mode)?.label ??
+      labelForCollaborationMode(mode)
+    );
+  }
+
+  const currentModeLabel = collaborationModeLabel(composer.collaborationMode);
+  const nextModeLabel = collaborationModeLabel(nextMode);
+
   return (
     <div className={`tx-composer ${isPlanMode ? "tx-composer--plan" : ""}`}>
       {hasAutocompleteItems ? (
@@ -368,25 +383,25 @@ export function InlineComposer({
               })
             }
           />
-          <ComposerPicker
-            label="Mode"
-            value={composer.collaborationMode}
-            tone={composer.collaborationMode === "plan" ? "accent" : "default"}
-            options={collaborationModes.map((option) => ({
-              label: labelForCollaborationMode(option.id, option.label),
-              value: option.id,
-            }))}
-            compact
+          <button
+            type="button"
+            className={`tx-composer__toggle ${isPlanMode ? "tx-composer__toggle--accent" : ""}`}
+            aria-label="Mode toggle"
+            title={`Switch to ${nextModeLabel}`}
+            aria-pressed={isPlanMode}
             disabled={controlsDisabled}
-            onChange={(value) =>
+            onClick={() => {
               onUpdateComposer({
-                collaborationMode: value as ConversationComposerSettings["collaborationMode"],
-              })
-            }
-          />
+                collaborationMode: nextMode,
+              });
+            }}
+          >
+            {currentModeLabel}
+          </button>
           <ComposerPicker
             label="Access"
             value={composer.approvalPolicy}
+            tone={composer.approvalPolicy === "fullAccess" ? "warning" : "default"}
             options={APPROVAL_OPTIONS}
             compact
             disabled={controlsDisabled}

@@ -16,7 +16,7 @@ type Props = {
   compact?: boolean;
   disabled?: boolean;
   menuZIndex?: number;
-  tone?: "default" | "accent";
+  tone?: "default" | "accent" | "warning";
   onChange: (value: string) => void;
 };
 
@@ -44,9 +44,22 @@ export function ComposerPicker({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const isAccent = tone === "accent";
+  const isWarning = tone === "warning";
   const pickerClassName = `tx-picker ${open ? "tx-picker--open" : ""} ${compact ? "tx-picker--compact" : ""}`;
-  const triggerClassName = `tx-picker__trigger ${isAccent ? "tx-picker__trigger--accent" : ""}`;
-  const valueClassName = `tx-picker__value ${isAccent ? "tx-picker__value--accent" : ""}`;
+  const triggerClassName = [
+    "tx-picker__trigger",
+    isAccent ? "tx-picker__trigger--accent" : null,
+    isWarning ? "tx-picker__trigger--warning" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const valueClassName = [
+    "tx-picker__value",
+    isAccent ? "tx-picker__value--accent" : null,
+    isWarning ? "tx-picker__value--warning" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const chevronClassName = `tx-picker__chevron ${open ? "tx-picker__chevron--open" : ""}`;
 
   const selected = useMemo(() => {

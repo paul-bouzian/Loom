@@ -720,13 +720,18 @@ describe("ThreadConversation", () => {
 
     render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
 
-    const modePicker = await screen.findByRole("button", { name: "Mode picker" });
-    expect(modePicker).toHaveTextContent("Execute");
+    const modeToggle = await screen.findByRole("button", { name: "Mode toggle" });
+    expect(modeToggle).toHaveTextContent("Execute");
+    expect(modeToggle).toHaveAttribute("title", "Switch to Strategize");
 
-    await userEvent.click(modePicker);
+    await userEvent.click(modeToggle);
 
-    expect(screen.getByRole("option", { name: "Execute" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Strategize" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(modeToggle).toHaveTextContent("Strategize");
+    });
+    expect(modeToggle).toHaveAttribute("title", "Switch to Execute");
+    expect(screen.queryByRole("option", { name: "Execute" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "Strategize" })).toBeNull();
     expect(screen.queryByRole("option", { name: "Build" })).toBeNull();
   });
 
