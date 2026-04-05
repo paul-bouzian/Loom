@@ -19,6 +19,7 @@ import {
   useConversationStore,
 } from "../../stores/conversation-store";
 import { useWorkspaceStore } from "../../stores/workspace-store";
+import { ConversationMarkdown } from "./ConversationMarkdown";
 import { ConversationPlanCard } from "./ConversationPlanCard";
 import { ThreadConversation } from "./ThreadConversation";
 
@@ -125,7 +126,7 @@ describe("ThreadConversation", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: "Release notes" }),
+      await screen.findByRole("heading", { name: "Release notes", level: 2 }),
     ).toBeInTheDocument();
     expect(screen.getByText("Bold guidance").tagName).toBe("STRONG");
     expect(screen.getByText("bun").tagName).toBe("CODE");
@@ -163,6 +164,31 @@ describe("ThreadConversation", () => {
     );
     expect(screen.getByText("markdown").tagName).toBe("CODE");
     expect(screen.getByText("Avoid raw plaintext")).toBeInTheDocument();
+  });
+
+  it("preserves multiline user messages with the plain-text message class", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        items: [
+          {
+            kind: "message",
+            id: "user-multiline-1",
+            role: "user",
+            text: "Line one\nLine two",
+            isStreaming: false,
+          },
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(<ThreadConversation environment={makeEnvironment()} thread={makeThread()} />);
+
+    const body = await screen.findByText((_, element) => {
+      return element?.textContent === "Line one\nLine two";
+    });
+
+    expect(body).toHaveClass("tx-item__body--message-plain");
   });
 
   it("renders the subagent strip and context meter for active turns", async () => {
@@ -834,5 +860,23 @@ describe("ThreadConversation", () => {
     );
 
     expect(screen.getByText("Keep the second item")).toBeInTheDocument();
+  });
+
+  it("renders markdown with semantic heading depth and skips malformed inline tokens", () => {
+    render(
+      <ConversationMarkdown
+        markdown={
+          "# Primary heading\n\nBad `` then `code`, bad [ref] then [OpenAI](https://openai.com/docs), bad **** then **bold**."
+        }
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Primary heading", level: 1 })).toBeInTheDocument();
+    expect(screen.getByText("code").tagName).toBe("CODE");
+    expect(screen.getByRole("link", { name: "OpenAI" })).toHaveAttribute(
+      "href",
+      "https://openai.com/docs",
+    );
+    expect(screen.getByText("bold").tagName).toBe("STRONG");
   });
 });

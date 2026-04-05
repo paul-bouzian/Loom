@@ -160,6 +160,10 @@
   font-size: var(--tx-text-base);
 }
 
+.tx-item__body--message-plain {
+  white-space: pre-wrap;
+}
+
 .tx-item__body--reasoning + .tx-item__body--reasoning {
   margin-top: var(--tx-space-sm);
 }
@@ -292,9 +296,18 @@
 .tx-markdown__list {
   margin: 0;
   padding-left: calc(var(--tx-space-lg) + var(--tx-space-xs));
+  list-style-position: outside;
   display: grid;
   gap: var(--tx-space-xs);
   color: var(--tx-text-primary);
+}
+
+ul.tx-markdown__list {
+  list-style-type: disc;
+}
+
+ol.tx-markdown__list {
+  list-style-type: decimal;
 }
 
 .tx-markdown__blockquote {

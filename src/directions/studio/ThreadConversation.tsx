@@ -274,6 +274,13 @@ function ConversationItemRow({ item }: { item: ConversationItem }) {
 
   if (item.kind === "message") {
     const shouldRenderMarkdown = item.role === "assistant";
+    const bodyClassName = [
+      "tx-item__body",
+      "tx-item__body--message",
+      item.role === "user" ? "tx-item__body--message-plain" : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
 
     return (
       <div className={`tx-item tx-item--message tx-item--${item.role}`}>
@@ -281,10 +288,10 @@ function ConversationItemRow({ item }: { item: ConversationItem }) {
         {shouldRenderMarkdown ? (
           <ConversationMarkdown
             markdown={item.text}
-            className="tx-item__body tx-item__body--message"
+            className={bodyClassName}
           />
         ) : (
-          <div className="tx-item__body tx-item__body--message">{item.text}</div>
+          <div className={bodyClassName}>{item.text}</div>
         )}
       </div>
     );

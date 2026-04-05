@@ -5,8 +5,10 @@ type Props = {
   className?: string;
 };
 
+type HeadingDepth = 1 | 2 | 3 | 4 | 5 | 6;
+
 type MarkdownBlock =
-  | { kind: "heading"; depth: 1 | 2 | 3 | 4 | 5 | 6; text: string }
+  | { kind: "heading"; depth: HeadingDepth; text: string }
   | { kind: "paragraph"; text: string }
   | { kind: "unorderedList"; items: string[] }
   | { kind: "orderedList"; items: string[] }
@@ -40,13 +42,15 @@ export function ConversationMarkdown({ markdown, className }: Props) {
 
 function renderBlock(block: MarkdownBlock, index: number) {
   if (block.kind === "heading") {
+    const HeadingTag = headingTagForDepth(block.depth);
+
     return (
-      <h4
+      <HeadingTag
         key={`${block.kind}-${index}`}
         className={`tx-markdown__heading tx-markdown__heading--${block.depth}`}
       >
         {renderInlineMarkdown(block.text, `${block.kind}-${index}`)}
-      </h4>
+      </HeadingTag>
     );
   }
 
@@ -122,7 +126,7 @@ function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
     if (heading) {
       blocks.push({
         kind: "heading",
-        depth: Math.min(heading[1].length, 6) as 1 | 2 | 3 | 4 | 5 | 6,
+        depth: Math.min(heading[1].length, 6) as HeadingDepth,
         text: heading[2].trim(),
       });
       index += 1;
@@ -258,6 +262,23 @@ function isBlockStart(trimmedLine: string) {
   );
 }
 
+function headingTagForDepth(depth: HeadingDepth) {
+  switch (depth) {
+    case 1:
+      return "h1";
+    case 2:
+      return "h2";
+    case 3:
+      return "h3";
+    case 4:
+      return "h4";
+    case 5:
+      return "h5";
+    default:
+      return "h6";
+  }
+}
+
 function renderInlineMarkdown(text: string, keyPrefix: string) {
   if (!text) {
     return null;
@@ -339,71 +360,82 @@ function findNextInlineToken(text: string, startIndex: number): InlineTokenMatch
 }
 
 function findCodeToken(text: string, startIndex: number): InlineTokenMatch | null {
-  const tokenStart = text.indexOf("`", startIndex);
-  if (tokenStart === -1) {
-    return null;
+  let tokenStart = text.indexOf("`", startIndex);
+  while (tokenStart !== -1) {
+    const tokenEnd = text.indexOf("`", tokenStart + 1);
+    if (tokenEnd === -1) {
+      return null;
+    }
+
+    if (tokenEnd > tokenStart + 1) {
+      return {
+        kind: "code",
+        start: tokenStart,
+        end: tokenEnd + 1,
+        captures: [text.slice(tokenStart + 1, tokenEnd)],
+      };
+    }
+
+    tokenStart = text.indexOf("`", tokenEnd + 1);
   }
 
-  const tokenEnd = text.indexOf("`", tokenStart + 1);
-  if (tokenEnd <= tokenStart + 1) {
-    return null;
-  }
-
-  return {
-    kind: "code",
-    start: tokenStart,
-    end: tokenEnd + 1,
-    captures: [text.slice(tokenStart + 1, tokenEnd)],
-  };
+  return null;
 }
 
 function findLinkToken(text: string, startIndex: number): InlineTokenMatch | null {
-  const tokenStart = text.indexOf("[", startIndex);
-  if (tokenStart === -1) {
-    return null;
+  let tokenStart = text.indexOf("[", startIndex);
+  while (tokenStart !== -1) {
+    const labelEnd = text.indexOf("]", tokenStart + 1);
+    if (labelEnd === -1 || text[labelEnd + 1] !== "(") {
+      tokenStart = text.indexOf("[", tokenStart + 1);
+      continue;
+    }
+
+    const urlEnd = text.indexOf(")", labelEnd + 2);
+    if (urlEnd === -1) {
+      tokenStart = text.indexOf("[", tokenStart + 1);
+      continue;
+    }
+
+    const label = text.slice(tokenStart + 1, labelEnd).trim();
+    const href = text.slice(labelEnd + 2, urlEnd).trim();
+    if (!label || !/^https?:\/\//.test(href)) {
+      tokenStart = text.indexOf("[", tokenStart + 1);
+      continue;
+    }
+
+    return {
+      kind: "link",
+      start: tokenStart,
+      end: urlEnd + 1,
+      captures: [label, href],
+    };
   }
 
-  const labelEnd = text.indexOf("]", tokenStart + 1);
-  if (labelEnd === -1 || text[labelEnd + 1] !== "(") {
-    return null;
-  }
-
-  const urlEnd = text.indexOf(")", labelEnd + 2);
-  if (urlEnd === -1) {
-    return null;
-  }
-
-  const label = text.slice(tokenStart + 1, labelEnd).trim();
-  const href = text.slice(labelEnd + 2, urlEnd).trim();
-  if (!label || !/^https?:\/\//.test(href)) {
-    return null;
-  }
-
-  return {
-    kind: "link",
-    start: tokenStart,
-    end: urlEnd + 1,
-    captures: [label, href],
-  };
+  return null;
 }
 
 function findStrongToken(text: string, startIndex: number): InlineTokenMatch | null {
-  const tokenStart = text.indexOf("**", startIndex);
-  if (tokenStart === -1) {
-    return null;
+  let tokenStart = text.indexOf("**", startIndex);
+  while (tokenStart !== -1) {
+    const tokenEnd = text.indexOf("**", tokenStart + 2);
+    if (tokenEnd === -1) {
+      return null;
+    }
+
+    if (tokenEnd > tokenStart + 2) {
+      return {
+        kind: "strong",
+        start: tokenStart,
+        end: tokenEnd + 2,
+        captures: [text.slice(tokenStart + 2, tokenEnd)],
+      };
+    }
+
+    tokenStart = text.indexOf("**", tokenEnd + 2);
   }
 
-  const tokenEnd = text.indexOf("**", tokenStart + 2);
-  if (tokenEnd <= tokenStart + 2) {
-    return null;
-  }
-
-  return {
-    kind: "strong",
-    start: tokenStart,
-    end: tokenEnd + 2,
-    captures: [text.slice(tokenStart + 2, tokenEnd)],
-  };
+  return null;
 }
 
 function findEmphasisToken(text: string, startIndex: number): InlineTokenMatch | null {
