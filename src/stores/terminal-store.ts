@@ -299,16 +299,20 @@ function updateStore(
 }
 
 function normalizeEnvironmentState(
-  value: EnvironmentTerminalUiState | undefined,
+  value: Partial<EnvironmentTerminalUiState> | undefined,
 ): EnvironmentTerminalUiState {
   if (!value) {
     return { ...EMPTY_TERMINAL_UI_STATE };
   }
 
-  const tabs = renumberTerminalTabs(value.tabs ?? []);
-  const activeTerminalId = tabs.some((tab) => tab.id === value.activeTerminalId)
-    ? value.activeTerminalId
-    : (tabs[0]?.id ?? null);
+  const tabs = renumberTerminalTabs(
+    Array.isArray(value.tabs) ? value.tabs : [],
+  );
+  const activeTerminalId =
+    typeof value.activeTerminalId === "string" &&
+    tabs.some((tab) => tab.id === value.activeTerminalId)
+      ? value.activeTerminalId
+      : (tabs[0]?.id ?? null);
 
   return {
     open: Boolean(value.open) && tabs.length > 0,

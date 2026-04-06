@@ -35,6 +35,7 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
   const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
   const selectedThread = useWorkspaceStore(selectSelectedThread);
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const terminalUi = useTerminalStore(
     selectEnvironmentTerminalUi(selectedEnvironment?.id ?? null),
   );
@@ -56,6 +57,14 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
   useEffect(() => {
     pruneTerminalEnvironments(environmentIds);
   }, [environmentIds, pruneTerminalEnvironments]);
+
+  useEffect(
+    () => () => {
+      resizeCleanupRef.current?.();
+      resizeCleanupRef.current = null;
+    },
+    [],
+  );
 
   let content;
   if (projects.length === 0) {
@@ -94,6 +103,7 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
   function handleResizeStart(event: ReactMouseEvent<HTMLDivElement>) {
     if (!selectedEnvironment || !bodyRef.current) return;
     event.preventDefault();
+    resizeCleanupRef.current?.();
 
     const startY = event.clientY;
     const startHeight = terminalUi.heightPx;
@@ -112,17 +122,26 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
       setTerminalHeight(selectedEnvironment.id, nextHeight);
     };
 
-    const handlePointerUp = () => {
+    const cleanupResize = () => {
       window.removeEventListener("mousemove", handlePointerMove);
       window.removeEventListener("mouseup", handlePointerUp);
+      window.removeEventListener("blur", handlePointerUp);
       document.body.style.removeProperty("cursor");
       document.body.style.removeProperty("user-select");
+      if (resizeCleanupRef.current === cleanupResize) {
+        resizeCleanupRef.current = null;
+      }
+    };
+    const handlePointerUp = () => {
+      cleanupResize();
     };
 
+    resizeCleanupRef.current = cleanupResize;
     document.body.style.setProperty("cursor", "row-resize");
     document.body.style.setProperty("user-select", "none");
     window.addEventListener("mousemove", handlePointerMove);
     window.addEventListener("mouseup", handlePointerUp);
+    window.addEventListener("blur", handlePointerUp);
   }
 
   return (

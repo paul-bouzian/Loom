@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_TERMINAL_HEIGHT_PX,
@@ -7,8 +7,17 @@ import {
   useTerminalStore,
 } from "./terminal-store";
 
+const STORAGE_KEY = "threadex-terminal-ui:v1";
+
 describe("terminal-store", () => {
   beforeEach(() => {
+    const storage = new Map<string, string>([[STORAGE_KEY, "{}"]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      },
+    });
     useTerminalStore.setState({
       environments: {},
     });
@@ -60,5 +69,48 @@ describe("terminal-store", () => {
     const state = selectEnvironmentTerminalUi("env-1")(useTerminalStore.getState());
     expect(state.heightPx).toBe(MIN_TERMINAL_HEIGHT_PX);
     expect(useTerminalStore.getState().environments["env-2"]).toBeUndefined();
+  });
+
+  it("hydrates malformed stored tabs without dropping other environments", async () => {
+    localStorage.setItem(
+      "threadex-terminal-ui:v1",
+      JSON.stringify({
+        "env-bad": {
+          open: true,
+          heightPx: 320,
+          tabs: {},
+          activeTerminalId: "missing",
+        },
+        "env-good": {
+          open: true,
+          heightPx: 360,
+          tabs: [{ id: "terminal-1", title: "Old title" }],
+          activeTerminalId: "terminal-1",
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const terminalStoreModule = await import("./terminal-store");
+
+    const badState = terminalStoreModule.selectEnvironmentTerminalUi("env-bad")(
+      terminalStoreModule.useTerminalStore.getState(),
+    );
+    const goodState = terminalStoreModule.selectEnvironmentTerminalUi("env-good")(
+      terminalStoreModule.useTerminalStore.getState(),
+    );
+
+    expect(badState).toEqual({
+      open: false,
+      heightPx: 320,
+      tabs: [],
+      activeTerminalId: null,
+    });
+    expect(goodState).toEqual({
+      open: true,
+      heightPx: 360,
+      tabs: [{ id: "terminal-1", title: "Terminal 1" }],
+      activeTerminalId: "terminal-1",
+    });
   });
 });
