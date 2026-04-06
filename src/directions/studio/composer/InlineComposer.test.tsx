@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -313,7 +313,7 @@ describe("InlineComposer image attachments", () => {
 
     expect(onSend).toHaveBeenCalledWith("", [
       { type: "localImage", path: "/tmp/screenshot.png" },
-    ]);
+    ], []);
   });
 
   it("ignores picker failures and keeps the composer usable", async () => {
@@ -327,7 +327,7 @@ describe("InlineComposer image attachments", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 
-    expect(onSend).toHaveBeenCalledWith("Retry after picker failure", []);
+    expect(onSend).toHaveBeenCalledWith("Retry after picker failure", [], []);
     expect(screen.queryByLabelText("Attached images")).toBeNull();
   });
 
@@ -474,10 +474,7 @@ function renderComposer(
   options: {
     disabled?: boolean;
     modelOptions?: typeof capabilitiesFixture.models;
-    onSend?: (
-      text: string,
-      images: Array<{ type: "image"; url: string } | { type: "localImage"; path: string }>,
-    ) => void;
+    onSend?: ComponentProps<typeof InlineComposer>["onSend"];
   } = {},
 ) {
   function Harness() {
@@ -513,9 +510,7 @@ function renderComposer(
         onChangeDraft={setDraft}
         onChangeMentionBindings={setMentionBindings}
         onInterrupt={() => undefined}
-        onSend={(text, nextImages) =>
-          options.onSend?.(text, nextImages)
-        }
+        onSend={(...args) => options.onSend?.(...args)}
         onUpdateComposer={() => undefined}
       />
     );

@@ -192,6 +192,7 @@ export function InlineComposer({
   } = useComposerImageInput({
     disabled: inputDisabled,
     imagesEnabled,
+    scopeKey: threadId,
     setImages: onChangeImages,
   });
 

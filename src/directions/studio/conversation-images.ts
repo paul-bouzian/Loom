@@ -11,6 +11,9 @@ export const IMAGE_FILE_EXTENSIONS = [
   "webp",
 ] as const;
 
+// Keep aligned with the Rust image preview guard in `system.rs`.
+export const MAX_CONVERSATION_IMAGE_BYTES = 25 * 1024 * 1024;
+
 const IMAGE_FILE_MIME_TYPES = [
   "image/png",
   "image/jpeg",
@@ -32,7 +35,7 @@ export function conversationImageLabel(image: ConversationImageAttachment) {
 }
 
 export function modelSupportsImageInput(model?: ModelOption | null) {
-  return (model?.inputModalities ?? ["text", "image"]).includes("image");
+  return (model?.inputModalities ?? ["text"]).includes("image");
 }
 
 export function modelImageSupportMessage(model?: ModelOption | null) {
@@ -50,7 +53,7 @@ export function normalizeDialogSelection(
 }
 
 export function isSupportedImagePath(path: string) {
-  const extension = path.split(".").pop()?.toLowerCase() ?? "";
+  const extension = path.trim().split(".").pop()?.toLowerCase() ?? "";
   return IMAGE_FILE_EXTENSIONS.includes(
     extension as (typeof IMAGE_FILE_EXTENSIONS)[number],
   );
@@ -69,6 +72,9 @@ export function isSupportedImageFile(file: File) {
 }
 
 export async function readFileAsDataUrl(file: File): Promise<string> {
+  if (file.size > MAX_CONVERSATION_IMAGE_BYTES) {
+    throw new Error("Image exceeds the 25 MiB preview limit.");
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {

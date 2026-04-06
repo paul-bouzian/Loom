@@ -23,6 +23,7 @@ import {
 type Props = {
   disabled: boolean;
   imagesEnabled: boolean;
+  scopeKey: string;
   setImages: Dispatch<SetStateAction<ConversationImageAttachment[]>>;
 };
 
@@ -67,6 +68,13 @@ function isFileTransfer(types: readonly string[] | undefined) {
   return Boolean(types?.some((type) => FILE_TRANSFER_TYPES.includes(type)));
 }
 
+function pathsToLocalImages(paths: string[]) {
+  return paths
+    .filter((path) => path.trim().length > 0)
+    .filter(isSupportedImagePath)
+    .map((path) => ({ type: "localImage", path }) as const);
+}
+
 async function readImageFilesAsDataUrls(files: File[]) {
   const results = await Promise.allSettled(
     files.map(async (file) => ({
@@ -82,13 +90,21 @@ async function readImageFilesAsDataUrls(files: File[]) {
 export function useComposerImageInput({
   disabled,
   imagesEnabled,
+  scopeKey,
   setImages,
 }: Props) {
   const dropTargetRef = useRef<HTMLDivElement | null>(null);
   const lastClientPositionRef = useRef<DragPosition | null>(null);
   const disabledRef = useRef(disabled);
   const imagesEnabledRef = useRef(imagesEnabled);
+  const scopeKeyRef = useRef(scopeKey);
+  const scopeVersionRef = useRef(0);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  if (scopeKeyRef.current !== scopeKey) {
+    scopeKeyRef.current = scopeKey;
+    scopeVersionRef.current += 1;
+  }
 
   useEffect(() => {
     disabledRef.current = disabled;
@@ -122,6 +138,7 @@ export function useComposerImageInput({
     if (disabled || !imagesEnabled) {
       return;
     }
+    const scopeVersion = scopeVersionRef.current;
     let selection: string | string[] | null;
     try {
       selection = await open({
@@ -136,11 +153,10 @@ export function useComposerImageInput({
     } catch {
       return;
     }
-    const paths = normalizeDialogSelection(selection)
-      .map((path) => path.trim())
-      .filter((path) => path.length > 0)
-      .filter(isSupportedImagePath)
-      .map((path) => ({ type: "localImage", path }) as const);
+    if (scopeVersion !== scopeVersionRef.current) {
+      return;
+    }
+    const paths = pathsToLocalImages(normalizeDialogSelection(selection));
     appendImages(paths);
   }
 
@@ -182,13 +198,7 @@ export function useComposerImageInput({
           if (!inside) {
             return;
           }
-          appendImages(
-            event.payload.paths
-              .map((path) => path.trim())
-              .filter((path) => path.length > 0)
-              .filter(isSupportedImagePath)
-              .map((path) => ({ type: "localImage", path }) as const),
-          );
+          appendImages(pathsToLocalImages(event.payload.paths));
         }
       })
       .then((cleanup) => {
@@ -236,18 +246,20 @@ export function useComposerImageInput({
     if (disabled || !imagesEnabled) {
       return;
     }
+    const scopeVersion = scopeVersionRef.current;
 
     const files = Array.from(event.dataTransfer?.files ?? []);
-    const pathImages = files
-      .map((file) => (file as File & { path?: string }).path ?? "")
-      .filter((path) => path.length > 0)
-      .filter(isSupportedImagePath)
-      .map((path) => ({ type: "localImage", path }) as const);
+    const pathImages = pathsToLocalImages(
+      files.map((file) => (file as File & { path?: string }).path ?? ""),
+    );
     const dataImages = await readImageFilesAsDataUrls(
       files
         .filter((file) => isSupportedImageFile(file))
         .filter((file) => !((file as File & { path?: string }).path ?? "")),
     );
+    if (scopeVersion !== scopeVersionRef.current) {
+      return;
+    }
     appendImages([...pathImages, ...dataImages]);
   }
 
@@ -255,6 +267,7 @@ export function useComposerImageInput({
     if (disabled || !imagesEnabled) {
       return;
     }
+    const scopeVersion = scopeVersionRef.current;
     const files = Array.from(event.clipboardData?.items ?? [])
       .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
@@ -265,6 +278,9 @@ export function useComposerImageInput({
     }
     event.preventDefault();
     const dataImages = await readImageFilesAsDataUrls(files);
+    if (scopeVersion !== scopeVersionRef.current) {
+      return;
+    }
     appendImages(dataImages);
   }
 
