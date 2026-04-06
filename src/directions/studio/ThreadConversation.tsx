@@ -148,8 +148,11 @@ export function ThreadConversation({ environment, thread }: Props) {
   const isMutating = isPending || isSubmitting;
   const hasDraftContent = draft.trim().length > 0;
   const hasAttachedImages = images.length > 0;
+  const missingRequiredContent = isRefiningPlan
+    ? !hasDraftContent
+    : !hasDraftContent && !hasAttachedImages;
   const sendDisabled =
-    ((!hasDraftContent && !hasAttachedImages) ||
+    (missingRequiredContent ||
       (hasAttachedImages && !selectedModelSupportsImages) ||
       isRunning ||
       isMutating ||

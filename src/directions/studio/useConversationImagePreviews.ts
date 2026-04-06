@@ -15,7 +15,30 @@ export type ConversationImagePreview = {
   previewUrl: string | null;
 };
 
+const MAX_PREVIEW_CACHE_ENTRIES = 64;
 const previewCache = new Map<string, string>();
+
+function getCachedPreview(path: string) {
+  const previewUrl = previewCache.get(path) ?? null;
+  if (!previewUrl) {
+    return null;
+  }
+  previewCache.delete(path);
+  previewCache.set(path, previewUrl);
+  return previewUrl;
+}
+
+function cachePreview(path: string, previewUrl: string) {
+  previewCache.delete(path);
+  previewCache.set(path, previewUrl);
+  while (previewCache.size > MAX_PREVIEW_CACHE_ENTRIES) {
+    const oldestKey = previewCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    previewCache.delete(oldestKey);
+  }
+}
 
 export function useConversationImagePreviews(
   images: ConversationImageAttachment[] | null | undefined,
@@ -36,7 +59,7 @@ export function useConversationImagePreviews(
         continue;
       }
       const path = image.path;
-      if (previewCache.has(path) || loadingPathsRef.current.has(path)) {
+      if (getCachedPreview(path) || loadingPathsRef.current.has(path)) {
         continue;
       }
       loadingPathsRef.current.add(path);
@@ -48,7 +71,7 @@ export function useConversationImagePreviews(
 
       void readImageAsDataUrl(path)
         .then((previewUrl) => {
-          previewCache.set(path, previewUrl);
+          cachePreview(path, previewUrl);
           loadingPathsRef.current.delete(path);
           if (cancelled) {
             return;
@@ -87,7 +110,7 @@ export function useConversationImagePreviews(
         };
       }
 
-      const cached = previewCache.get(image.path);
+      const cached = previewCache.get(image.path) ?? null;
       const local = localPreviews[image.path];
       return {
         attachment: image,

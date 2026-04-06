@@ -768,6 +768,39 @@ describe("ThreadConversation", () => {
     });
   });
 
+  it("requires text before sending a plan refinement even with attached images", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "waitingForExternalAction",
+        composer: { ...baseComposer, collaborationMode: "plan" },
+        proposedPlan: makeProposedPlan(),
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue(["/tmp/diagram.png"]);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Refine" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Attach images" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("diagram.png")).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole("button", { name: "Refine plan" })).toBeDisabled();
+    expect(mockedBridge.submitPlanDecision).not.toHaveBeenCalled();
+  });
+
   it("leaves refine mode on Escape", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({

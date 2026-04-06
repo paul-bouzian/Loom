@@ -67,6 +67,18 @@ function isFileTransfer(types: readonly string[] | undefined) {
   return Boolean(types?.some((type) => FILE_TRANSFER_TYPES.includes(type)));
 }
 
+async function readImageFilesAsDataUrls(files: File[]) {
+  const results = await Promise.allSettled(
+    files.map(async (file) => ({
+      type: "image" as const,
+      url: await readFileAsDataUrl(file),
+    })),
+  );
+  return results.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : [],
+  );
+}
+
 export function useComposerImageInput({
   disabled,
   imagesEnabled,
@@ -99,15 +111,20 @@ export function useComposerImageInput({
     if (disabled || !imagesEnabled) {
       return;
     }
-    const selection = await open({
-      multiple: true,
-      filters: [
-        {
-          name: "Images",
-          extensions: [...IMAGE_FILE_EXTENSIONS],
-        },
-      ],
-    });
+    let selection: string | string[] | null;
+    try {
+      selection = await open({
+        multiple: true,
+        filters: [
+          {
+            name: "Images",
+            extensions: [...IMAGE_FILE_EXTENSIONS],
+          },
+        ],
+      });
+    } catch {
+      return;
+    }
     const paths = normalizeDialogSelection(selection)
       .map((path) => path.trim())
       .filter((path) => path.length > 0)
@@ -215,14 +232,10 @@ export function useComposerImageInput({
       .filter((path) => path.length > 0)
       .filter(isSupportedImagePath)
       .map((path) => ({ type: "localImage", path }) as const);
-    const dataImages = await Promise.all(
+    const dataImages = await readImageFilesAsDataUrls(
       files
         .filter((file) => isSupportedImageFile(file))
-        .filter((file) => !((file as File & { path?: string }).path ?? ""))
-        .map(async (file) => ({
-          type: "image" as const,
-          url: await readFileAsDataUrl(file),
-        })),
+        .filter((file) => !((file as File & { path?: string }).path ?? "")),
     );
     appendImages([...pathImages, ...dataImages]);
   }
@@ -240,12 +253,7 @@ export function useComposerImageInput({
       return;
     }
     event.preventDefault();
-    const dataImages = await Promise.all(
-      files.map(async (file) => ({
-        type: "image" as const,
-        url: await readFileAsDataUrl(file),
-      })),
-    );
+    const dataImages = await readImageFilesAsDataUrls(files);
     appendImages(dataImages);
   }
 

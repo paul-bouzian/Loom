@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -314,6 +314,79 @@ describe("InlineComposer image attachments", () => {
     expect(onSend).toHaveBeenCalledWith("", [
       { type: "localImage", path: "/tmp/screenshot.png" },
     ]);
+  });
+
+  it("ignores picker failures and keeps the composer usable", async () => {
+    const onSend = vi.fn();
+    vi.mocked(open).mockRejectedValue(new Error("dialog failed"));
+
+    renderComposer("Retry after picker failure", { onSend });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Attach images" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(onSend).toHaveBeenCalledWith("Retry after picker failure", []);
+    expect(screen.queryByLabelText("Attached images")).toBeNull();
+  });
+
+  it("keeps successful pasted images when one file read fails", async () => {
+    const originalFileReader = window.FileReader;
+    class FakeFileReader {
+      public result: string | ArrayBuffer | null = null;
+      public error: DOMException | null = null;
+      public onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+      public onerror: ((event: ProgressEvent<FileReader>) => void) | null = null;
+
+      readAsDataURL(file: File) {
+        queueMicrotask(() => {
+          if (file.name === "broken.png") {
+            this.error = new DOMException("failed");
+            this.onerror?.(new ProgressEvent("error") as ProgressEvent<FileReader>);
+            return;
+          }
+          this.result = "data:image/png;base64,c3VjY2Vzcw==";
+          this.onload?.(new ProgressEvent("load") as ProgressEvent<FileReader>);
+        });
+      }
+    }
+
+    Object.defineProperty(window, "FileReader", {
+      configurable: true,
+      value: FakeFileReader,
+    });
+
+    try {
+      renderComposer("");
+
+      const input = await screen.findByPlaceholderText("Message ThreadEx...");
+      fireEvent.paste(input, {
+        clipboardData: {
+          items: [
+            {
+              kind: "file",
+              getAsFile: () =>
+                new File(["ok"], "success.png", { type: "image/png" }),
+            },
+            {
+              kind: "file",
+              getAsFile: () =>
+                new File(["nope"], "broken.png", { type: "image/png" }),
+            },
+          ],
+        },
+      });
+
+      await waitFor(() => {
+        expect(screen.getAllByText("Pasted image")).toHaveLength(1);
+      });
+    } finally {
+      Object.defineProperty(window, "FileReader", {
+        configurable: true,
+        value: originalFileReader,
+      });
+    }
   });
 
   it("disables image attachments when the selected model lacks image input", async () => {

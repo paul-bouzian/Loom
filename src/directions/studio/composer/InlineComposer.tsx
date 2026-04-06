@@ -172,9 +172,12 @@ export function InlineComposer({
   });
   const inputDisabled = baseInputDisabled || voiceBusy;
   const controlsDisabled = baseControlsDisabled || voiceBusy;
+  const missingRequiredContent = isRefiningPlan
+    ? !hasDraftContent
+    : !hasDraftContent && !hasAttachedImages;
   const sendDisabled =
     inputDisabled ||
-    (!hasDraftContent && !hasAttachedImages) ||
+    missingRequiredContent ||
     (hasAttachedImages && !imagesEnabled);
   const {
     dropTargetRef,

@@ -470,7 +470,7 @@ pub struct ReasoningEffortOptionWire {
 }
 
 fn default_input_modalities() -> Vec<InputModality> {
-    vec![InputModality::Text, InputModality::Image]
+    vec![InputModality::Text]
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -640,7 +640,7 @@ pub fn collaboration_mode_payload(composer: &ConversationComposerSettings) -> Va
 
 pub fn user_input_payload(input: &OutgoingUserInputPayload) -> Value {
     let mut payload = Vec::new();
-    if !input.text.is_empty() {
+    if !input.text.is_empty() || !input.text_elements.is_empty() {
         payload.push(json!({
             "type": "text",
             "text": input.text,
@@ -995,8 +995,8 @@ pub fn normalize_item(value: &Value) -> Option<ConversationItem> {
             let content = value
                 .get("content")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             let text = content
                 .iter()
                 .map(user_content_to_visible_text)

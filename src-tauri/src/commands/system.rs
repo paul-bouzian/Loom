@@ -111,6 +111,7 @@ const ICON_CANDIDATES: &[&str] = &[
     "electron/icon.png",
     ".github/icon.png",
 ];
+const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
 
 #[tauri::command]
 pub fn get_project_icon(root_path: String) -> Option<String> {
@@ -138,13 +139,20 @@ pub fn read_image_as_data_url(path: String) -> Result<String, CommandError> {
 }
 
 fn image_data_url(path: &Path) -> crate::error::AppResult<String> {
-    let bytes = std::fs::read(path)?;
     let mime = image_mime_type(path).ok_or_else(|| {
         AppError::Validation(format!(
             "Unsupported image type for preview: {}",
             path.display()
         ))
     })?;
+    let metadata = std::fs::metadata(path)?;
+    if metadata.len() > MAX_IMAGE_BYTES {
+        return Err(AppError::Validation(format!(
+            "Image exceeds the 25 MiB preview limit: {}",
+            path.display()
+        )));
+    }
+    let bytes = std::fs::read(path)?;
     let encoded = STANDARD.encode(bytes);
     Ok(format!("data:{mime};base64,{encoded}"))
 }
@@ -165,7 +173,8 @@ fn image_mime_type(path: &Path) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{image_data_url, image_mime_type};
+    use super::{image_data_url, image_mime_type, MAX_IMAGE_BYTES};
+    use crate::error::AppError;
 
     #[test]
     fn mime_type_is_detected_from_known_icon_extensions() {
@@ -199,6 +208,25 @@ mod tests {
 
         let data_url = image_data_url(&icon_path).expect("data url should be generated");
         assert!(data_url.starts_with("data:image/png;base64,"));
+
+        let _ = std::fs::remove_file(icon_path);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn image_data_url_rejects_files_that_exceed_the_preview_limit() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "threadex-image-limit-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("temp directory should exist");
+        let icon_path = temp_dir.join("oversized.png");
+        std::fs::File::create(&icon_path)
+            .and_then(|file| file.set_len(MAX_IMAGE_BYTES + 1))
+            .expect("oversized image file should be created");
+
+        let error = image_data_url(&icon_path).expect_err("oversized image should fail");
+        assert!(matches!(error, AppError::Validation(message) if message.contains("25 MiB")));
 
         let _ = std::fs::remove_file(icon_path);
         let _ = std::fs::remove_dir_all(temp_dir);
