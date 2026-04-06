@@ -50,6 +50,7 @@ export function TerminalPanel({ environment, terminalId }: Props) {
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(host);
+    terminal.focus();
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
@@ -66,6 +67,10 @@ export function TerminalPanel({ environment, terminalId }: Props) {
         .catch(() => undefined);
     };
     terminal.onData(handleData);
+    const handlePointerDown = () => {
+      terminal.focus();
+    };
+    host.addEventListener("mousedown", handlePointerDown);
 
     const themeObserver = new MutationObserver(() => {
       applyTerminalTheme(terminal);
@@ -79,6 +84,7 @@ export function TerminalPanel({ environment, terminalId }: Props) {
     return () => {
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
+      host.removeEventListener("mousedown", handlePointerDown);
       themeObserver.disconnect();
       terminal.dispose();
       terminalRef.current = null;
@@ -160,6 +166,7 @@ export function TerminalPanel({ environment, terminalId }: Props) {
           terminal.write(openedSnapshot.history);
         }
         setSnapshot(openedSnapshot);
+        terminal.focus();
         latestSequence = openedSnapshot.eventSequence;
         ready = true;
         for (const payload of bufferedEvents.sort(

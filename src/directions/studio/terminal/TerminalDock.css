@@ -2,9 +2,8 @@
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 0;
-  margin: 0 var(--tx-space-xl) var(--tx-space-lg);
-  border: 1px solid var(--tx-border-subtle);
-  border-radius: var(--tx-radius-lg);
+  margin: 0;
+  border-top: 1px solid var(--tx-border-subtle);
   background: var(--tx-bg-raised);
   overflow: hidden;
 }
@@ -26,9 +25,7 @@
 .terminal-dock__header {
   display: flex;
   align-items: center;
-  gap: var(--tx-space-sm);
   min-height: 38px;
-  padding: 0 var(--tx-space-md);
   border-bottom: 1px solid var(--tx-border-subtle);
   background: color-mix(in srgb, var(--tx-bg-base) 88%, var(--tx-bg-raised));
 }
@@ -41,6 +38,7 @@
   flex: 1;
   overflow-x: auto;
   scrollbar-width: none;
+  padding: 0 var(--tx-space-sm);
 }
 
 .terminal-dock__tabs::-webkit-scrollbar {
@@ -102,22 +100,12 @@
   background: var(--tx-bg-active);
 }
 
-.terminal-dock__action {
-  display: inline-flex;
-  align-items: center;
+.terminal-dock__tab-add {
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--tx-radius-sm);
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
   color: var(--tx-text-muted);
-  transition:
-    color var(--tx-transition-fast),
-    background var(--tx-transition-fast);
-}
-
-.terminal-dock__action:hover {
-  color: var(--tx-text-primary);
-  background: var(--tx-bg-hover);
 }
 
 .terminal-dock__body {
@@ -181,7 +169,6 @@
 
 .terminal-panel__xterm {
   height: 100%;
-  padding: 10px 12px 12px;
 }
 
 .terminal-panel__overlay {

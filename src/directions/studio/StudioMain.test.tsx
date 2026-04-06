@@ -31,16 +31,21 @@ vi.mock("./terminal/TerminalDock", () => ({
   TerminalDock: ({
     tabs,
     activeTerminalId,
+    onCreateTerminal,
     onCloseTerminal,
     onResizeStart,
   }: {
     tabs: Array<{ id: string; title: string }>;
     activeTerminalId: string | null;
+    onCreateTerminal: () => void;
     onCloseTerminal: (terminalId: string) => void;
     onResizeStart: (event: React.MouseEvent<HTMLDivElement>) => void;
   }) => (
     <div data-testid="terminal-dock">
       <div data-testid="terminal-resizer" onMouseDown={onResizeStart} />
+      <button type="button" onClick={onCreateTerminal}>
+        new-terminal
+      </button>
       {tabs.map((tab) => (
         <div key={tab.id}>
           <span>
@@ -96,6 +101,18 @@ describe("StudioMain", () => {
 
     expect(screen.getByTestId("terminal-dock")).toBeInTheDocument();
     expect(screen.getByText(/Terminal 1:active/i)).toBeInTheDocument();
+  });
+
+  it("creates additional terminal tabs from the dock", async () => {
+    render(<StudioMain inspectorOpen={false} onToggleInspector={vi.fn()} />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show terminal" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "new-terminal" }));
+
+    expect(screen.getByText(/Terminal 1:idle/i)).toBeInTheDocument();
+    expect(screen.getByText(/Terminal 2:active/i)).toBeInTheDocument();
   });
 
   it("hides the terminal toggle when no environment is selected", () => {

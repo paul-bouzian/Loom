@@ -66,16 +66,16 @@ export function TerminalDock({
               </button>
             </div>
           ))}
+          <button
+            type="button"
+            className="terminal-dock__tab terminal-dock__tab-add"
+            aria-label="New terminal"
+            title="New terminal"
+            onClick={onCreateTerminal}
+          >
+            <PlusIcon size={12} />
+          </button>
         </div>
-        <button
-          type="button"
-          className="terminal-dock__action"
-          aria-label="New terminal"
-          title="New terminal"
-          onClick={onCreateTerminal}
-        >
-          <PlusIcon size={12} />
-        </button>
       </div>
       <div className="terminal-dock__body">
         {activeTerminal ? (
