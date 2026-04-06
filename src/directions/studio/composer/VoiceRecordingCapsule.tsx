@@ -9,7 +9,6 @@ type Props = {
   isRecording: boolean;
   isTranscribing: boolean;
   onDismissError: () => void;
-  unavailableMessage: string | null;
 };
 
 export function VoiceRecordingCapsule({
@@ -19,9 +18,8 @@ export function VoiceRecordingCapsule({
   isRecording,
   isTranscribing,
   onDismissError,
-  unavailableMessage,
 }: Props) {
-  if (!isRecording && !isTranscribing && !errorMessage && !unavailableMessage) {
+  if (!isRecording && !isTranscribing && !errorMessage) {
     return null;
   }
 
@@ -53,24 +51,6 @@ export function VoiceRecordingCapsule({
     );
   }
 
-  if (unavailableMessage) {
-    return (
-      <div
-        className="tx-voice-capsule tx-voice-capsule--unavailable"
-        role="status"
-        aria-live="polite"
-      >
-        <div className="tx-voice-capsule__header">
-          <div className="tx-voice-capsule__title-group">
-            <span className="tx-voice-capsule__eyebrow">Voice</span>
-            <span className="tx-voice-capsule__title">Voice unavailable</span>
-          </div>
-        </div>
-        <div className="tx-voice-capsule__body">{unavailableMessage}</div>
-      </div>
-    );
-  }
-
   if (isRecording) {
     return (
       <div
@@ -83,7 +63,7 @@ export function VoiceRecordingCapsule({
             <span className="tx-voice-capsule__eyebrow">Voice</span>
             <span className="tx-voice-capsule__title">Listening</span>
           </div>
-          <span className="tx-voice-capsule__duration">
+          <span className="tx-voice-capsule__duration" aria-hidden="true">
             {formatDuration(durationMs)}
           </span>
         </div>
@@ -109,7 +89,7 @@ export function VoiceRecordingCapsule({
             Transcribing voice note
           </span>
         </div>
-        <span className="tx-voice-capsule__duration">
+        <span className="tx-voice-capsule__duration" aria-hidden="true">
           {formatDuration(durationMs)}
         </span>
       </div>

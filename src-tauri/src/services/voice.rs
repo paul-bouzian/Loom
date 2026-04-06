@@ -101,10 +101,26 @@ impl VoiceService {
             )
             .await
         {
-            Ok(status) => Ok(voice_status_snapshot_from_auth_status(
-                environment_id,
-                &status,
-            )),
+            Ok(status) => {
+                let status = if auth_status_needs_token_probe(&status) {
+                    runtime
+                        .read_auth_status(
+                            environment_id,
+                            &environment_path,
+                            codex_binary_path,
+                            true,
+                            false,
+                        )
+                        .await?
+                } else {
+                    status
+                };
+
+                Ok(voice_status_snapshot_from_auth_status(
+                    environment_id,
+                    &status,
+                ))
+            }
             Err(error) if is_get_auth_status_unavailable(&error) => {
                 let account = runtime
                     .read_account(environment_id, &environment_path, codex_binary_path, false)
@@ -303,8 +319,9 @@ fn voice_status_snapshot_from_auth_status(
         Some(VoiceAuthMode::Chatgpt | VoiceAuthMode::ChatgptAuthTokens)
     );
     let requires_openai_auth = auth_status.requires_openai_auth.unwrap_or(false);
+    let has_token = auth_status_has_token(auth_status);
 
-    if is_chatgpt && !requires_openai_auth {
+    if is_chatgpt && (has_token || !requires_openai_auth) {
         return EnvironmentVoiceStatusSnapshot {
             environment_id: environment_id.to_string(),
             available: true,
@@ -385,6 +402,21 @@ fn voice_status_snapshot_from_account(
         unavailable_reason: Some(unavailable_reason),
         message: Some(message.to_string()),
     }
+}
+
+fn auth_status_needs_token_probe(auth_status: &AppServerAuthStatus) -> bool {
+    matches!(
+        auth_status.auth_method,
+        Some(VoiceAuthMode::Chatgpt | VoiceAuthMode::ChatgptAuthTokens)
+    ) && !auth_status_has_token(auth_status)
+        && auth_status.requires_openai_auth.unwrap_or(true)
+}
+
+fn auth_status_has_token(auth_status: &AppServerAuthStatus) -> bool {
+    auth_status
+        .auth_token
+        .as_deref()
+        .is_some_and(|token| !token.trim().is_empty())
 }
 
 fn voice_auth_mode_from_account_type(
@@ -531,7 +563,7 @@ fn estimated_decoded_base64_len(normalized_len: usize) -> AppResult<usize> {
 }
 
 fn validate_wav_buffer(audio_bytes: &[u8], expected_sample_rate_hz: u32) -> AppResult<()> {
-    if audio_bytes.len() < 44 {
+    if audio_bytes.len() < 12 {
         return Err(AppError::Validation(
             "The recorded audio is not a valid WAV file.".to_string(),
         ));
@@ -543,17 +575,97 @@ fn validate_wav_buffer(audio_bytes: &[u8], expected_sample_rate_hz: u32) -> AppR
         ));
     }
 
-    if &audio_bytes[12..16] != b"fmt " || &audio_bytes[36..40] != b"data" {
+    let riff_size = usize::try_from(read_u32_le(audio_bytes, 4)?).map_err(|_| {
+        AppError::Validation("The recorded audio is not a valid WAV file.".to_string())
+    })?;
+    let expected_total_size = riff_size.checked_add(8).ok_or_else(|| {
+        AppError::Validation("The recorded audio is not a valid WAV file.".to_string())
+    })?;
+    if expected_total_size != audio_bytes.len() {
         return Err(AppError::Validation(
             "The recorded audio is not a valid WAV file.".to_string(),
         ));
     }
 
-    let audio_format = read_u16_le(audio_bytes, 20)?;
-    let channels = read_u16_le(audio_bytes, 22)?;
-    let sample_rate_hz = read_u32_le(audio_bytes, 24)?;
-    let bits_per_sample = read_u16_le(audio_bytes, 34)?;
-    let data_size = read_u32_le(audio_bytes, 40)? as usize;
+    let mut audio_format = None;
+    let mut channels = None;
+    let mut sample_rate_hz = None;
+    let mut bits_per_sample = None;
+    let mut data_size = None;
+    let mut offset = 12usize;
+
+    while offset < audio_bytes.len() {
+        let chunk_id = audio_bytes.get(offset..offset + 4).ok_or_else(|| {
+            AppError::Validation("The recorded audio is not a valid WAV file.".to_string())
+        })?;
+        let chunk_size = usize::try_from(read_u32_le(audio_bytes, offset + 4)?).map_err(|_| {
+            AppError::Validation("The recorded audio is not a valid WAV file.".to_string())
+        })?;
+        let chunk_payload_offset = offset.checked_add(8).ok_or_else(|| {
+            AppError::Validation("The recorded audio is not a valid WAV file.".to_string())
+        })?;
+        let chunk_end = chunk_payload_offset
+            .checked_add(chunk_size)
+            .ok_or_else(|| {
+                AppError::Validation("The recorded audio is not a valid WAV file.".to_string())
+            })?;
+        if chunk_end > audio_bytes.len() {
+            return Err(AppError::Validation(
+                "The recorded audio is not a valid WAV file.".to_string(),
+            ));
+        }
+
+        match chunk_id {
+            b"fmt " => {
+                if chunk_size < 16 {
+                    return Err(AppError::Validation(
+                        "The recorded audio is not a valid WAV file.".to_string(),
+                    ));
+                }
+                audio_format = Some(read_u16_le(audio_bytes, chunk_payload_offset)?);
+                channels = Some(read_u16_le(audio_bytes, chunk_payload_offset + 2)?);
+                sample_rate_hz = Some(read_u32_le(audio_bytes, chunk_payload_offset + 4)?);
+                bits_per_sample = Some(read_u16_le(audio_bytes, chunk_payload_offset + 14)?);
+            }
+            b"data" => {
+                data_size = Some(chunk_size);
+            }
+            _ => {}
+        }
+
+        let padded_chunk_size = chunk_size + (chunk_size % 2);
+        offset = chunk_payload_offset
+            .checked_add(padded_chunk_size)
+            .ok_or_else(|| {
+                AppError::Validation("The recorded audio is not a valid WAV file.".to_string())
+            })?;
+    }
+
+    let Some(audio_format) = audio_format else {
+        return Err(AppError::Validation(
+            "The recorded audio is not a valid WAV file.".to_string(),
+        ));
+    };
+    let Some(channels) = channels else {
+        return Err(AppError::Validation(
+            "The recorded audio is not a valid WAV file.".to_string(),
+        ));
+    };
+    let Some(sample_rate_hz) = sample_rate_hz else {
+        return Err(AppError::Validation(
+            "The recorded audio is not a valid WAV file.".to_string(),
+        ));
+    };
+    let Some(bits_per_sample) = bits_per_sample else {
+        return Err(AppError::Validation(
+            "The recorded audio is not a valid WAV file.".to_string(),
+        ));
+    };
+    let Some(data_size) = data_size else {
+        return Err(AppError::Validation(
+            "The recorded audio is not a valid WAV file.".to_string(),
+        ));
+    };
 
     if audio_format != REQUIRED_AUDIO_FORMAT_PCM
         || channels != REQUIRED_CHANNELS
@@ -562,15 +674,6 @@ fn validate_wav_buffer(audio_bytes: &[u8], expected_sample_rate_hz: u32) -> AppR
     {
         return Err(AppError::Validation(
             "Voice transcription requires 24 kHz mono 16-bit PCM WAV audio.".to_string(),
-        ));
-    }
-
-    let expected_total_size = 44usize.checked_add(data_size).ok_or_else(|| {
-        AppError::Validation("The recorded audio is not a valid WAV file.".to_string())
-    })?;
-    if expected_total_size != audio_bytes.len() {
-        return Err(AppError::Validation(
-            "The recorded audio is not a valid WAV file.".to_string(),
         ));
     }
 
@@ -643,19 +746,19 @@ mod tests {
     use base64::Engine;
 
     use super::{
-        resolve_transcription_auth, transcription_request, validate_transcription_input,
-        voice_status_snapshot_from_account, voice_status_snapshot_from_auth_status,
-        AccountReadAuthTypeWire, AccountReadResponse, AppServerAuthStatus,
-        EnvironmentVoiceUnavailableReason, TranscribeEnvironmentVoiceInput, VoiceAuthMode,
-        CHATGPT_BROWSER_ACCEPT, CHATGPT_BROWSER_ACCEPT_LANGUAGE, CHATGPT_BROWSER_ORIGIN,
-        CHATGPT_BROWSER_REFERER, CHATGPT_BROWSER_USER_AGENT, CHATGPT_TRANSCRIPTIONS_URL,
-        MAX_AUDIO_BYTES,
+        auth_status_needs_token_probe, resolve_transcription_auth, transcription_request,
+        validate_transcription_input, voice_status_snapshot_from_account,
+        voice_status_snapshot_from_auth_status, AccountReadAuthTypeWire, AccountReadResponse,
+        AppServerAuthStatus, EnvironmentVoiceUnavailableReason, TranscribeEnvironmentVoiceInput,
+        VoiceAuthMode, CHATGPT_BROWSER_ACCEPT, CHATGPT_BROWSER_ACCEPT_LANGUAGE,
+        CHATGPT_BROWSER_ORIGIN, CHATGPT_BROWSER_REFERER, CHATGPT_BROWSER_USER_AGENT,
+        CHATGPT_TRANSCRIPTIONS_URL, MAX_AUDIO_BYTES,
     };
     use crate::error::AppError;
     use crate::runtime::protocol::AccountReadAccountWire;
 
     #[test]
-    fn marks_chatgpt_status_without_token_as_available() {
+    fn marks_chatgpt_status_without_token_as_available_when_auth_is_ready() {
         let snapshot = voice_status_snapshot_from_auth_status(
             "env-1",
             &AppServerAuthStatus {
@@ -668,6 +771,41 @@ mod tests {
         assert!(snapshot.available);
         assert_eq!(snapshot.auth_mode, Some(VoiceAuthMode::Chatgpt));
         assert_eq!(snapshot.unavailable_reason, None);
+    }
+
+    #[test]
+    fn marks_chatgpt_status_with_token_as_available_when_auth_probe_is_required() {
+        let snapshot = voice_status_snapshot_from_auth_status(
+            "env-1",
+            &AppServerAuthStatus {
+                auth_method: Some(VoiceAuthMode::Chatgpt),
+                auth_token: Some("chatgpt-token".to_string()),
+                requires_openai_auth: Some(true),
+            },
+        );
+
+        assert!(snapshot.available);
+        assert_eq!(snapshot.auth_mode, Some(VoiceAuthMode::Chatgpt));
+        assert_eq!(snapshot.unavailable_reason, None);
+    }
+
+    #[test]
+    fn probes_for_a_token_when_chatgpt_status_still_requires_openai_auth() {
+        assert!(auth_status_needs_token_probe(&AppServerAuthStatus {
+            auth_method: Some(VoiceAuthMode::Chatgpt),
+            auth_token: None,
+            requires_openai_auth: Some(true),
+        }));
+        assert!(!auth_status_needs_token_probe(&AppServerAuthStatus {
+            auth_method: Some(VoiceAuthMode::Chatgpt),
+            auth_token: Some("chatgpt-token".to_string()),
+            requires_openai_auth: Some(true),
+        }));
+        assert!(!auth_status_needs_token_probe(&AppServerAuthStatus {
+            auth_method: Some(VoiceAuthMode::ApiKey),
+            auth_token: None,
+            requires_openai_auth: Some(false),
+        }));
     }
 
     #[test]
@@ -740,6 +878,21 @@ mod tests {
             AppError::Validation(message)
                 if message.contains("2 minutes")
         ));
+    }
+
+    #[test]
+    fn accepts_wav_uploads_with_extra_riff_chunks() {
+        let result = validate_transcription_input(TranscribeEnvironmentVoiceInput {
+            environment_id: "env-1".to_string(),
+            mime_type: "audio/wav".to_string(),
+            sample_rate_hz: 24_000,
+            duration_ms: 1_250,
+            audio_base64: make_test_wav_base64_with_extra_chunk(),
+        })
+        .expect("wav with extra riff chunks should parse");
+
+        assert_eq!(result.mime_type, "audio/wav");
+        assert!(!result.audio_bytes.is_empty());
     }
 
     #[test]
@@ -851,27 +1004,51 @@ mod tests {
     }
 
     fn make_test_wav_base64() -> String {
-        make_test_wav_base64_with_duration_ms(1)
+        base64::engine::general_purpose::STANDARD.encode(make_test_wav_bytes(1, false))
     }
 
     fn make_test_wav_base64_with_duration_ms(duration_ms: u32) -> String {
+        base64::engine::general_purpose::STANDARD.encode(make_test_wav_bytes(duration_ms, false))
+    }
+
+    fn make_test_wav_base64_with_extra_chunk() -> String {
+        base64::engine::general_purpose::STANDARD.encode(make_test_wav_bytes(1_250, true))
+    }
+
+    fn make_test_wav_bytes(duration_ms: u32, include_extra_chunk: bool) -> Vec<u8> {
         let sample_count = ((duration_ms as u64) * 24_000).div_ceil(1000) as usize;
         let data_size = sample_count * 2;
-        let mut wav = Vec::with_capacity(44 + 32);
+        let mut fmt_payload = Vec::with_capacity(16);
+        fmt_payload.extend_from_slice(&(1_u16).to_le_bytes());
+        fmt_payload.extend_from_slice(&(1_u16).to_le_bytes());
+        fmt_payload.extend_from_slice(&(24_000_u32).to_le_bytes());
+        fmt_payload.extend_from_slice(&(48_000_u32).to_le_bytes());
+        fmt_payload.extend_from_slice(&(2_u16).to_le_bytes());
+        fmt_payload.extend_from_slice(&(16_u16).to_le_bytes());
+
+        let mut chunks: Vec<([u8; 4], Vec<u8>)> = vec![(*b"fmt ", fmt_payload)];
+        if include_extra_chunk {
+            chunks.push((*b"JUNK", vec![1, 2, 3]));
+        }
+        chunks.push((*b"data", vec![0; data_size]));
+
+        let riff_payload_size = chunks
+            .iter()
+            .map(|(_, payload)| 8 + payload.len() + (payload.len() % 2))
+            .sum::<usize>();
+        let mut wav = Vec::with_capacity(12 + riff_payload_size);
         wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&((36 + data_size) as u32).to_le_bytes());
+        wav.extend_from_slice(&((4 + riff_payload_size) as u32).to_le_bytes());
         wav.extend_from_slice(b"WAVE");
-        wav.extend_from_slice(b"fmt ");
-        wav.extend_from_slice(&(16_u32).to_le_bytes());
-        wav.extend_from_slice(&(1_u16).to_le_bytes());
-        wav.extend_from_slice(&(1_u16).to_le_bytes());
-        wav.extend_from_slice(&(24_000_u32).to_le_bytes());
-        wav.extend_from_slice(&(48_000_u32).to_le_bytes());
-        wav.extend_from_slice(&(2_u16).to_le_bytes());
-        wav.extend_from_slice(&(16_u16).to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&(data_size as u32).to_le_bytes());
-        wav.resize(44 + data_size, 0);
-        base64::engine::general_purpose::STANDARD.encode(wav)
+        for (chunk_id, payload) in chunks {
+            wav.extend_from_slice(&chunk_id);
+            wav.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            wav.extend_from_slice(&payload);
+            if payload.len() % 2 != 0 {
+                wav.push(0);
+            }
+        }
+
+        wav
     }
 }

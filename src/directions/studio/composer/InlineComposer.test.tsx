@@ -127,7 +127,7 @@ describe("InlineComposer voice dictation", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the unavailable reason when voice dictation cannot start", async () => {
+  it("disables the microphone button and exposes the unavailable reason via tooltip", async () => {
     mockedBridge.getEnvironmentVoiceStatus.mockResolvedValue({
       environmentId: "env-1",
       available: false,
@@ -145,11 +145,13 @@ describe("InlineComposer voice dictation", () => {
     await waitFor(() => {
       expect(startButton).toBeDisabled();
     });
+    expect(startButton.parentElement).toHaveAttribute(
+      "title",
+      "Voice transcription requires Sign in with ChatGPT. API-key auth is not supported.",
+    );
     expect(
-      await screen.findByText(
-        "Voice transcription requires Sign in with ChatGPT. API-key auth is not supported.",
-      ),
-    ).toBeInTheDocument();
+      screen.queryByText("Voice unavailable"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders a local error when transcription fails and preserves the draft", async () => {

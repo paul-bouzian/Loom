@@ -81,10 +81,6 @@ export function useComposerVoiceInput({
       "Voice transcription is unavailable right now."
     );
   }, [browserSupported, snapshot?.message, storeError]);
-  const unavailableMessage =
-    phase === "idle" && !voiceAvailable && (!loading || !browserSupported)
-      ? availabilityMessage
-      : null;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -271,6 +267,8 @@ export function useComposerVoiceInput({
       ? "Stop recording and transcribe"
       : phase === "starting"
         ? "Starting microphone capture"
+        : loading && browserSupported
+          ? "Checking voice transcription availability"
         : voiceAvailable
           ? "Record a voice message"
           : availabilityMessage;
@@ -291,7 +289,6 @@ export function useComposerVoiceInput({
       }
       void startRecording();
     },
-    unavailableMessage,
     voiceBusy: phase !== "idle",
     voiceDurationMs:
       phase === "recording" ? recordingDurationMs : transcribingDurationMs,

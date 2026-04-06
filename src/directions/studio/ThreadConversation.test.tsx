@@ -1033,6 +1033,7 @@ describe("ThreadConversation", () => {
     await userEvent.click(screen.getByRole("button", { name: "Approve plan" }));
 
     await waitFor(() => {
+      expect(mockedBridge.submitPlanDecision).toHaveBeenCalledTimes(1);
       expect(
         screen.getByPlaceholderText("Refine the proposed plan..."),
       ).toHaveValue("Keep the rollback section");

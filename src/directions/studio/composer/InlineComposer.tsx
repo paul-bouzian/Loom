@@ -125,7 +125,6 @@ export function InlineComposer({
     isTranscribing,
     onDismissError,
     onVoiceButtonClick,
-    unavailableMessage,
     voiceBusy,
     voiceDurationMs,
   } = useComposerVoiceInput({
@@ -430,7 +429,6 @@ export function InlineComposer({
           isRecording={isRecording}
           isTranscribing={isTranscribing}
           onDismissError={onDismissError}
-          unavailableMessage={unavailableMessage}
         />
       </div>
 
@@ -500,18 +498,19 @@ export function InlineComposer({
         </div>
         <div className="tx-composer__controls-right">
           <ContextWindowMeter usage={tokenUsage} />
-          <button
-            type="button"
-            className={`tx-composer__send-button tx-composer__voice-button ${
-              isRecording ? "tx-composer__voice-button--recording" : ""
-            }`}
-            aria-label={voiceButtonLabel}
-            title={voiceButtonTitle}
-            disabled={voiceButtonDisabled}
-            onClick={onVoiceButtonClick}
-          >
-            {isRecording ? <StopIcon size={10} /> : <MicIcon size={12} />}
-          </button>
+          <span className="tx-composer__voice-button-anchor" title={voiceButtonTitle}>
+            <button
+              type="button"
+              className={`tx-composer__voice-button ${
+                isRecording ? "tx-composer__voice-button--recording" : ""
+              }`}
+              aria-label={voiceButtonLabel}
+              disabled={voiceButtonDisabled}
+              onClick={onVoiceButtonClick}
+            >
+              {isRecording ? <StopIcon size={14} /> : <MicIcon size={18} />}
+            </button>
+          </span>
           {isBusy ? (
             <button
               type="button"

@@ -482,6 +482,7 @@ pub struct AccountRateLimitsReadResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AccountReadResponse {
     pub account: Option<AccountReadAccountWire>,
+    #[serde(default)]
     pub requires_openai_auth: bool,
 }
 
