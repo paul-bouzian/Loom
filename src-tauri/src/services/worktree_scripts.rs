@@ -2,6 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use tauri::{AppHandle, Emitter};
@@ -11,6 +12,8 @@ use crate::domain::workspace::{WorktreeScriptFailureEvent, WorktreeScriptTrigger
 use crate::services::git;
 
 pub const WORKTREE_SCRIPT_FAILURE_EVENT_NAME: &str = "threadex://worktree-script-failure";
+const WORKTREE_SCRIPT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const WORKTREE_SCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone)]
 pub struct WorktreeScriptService {
@@ -57,11 +60,7 @@ impl WorktreeScriptService {
             return;
         }
 
-        let mut log_file = match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-        {
+        let mut log_file = match OpenOptions::new().create(true).append(true).open(&log_path) {
             Ok(file) => file,
             Err(error) => {
                 self.emit_failure(
@@ -139,24 +138,46 @@ impl WorktreeScriptService {
         let app = self.app.clone();
         let log_path_for_thread = log_path.clone();
         std::thread::spawn(move || {
-            let completion = match child.wait() {
-                Ok(status) => WorktreeScriptCompletion {
-                    exit_code: status.code(),
-                    success: status.success(),
-                },
-                Err(error) => {
-                    let message = format!("Worktree script process failed to complete: {error}");
-                    if let Err(log_error) = append_log_message(&log_path_for_thread, &message) {
-                        warn!("failed to append worktree script wait error: {log_error}");
+            let started_at = Instant::now();
+            let completion = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        break WorktreeScriptCompletion {
+                            exit_code: status.code(),
+                            success: status.success(),
+                        };
                     }
-                    emit_failure(
-                        &app,
-                        &request,
-                        &log_path_for_thread,
-                        None,
-                        message,
-                    );
-                    return;
+                    Ok(None) if started_at.elapsed() < WORKTREE_SCRIPT_TIMEOUT => {
+                        std::thread::sleep(WORKTREE_SCRIPT_POLL_INTERVAL);
+                    }
+                    Ok(None) => {
+                        let message = timeout_message(
+                            request.trigger,
+                            &request.worktree_name,
+                            WORKTREE_SCRIPT_TIMEOUT,
+                        );
+                        if let Err(log_error) = append_log_message(&log_path_for_thread, &message) {
+                            warn!("failed to append worktree script timeout: {log_error}");
+                        }
+                        if let Err(error) = child.kill() {
+                            warn!("failed to stop timed out worktree script: {error}");
+                        }
+                        let _ = child.wait();
+                        emit_failure(&app, &request, &log_path_for_thread, None, message);
+                        break WorktreeScriptCompletion {
+                            exit_code: None,
+                            success: false,
+                        };
+                    }
+                    Err(error) => {
+                        let message =
+                            format!("Worktree script process failed to complete: {error}");
+                        if let Err(log_error) = append_log_message(&log_path_for_thread, &message) {
+                            warn!("failed to append worktree script wait error: {log_error}");
+                        }
+                        emit_failure(&app, &request, &log_path_for_thread, None, message);
+                        return;
+                    }
                 }
             };
 
@@ -165,16 +186,25 @@ impl WorktreeScriptService {
             }
 
             if completion.success {
+                if let Err(error) = std::fs::remove_file(&log_path_for_thread) {
+                    warn!("failed to remove successful worktree script log: {error}");
+                }
                 return;
             }
 
-            emit_failure(
-                &app,
-                &request,
-                &log_path_for_thread,
-                completion.exit_code,
-                failure_message(request.trigger, &request.worktree_name, completion.exit_code),
-            );
+            if completion.exit_code.is_some() {
+                emit_failure(
+                    &app,
+                    &request,
+                    &log_path_for_thread,
+                    completion.exit_code,
+                    failure_message(
+                        request.trigger,
+                        &request.worktree_name,
+                        completion.exit_code,
+                    ),
+                );
+            }
         });
     }
 
@@ -292,11 +322,7 @@ fn write_log_header(
         "started_at={}",
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     )?;
-    writeln!(
-        file,
-        "trigger={}",
-        trigger_value(request.trigger)
-    )?;
+    writeln!(file, "trigger={}", trigger_value(request.trigger))?;
     writeln!(file, "project_id={}", request.project_id)?;
     writeln!(file, "project_name={}", request.project_name)?;
     writeln!(file, "project_root={}", request.project_root.display())?;
@@ -387,6 +413,21 @@ fn failure_message(
     }
 }
 
+fn timeout_message(
+    trigger: WorktreeScriptTrigger,
+    worktree_name: &str,
+    timeout: Duration,
+) -> String {
+    let action = match trigger {
+        WorktreeScriptTrigger::Setup => "Setup",
+        WorktreeScriptTrigger::Teardown => "Teardown",
+    };
+    format!(
+        "{action} script timed out for \"{worktree_name}\" after {} seconds.",
+        timeout.as_secs()
+    )
+}
+
 fn trigger_value(trigger: WorktreeScriptTrigger) -> &'static str {
     match trigger {
         WorktreeScriptTrigger::Setup => "setup",
@@ -402,10 +443,11 @@ fn short_identifier(value: &str) -> &str {
 mod tests {
     use super::{
         execution_directory, failure_message, normalize_script, resolve_script_shell,
-        trigger_value, WorktreeScriptRequest,
+        timeout_message, trigger_value, WorktreeScriptRequest,
     };
     use crate::domain::workspace::WorktreeScriptTrigger;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     fn sample_request(trigger: WorktreeScriptTrigger) -> WorktreeScriptRequest {
         WorktreeScriptRequest {
@@ -427,7 +469,10 @@ mod tests {
         let teardown = sample_request(WorktreeScriptTrigger::Teardown);
 
         assert_eq!(execution_directory(&setup), PathBuf::from("/tmp/worktree"));
-        assert_eq!(execution_directory(&teardown), PathBuf::from("/tmp/project"));
+        assert_eq!(
+            execution_directory(&teardown),
+            PathBuf::from("/tmp/project")
+        );
     }
 
     #[test]
@@ -435,6 +480,14 @@ mod tests {
         assert_eq!(
             failure_message(WorktreeScriptTrigger::Setup, "fuzzy-tiger", Some(23)),
             "Setup script failed for \"fuzzy-tiger\" (exit code 23)."
+        );
+        assert_eq!(
+            timeout_message(
+                WorktreeScriptTrigger::Teardown,
+                "fuzzy-tiger",
+                Duration::from_secs(90),
+            ),
+            "Teardown script timed out for \"fuzzy-tiger\" after 90 seconds."
         );
         assert_eq!(trigger_value(WorktreeScriptTrigger::Teardown), "teardown");
     }

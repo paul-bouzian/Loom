@@ -102,14 +102,15 @@ export function ProjectSettingsTab({
                   </label>
                   <p className="settings-field__help">
                     Runs once after ThreadEx creates the worktree, with the new
-                    worktree as the current directory.
+                    worktree as the current directory. It runs in the
+                    background and does not block opening the thread.
                   </p>
                   <textarea
                     id={`${project.id}-setup-script`}
                     className="settings-field__textarea"
                     rows={5}
                     value={draft.setup}
-                    placeholder="pnpm install"
+                    placeholder="./scripts/worktree-setup.sh"
                     spellCheck={false}
                     disabled={isSaving}
                     onChange={(event) =>
