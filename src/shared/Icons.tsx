@@ -222,6 +222,29 @@ export function StopIcon({ size = 16, className }: IconProps) {
   );
 }
 
+export function MicIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <rect
+        x="5.25"
+        y="2"
+        width="5.5"
+        height="8"
+        rx="2.75"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path
+        d="M3.75 7.5a4.25 4.25 0 0 0 8.5 0M8 11.75v2M5.75 13.75h4.5"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function ThreadIcon({ size = 16, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>

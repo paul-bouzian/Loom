@@ -22,6 +22,7 @@ use crate::domain::conversation::{
     ThreadComposerCatalog, ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
 use crate::domain::settings::CollaborationMode;
+use crate::domain::voice::VoiceAuthMode;
 use crate::domain::workspace::CodexRateLimitSnapshot;
 use crate::error::{AppError, AppResult};
 use crate::runtime::codex_paths::build_codex_process_path;
@@ -37,11 +38,11 @@ use crate::runtime::protocol::{
     proposed_plan_from_item, proposed_plan_from_turn_update, sandbox_policy_value,
     subagents_from_collab_item, task_plan_from_item, task_plan_from_turn_update,
     task_status_from_turn_status, token_usage_snapshot, upsert_item, user_input_payload,
-    AccountRateLimitsReadResponse, AppInfoWire, AppsListResponse, CollaborationModeListResponse,
-    ErrorNotification, FuzzyFileSearchMatchTypeWire, FuzzyFileSearchResponse, IncomingMessage,
-    ItemDeltaNotification, ItemNotification, ModelListResponse, OutgoingNamedInput,
-    OutgoingTextElement, OutgoingUserInputPayload, PlanDeltaNotification,
-    ReasoningBoundaryNotification, SkillsListResponse, ThreadListResponse,
+    AccountRateLimitsReadResponse, AccountReadResponse, AppInfoWire, AppsListResponse,
+    CollaborationModeListResponse, ErrorNotification, FuzzyFileSearchMatchTypeWire,
+    FuzzyFileSearchResponse, IncomingMessage, ItemDeltaNotification, ItemNotification,
+    ModelListResponse, OutgoingNamedInput, OutgoingTextElement, OutgoingUserInputPayload,
+    PlanDeltaNotification, ReasoningBoundaryNotification, SkillsListResponse, ThreadListResponse,
     ThreadLoadedListResponse, ThreadReadResponse, ThreadStartResponse, TokenUsageNotification,
     TurnCompletedNotification, TurnPlanUpdatedNotification, TurnResponse, TurnStartedNotification,
     CODEX_USAGE_EVENT_NAME, CONVERSATION_EVENT_NAME,
@@ -88,6 +89,14 @@ struct PendingServerRequest {
 pub struct SendMessageResult {
     pub snapshot: ThreadConversationSnapshot,
     pub new_codex_thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppServerAuthStatus {
+    pub auth_method: Option<VoiceAuthMode>,
+    pub auth_token: Option<String>,
+    pub requires_openai_auth: Option<bool>,
 }
 
 pub struct RuntimeSession {
@@ -614,6 +623,31 @@ impl RuntimeSession {
             )
             .await?
             .rate_limits)
+    }
+
+    pub async fn read_account(&self, refresh_token: bool) -> AppResult<AccountReadResponse> {
+        self.request_typed::<AccountReadResponse>(
+            "account/read",
+            serde_json::json!({
+                "refreshToken": refresh_token,
+            }),
+        )
+        .await
+    }
+
+    pub async fn read_auth_status(
+        &self,
+        include_token: bool,
+        refresh_token: bool,
+    ) -> AppResult<AppServerAuthStatus> {
+        self.request_typed::<AppServerAuthStatus>(
+            "getAuthStatus",
+            serde_json::json!({
+                "includeToken": include_token,
+                "refreshToken": refresh_token
+            }),
+        )
+        .await
     }
 
     pub async fn composer_catalog(

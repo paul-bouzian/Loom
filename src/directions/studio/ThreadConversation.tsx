@@ -253,6 +253,7 @@ export function ThreadConversation({ environment, thread }: Props) {
       />
       <SubagentStrip subagents={snapshot.subagents} />
       <InlineComposer
+        environmentId={environment.id}
         threadId={thread.id}
         composer={resolvedComposer}
         collaborationModes={capabilities?.collaborationModes ?? []}

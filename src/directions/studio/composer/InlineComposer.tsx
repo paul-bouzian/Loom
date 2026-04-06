@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { getThreadComposerCatalog, searchThreadFiles } from "../../../lib/bridge";
+import {
+  getThreadComposerCatalog,
+  searchThreadFiles,
+} from "../../../lib/bridge";
 import type {
   ComposerMentionBindingInput,
   ComposerFileSearchResult,
@@ -9,7 +12,7 @@ import type {
   ThreadComposerCatalog,
   ThreadTokenUsageSnapshot,
 } from "../../../lib/types";
-import { SendIcon, StopIcon } from "../../../shared/Icons";
+import { MicIcon, SendIcon, StopIcon } from "../../../shared/Icons";
 import { ComposerPicker } from "../ComposerPicker";
 import { ContextWindowMeter } from "../ContextWindowMeter";
 import {
@@ -32,8 +35,12 @@ import {
   replaceComposerToken,
   type ComposerAutocompleteItem,
 } from "./composer-model";
+import { useComposerVoiceInput } from "./useComposerVoiceInput";
+import { VoiceRecordingCapsule } from "./VoiceRecordingCapsule";
+import "./ComposerVoice.css";
 
 type Props = {
+  environmentId: string;
   threadId: string;
   composer: ConversationComposerSettings;
   collaborationModes: Array<{ id: string; label: string }>;
@@ -51,11 +58,15 @@ type Props = {
   onChangeDraft: (value: string) => void;
   onChangeMentionBindings: (bindings: ComposerDraftMentionBinding[]) => void;
   onInterrupt: () => void;
-  onSend: (text: string, mentionBindings: ComposerMentionBindingInput[]) => void;
+  onSend: (
+    text: string,
+    mentionBindings: ComposerMentionBindingInput[],
+  ) => void;
   onUpdateComposer: (patch: Partial<ConversationComposerSettings>) => void;
 };
 
 export function InlineComposer({
+  environmentId,
   threadId,
   composer,
   collaborationModes,
@@ -81,22 +92,51 @@ export function InlineComposer({
   const fileSearchRequestRef = useRef(0);
   const previousDraftRef = useRef(draft);
   const [catalog, setCatalog] = useState<ThreadComposerCatalog | null>(null);
-  const [fileResults, setFileResults] = useState<ComposerFileSearchResult[]>([]);
+  const [fileResults, setFileResults] = useState<ComposerFileSearchResult[]>(
+    [],
+  );
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [scrollTop, setScrollTop] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [dismissedTokenKey, setDismissedTokenKey] = useState<string | null>(null);
+  const [dismissedTokenKey, setDismissedTokenKey] = useState<string | null>(
+    null,
+  );
   const [pendingCursor, setPendingCursor] = useState<number | null>(null);
   const isPlanMode = composer.collaborationMode === "plan";
   const nextMode: ConversationComposerSettings["collaborationMode"] = isPlanMode
     ? "build"
     : "plan";
-  const canToggleMode = collaborationModes.some((option) => option.id === nextMode);
-  const inputDisabled = isBusy || isSending || (disabled && !isRefiningPlan);
-  const controlsDisabled = isBusy || isSending || disabled;
+  const canToggleMode = collaborationModes.some(
+    (option) => option.id === nextMode,
+  );
+  const baseInputDisabled =
+    isBusy || isSending || (disabled && !isRefiningPlan);
+  const baseControlsDisabled = isBusy || isSending || disabled;
   const placeholder = isRefiningPlan
     ? "Refine the proposed plan..."
     : "Message ThreadEx...";
+  const {
+    buttonDisabled: voiceButtonDisabled,
+    buttonLabel: voiceButtonLabel,
+    buttonTitle: voiceButtonTitle,
+    canvasRef: voiceCanvasRef,
+    errorMessage: voiceErrorMessage,
+    isRecording,
+    isTranscribing,
+    onDismissError,
+    onVoiceButtonClick,
+    voiceBusy,
+    voiceDurationMs,
+  } = useComposerVoiceInput({
+    currentDraft: draft,
+    environmentId,
+    inputRef: textareaRef,
+    locked: baseControlsDisabled,
+    onChangeDraft,
+    sessionKey: threadId,
+  });
+  const inputDisabled = baseInputDisabled || voiceBusy;
+  const controlsDisabled = baseControlsDisabled || voiceBusy;
 
   useEffect(() => {
     let cancelled = false;
@@ -150,7 +190,11 @@ export function InlineComposer({
       return;
     }
     onChangeMentionBindings(
-      rebaseComposerMentionBindings(previousDraftRef.current, draft, mentionBindings),
+      rebaseComposerMentionBindings(
+        previousDraftRef.current,
+        draft,
+        mentionBindings,
+      ),
     );
     previousDraftRef.current = draft;
   }, [draft, mentionBindings, onChangeMentionBindings]);
@@ -198,7 +242,9 @@ export function InlineComposer({
 
   useEffect(() => {
     setActiveIndex((current) =>
-      autocompleteItems.length === 0 ? 0 : Math.min(current, autocompleteItems.length - 1),
+      autocompleteItems.length === 0
+        ? 0
+        : Math.min(current, autocompleteItems.length - 1),
     );
   }, [autocompleteItems.length]);
 
@@ -206,7 +252,9 @@ export function InlineComposer({
     if (!menuRef.current) {
       return;
     }
-    const active = menuRef.current.querySelector<HTMLElement>('[aria-selected="true"]');
+    const active = menuRef.current.querySelector<HTMLElement>(
+      '[aria-selected="true"]',
+    );
     active?.scrollIntoView?.({ block: "nearest" });
   }, [activeIndex, autocompleteItems]);
 
@@ -240,8 +288,16 @@ export function InlineComposer({
       return;
     }
     const replacement = replaceComposerToken(draft, activeToken, item);
-    const rebasedBindings = rebaseComposerMentionBindings(draft, replacement.text, mentionBindings);
-    const nextBindings = addComposerMentionBinding(rebasedBindings, item, activeToken.start);
+    const rebasedBindings = rebaseComposerMentionBindings(
+      draft,
+      replacement.text,
+      mentionBindings,
+    );
+    const nextBindings = addComposerMentionBinding(
+      rebasedBindings,
+      item,
+      activeToken.start,
+    );
     onChangeMentionBindings(nextBindings);
     previousDraftRef.current = replacement.text;
     onChangeDraft(replacement.text);
@@ -295,7 +351,9 @@ export function InlineComposer({
             className="tx-inline-composer__textarea"
             rows={1}
             value={draft}
-            aria-label={isRefiningPlan ? "Refine the proposed plan" : "Message ThreadEx"}
+            aria-label={
+              isRefiningPlan ? "Refine the proposed plan" : "Message ThreadEx"
+            }
             placeholder={placeholder}
             disabled={inputDisabled}
             onChange={(event) => {
@@ -326,7 +384,9 @@ export function InlineComposer({
               if (hasAutocompleteItems) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  setActiveIndex((current) => (current + 1) % autocompleteItems.length);
+                  setActiveIndex(
+                    (current) => (current + 1) % autocompleteItems.length,
+                  );
                   return;
                 }
                 if (event.key === "ArrowUp") {
@@ -338,7 +398,9 @@ export function InlineComposer({
                 }
                 if (event.key === "Enter" || event.key === "Tab") {
                   event.preventDefault();
-                  applyItem(autocompleteItems[activeIndex] ?? autocompleteItems[0]);
+                  applyItem(
+                    autocompleteItems[activeIndex] ?? autocompleteItems[0],
+                  );
                   return;
                 }
                 if (event.key === "Escape") {
@@ -360,6 +422,14 @@ export function InlineComposer({
             }}
           />
         </div>
+        <VoiceRecordingCapsule
+          canvasRef={voiceCanvasRef}
+          durationMs={voiceDurationMs}
+          errorMessage={voiceErrorMessage}
+          isRecording={isRecording}
+          isTranscribing={isTranscribing}
+          onDismissError={onDismissError}
+        />
       </div>
 
       <div className="tx-composer__controls">
@@ -380,7 +450,8 @@ export function InlineComposer({
             disabled={controlsDisabled}
             onChange={(value) =>
               onUpdateComposer({
-                reasoningEffort: value as ConversationComposerSettings["reasoningEffort"],
+                reasoningEffort:
+                  value as ConversationComposerSettings["reasoningEffort"],
               })
             }
           />
@@ -392,7 +463,9 @@ export function InlineComposer({
                 ? `Collaboration mode: ${currentModeLabel}. Switch to ${nextModeLabel}`
                 : `Collaboration mode: ${currentModeLabel}`
             }
-            title={canToggleMode ? `Switch to ${nextModeLabel}` : currentModeLabel}
+            title={
+              canToggleMode ? `Switch to ${nextModeLabel}` : currentModeLabel
+            }
             aria-pressed={isPlanMode}
             disabled={controlsDisabled || !canToggleMode}
             onClick={() => {
@@ -409,19 +482,35 @@ export function InlineComposer({
           <ComposerPicker
             label="Access"
             value={composer.approvalPolicy}
-            tone={composer.approvalPolicy === "fullAccess" ? "warning" : "default"}
+            tone={
+              composer.approvalPolicy === "fullAccess" ? "warning" : "default"
+            }
             options={APPROVAL_OPTIONS}
             compact
             disabled={controlsDisabled}
             onChange={(value) =>
               onUpdateComposer({
-                approvalPolicy: value as ConversationComposerSettings["approvalPolicy"],
+                approvalPolicy:
+                  value as ConversationComposerSettings["approvalPolicy"],
               })
             }
           />
         </div>
         <div className="tx-composer__controls-right">
           <ContextWindowMeter usage={tokenUsage} />
+          <span className="tx-composer__voice-button-anchor" title={voiceButtonTitle}>
+            <button
+              type="button"
+              className={`tx-composer__voice-button ${
+                isRecording ? "tx-composer__voice-button--recording" : ""
+              }`}
+              aria-label={voiceButtonLabel}
+              disabled={voiceButtonDisabled}
+              onClick={onVoiceButtonClick}
+            >
+              {isRecording ? <StopIcon size={14} /> : <MicIcon size={18} />}
+            </button>
+          </span>
           {isBusy ? (
             <button
               type="button"
