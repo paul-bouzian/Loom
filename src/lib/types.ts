@@ -169,6 +169,35 @@ export type CodexUsageEventPayload = {
   rateLimits: CodexRateLimitSnapshot;
 };
 
+export type VoiceAuthMode = "apiKey" | "chatgpt" | "chatgptAuthTokens";
+export type EnvironmentVoiceUnavailableReason =
+  | "chatgptRequired"
+  | "tokenMissing"
+  | "runtimeUnavailable"
+  | "unsupportedRuntime"
+  | "platformUnsupported"
+  | "unknown";
+
+export type EnvironmentVoiceStatusSnapshot = {
+  environmentId: string;
+  available: boolean;
+  authMode: VoiceAuthMode | null;
+  unavailableReason: EnvironmentVoiceUnavailableReason | null;
+  message: string | null;
+};
+
+export type TranscribeEnvironmentVoiceInput = {
+  environmentId: string;
+  mimeType: "audio/wav";
+  sampleRateHz: number;
+  durationMs: number;
+  audioBase64: string;
+};
+
+export type VoiceTranscriptionResult = {
+  text: string;
+};
+
 export type WorktreeScriptFailureEventPayload = {
   trigger: WorktreeScriptTrigger;
   projectId: string;

@@ -6,11 +6,13 @@ use crate::error::AppResult;
 use crate::infrastructure::database::AppDatabase;
 use crate::runtime::supervisor::RuntimeSupervisor;
 use crate::services::worktree_scripts::WorktreeScriptService;
+use crate::services::voice::VoiceService;
 use crate::services::workspace::WorkspaceService;
 
 pub struct AppState {
     pub workspace: WorkspaceService,
     pub runtime: RuntimeSupervisor,
+    pub voice: VoiceService,
     pub app_data_dir: PathBuf,
 }
 
@@ -35,6 +37,7 @@ impl AppState {
                 WorktreeScriptService::new(app.clone(), app_data_dir.clone()),
             ),
             runtime: RuntimeSupervisor::new(app.clone(), env!("CARGO_PKG_VERSION").to_string()),
+            voice: VoiceService::new(),
             app_data_dir,
         })
     }
