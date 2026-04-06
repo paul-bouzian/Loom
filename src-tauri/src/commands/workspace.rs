@@ -63,7 +63,7 @@ pub async fn remove_project(
         state
             .terminal
             .close_all_for_environment(&environment_id)
-            .await;
+            .await?;
     }
     state.workspace.remove_project(&project_id)?;
     Ok(())
@@ -89,7 +89,7 @@ pub async fn delete_worktree_environment(
     state
         .terminal
         .close_all_for_environment(&environment_id)
-        .await;
+        .await?;
     Ok(state
         .workspace
         .delete_worktree_environment(&environment_id)?)

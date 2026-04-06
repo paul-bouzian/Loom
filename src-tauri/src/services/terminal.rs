@@ -184,46 +184,54 @@ impl TerminalService {
             normalize_terminal_identifier(&input.environment_id, "Environment id")?;
         let terminal_id = normalize_terminal_identifier(&input.terminal_id, "Terminal id")?;
         let key = terminal_session_key(&environment_id, &terminal_id);
-        let session = {
+        {
             let mut revisions = self.revisions.lock().await;
             advance_terminal_revision(&mut revisions, &key);
-            self.sessions.lock().await.remove(&key)
-        };
+        }
+        let session = self.sessions.lock().await.get(&key).cloned();
         if let Some(session) = session {
-            kill_terminal_session(&session).await;
+            close_terminal_session(&session).await?;
+            self.sessions.lock().await.remove(&key);
         }
         Ok(())
     }
 
-    pub async fn close_all_for_environment(&self, environment_id: &str) {
+    pub async fn close_all_for_environment(&self, environment_id: &str) -> AppResult<()> {
         let Some(environment_id) = non_empty_trimmed(environment_id) else {
-            return;
+            return Ok(());
         };
         let key_prefix = format!("{environment_id}::");
-        let removed = {
+        {
             let mut revisions = self.revisions.lock().await;
             for (key, revision) in revisions.iter_mut() {
                 if key.starts_with(&key_prefix) {
                     *revision += 1;
                 }
             }
-            let mut sessions = self.sessions.lock().await;
-            let keys = sessions
-                .keys()
-                .filter(|key| key.starts_with(&key_prefix))
-                .cloned()
-                .collect::<Vec<_>>();
-            keys.into_iter()
-                .filter_map(|key| sessions.remove(&key))
+        }
+        let sessions_to_close = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .iter()
+                .filter(|(key, _)| key.starts_with(&key_prefix))
+                .map(|(key, session)| (key.clone(), Arc::clone(session)))
                 .collect::<Vec<_>>()
         };
 
-        for session in removed {
-            kill_terminal_session(&session).await;
+        for (_, session) in &sessions_to_close {
+            close_terminal_session(session).await?;
+        }
+
+        {
+            let mut sessions = self.sessions.lock().await;
+            for (key, _) in &sessions_to_close {
+                sessions.remove(key);
+            }
         }
 
         let mut revisions = self.revisions.lock().await;
         revisions.retain(|key, _| !key.starts_with(&key_prefix));
+        Ok(())
     }
 
     async fn session(
@@ -495,9 +503,18 @@ fn append_terminal_output(
     );
 }
 
-async fn kill_terminal_session(session: &Arc<TerminalSession>) {
+async fn close_terminal_session(session: &Arc<TerminalSession>) -> AppResult<()> {
+    if session.status().await != TerminalStatus::Running {
+        return Ok(());
+    }
     let mut killer = session.killer.lock().await;
-    let _ = killer.kill();
+    killer.kill().map_err(|error| {
+        AppError::Runtime(format!("Failed to terminate terminal session: {error}"))
+    })
+}
+
+async fn kill_terminal_session(session: &Arc<TerminalSession>) {
+    let _ = close_terminal_session(session).await;
 }
 
 fn emit_terminal_event(app: &AppHandle, payload: TerminalEventPayload) {
@@ -560,8 +577,8 @@ fn resolve_terminal_shell() -> TerminalShell {
     {
         let program = std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".to_string());
         return TerminalShell {
+            args: windows_shell_keepalive_args(&program),
             program,
-            args: vec!["/K".to_string()],
         };
     }
 
@@ -572,6 +589,20 @@ fn resolve_terminal_shell() -> TerminalShell {
             program,
             args: vec!["-l".to_string()],
         }
+    }
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_shell_keepalive_args(program: &str) -> Vec<String> {
+    let basename = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    if basename.starts_with("powershell") || basename.starts_with("pwsh") {
+        vec!["-NoExit".to_string()]
+    } else {
+        vec!["/K".to_string()]
     }
 }
 
@@ -628,7 +659,10 @@ struct TerminalShell {
 
 #[cfg(test)]
 mod tests {
-    use super::{push_terminal_history, resolve_utf8_locale, terminal_session_key};
+    use super::{
+        push_terminal_history, resolve_utf8_locale, terminal_session_key,
+        windows_shell_keepalive_args,
+    };
 
     #[test]
     fn terminal_history_limit_preserves_utf8_boundaries() {
@@ -653,6 +687,24 @@ mod tests {
         assert!(
             locale.to_ascii_lowercase().contains("utf-8")
                 || locale.to_ascii_lowercase().contains("utf8")
+        );
+    }
+
+    #[test]
+    fn windows_shell_keepalive_args_match_the_shell() {
+        assert_eq!(
+            windows_shell_keepalive_args("cmd.exe"),
+            vec!["/K".to_string()]
+        );
+        assert_eq!(
+            windows_shell_keepalive_args(
+                "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+            ),
+            vec!["-NoExit".to_string()]
+        );
+        assert_eq!(
+            windows_shell_keepalive_args("pwsh"),
+            vec!["-NoExit".to_string()]
         );
     }
 }

@@ -1,4 +1,9 @@
-import { useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 
 import * as bridge from "../../lib/bridge";
 import {
@@ -31,6 +36,7 @@ type Props = {
 
 export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
   const projects = useWorkspaceStore(selectProjects);
+  const loadingState = useWorkspaceStore((state) => state.loadingState);
   const selectedProject = useWorkspaceStore(selectSelectedProject);
   const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
   const selectedThread = useWorkspaceStore(selectSelectedThread);
@@ -42,9 +48,13 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
   const toggleTerminalPanel = useTerminalStore((state) => state.togglePanel);
   const createTerminal = useTerminalStore((state) => state.createTerminal);
   const closeTerminal = useTerminalStore((state) => state.closeTerminal);
-  const setActiveTerminal = useTerminalStore((state) => state.setActiveTerminal);
+  const setActiveTerminal = useTerminalStore(
+    (state) => state.setActiveTerminal,
+  );
   const setTerminalHeight = useTerminalStore((state) => state.setHeight);
-  const pruneTerminalEnvironments = useTerminalStore((state) => state.pruneEnvironments);
+  const pruneTerminalEnvironments = useTerminalStore(
+    (state) => state.pruneEnvironments,
+  );
   const isThreadView = Boolean(selectedThread && selectedEnvironment);
   const environmentIds = useMemo(
     () =>
@@ -55,8 +65,33 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
   );
 
   useEffect(() => {
+    if (loadingState !== "ready") return;
     pruneTerminalEnvironments(environmentIds);
-  }, [environmentIds, pruneTerminalEnvironments]);
+  }, [environmentIds, loadingState, pruneTerminalEnvironments]);
+
+  useEffect(() => {
+    if (!selectedEnvironment || !bodyRef.current) return;
+
+    const body = bodyRef.current;
+    const clampStoredHeight = () => {
+      const clampedHeight = clampTerminalHeight(
+        terminalUi.heightPx,
+        body.getBoundingClientRect().height,
+      );
+      if (clampedHeight !== terminalUi.heightPx) {
+        setTerminalHeight(selectedEnvironment.id, clampedHeight);
+      }
+    };
+
+    clampStoredHeight();
+    const resizeObserver = new ResizeObserver(() => {
+      clampStoredHeight();
+    });
+    resizeObserver.observe(body);
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [selectedEnvironment, setTerminalHeight, terminalUi.heightPx]);
 
   useEffect(
     () => () => {
@@ -71,7 +106,10 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
     content = <StudioWelcome />;
   } else if (selectedThread && selectedEnvironment) {
     content = (
-      <ThreadConversation environment={selectedEnvironment} thread={selectedThread} />
+      <ThreadConversation
+        environment={selectedEnvironment}
+        thread={selectedThread}
+      />
     );
   } else if (selectedEnvironment) {
     content = <EnvironmentView environment={selectedEnvironment} />;
@@ -93,11 +131,15 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
 
   async function handleCloseTerminal(terminalId: string) {
     if (!selectedEnvironment) return;
-    closeTerminal(selectedEnvironment.id, terminalId);
-    await bridge.closeEnvironmentTerminal({
-      environmentId: selectedEnvironment.id,
-      terminalId,
-    });
+    try {
+      await bridge.closeEnvironmentTerminal({
+        environmentId: selectedEnvironment.id,
+        terminalId,
+      });
+      closeTerminal(selectedEnvironment.id, terminalId);
+    } catch (cause: unknown) {
+      console.error("Failed to close terminal session.", cause);
+    }
   }
 
   function handleResizeStart(event: ReactMouseEvent<HTMLDivElement>) {
@@ -107,10 +149,8 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
 
     const startY = event.clientY;
     const startHeight = terminalUi.heightPx;
-    const bodyHeight = bodyRef.current.getBoundingClientRect().height;
-    const maxHeight = Math.max(
-      MIN_TERMINAL_HEIGHT_PX,
-      Math.floor(bodyHeight * MAX_TERMINAL_HEIGHT_RATIO),
+    const maxHeight = maxTerminalHeight(
+      bodyRef.current.getBoundingClientRect().height,
     );
 
     const handlePointerMove = (moveEvent: MouseEvent) => {
@@ -179,7 +219,9 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
         >
           {content}
         </div>
-        {selectedEnvironment && terminalUi.open && terminalUi.tabs.length > 0 ? (
+        {selectedEnvironment &&
+        terminalUi.open &&
+        terminalUi.tabs.length > 0 ? (
           <TerminalDock
             environment={selectedEnvironment}
             tabs={terminalUi.tabs}
@@ -200,6 +242,20 @@ export function StudioMain({ inspectorOpen, onToggleInspector }: Props) {
   );
 }
 
+function maxTerminalHeight(bodyHeight: number) {
+  return Math.max(
+    MIN_TERMINAL_HEIGHT_PX,
+    Math.floor(bodyHeight * MAX_TERMINAL_HEIGHT_RATIO),
+  );
+}
+
+function clampTerminalHeight(heightPx: number, bodyHeight: number) {
+  return Math.min(
+    maxTerminalHeight(bodyHeight),
+    Math.max(MIN_TERMINAL_HEIGHT_PX, Math.round(heightPx)),
+  );
+}
+
 function OverviewView({ projects }: { projects: ProjectRecord[] }) {
   const selectProject = useWorkspaceStore((s) => s.selectProject);
 
@@ -213,7 +269,8 @@ function OverviewView({ projects }: { projects: ProjectRecord[] }) {
         {projects.map((p) => {
           const envCount = p.environments.length;
           const threadCount = p.environments.reduce(
-            (sum, e) => sum + e.threads.filter((t) => t.status === "active").length,
+            (sum, e) =>
+              sum + e.threads.filter((t) => t.status === "active").length,
             0,
           );
           const runningCount = p.environments.filter(
@@ -229,8 +286,12 @@ function OverviewView({ projects }: { projects: ProjectRecord[] }) {
               <h3 className="studio-overview__card-name">{p.name}</h3>
               <span className="studio-overview__card-path">{p.rootPath}</span>
               <div className="studio-overview__card-meta">
-                <span>{envCount} env{envCount !== 1 ? "s" : ""}</span>
-                <span>{threadCount} thread{threadCount !== 1 ? "s" : ""}</span>
+                <span>
+                  {envCount} env{envCount !== 1 ? "s" : ""}
+                </span>
+                <span>
+                  {threadCount} thread{threadCount !== 1 ? "s" : ""}
+                </span>
                 {runningCount > 0 && (
                   <span className="studio-overview__card-running">
                     {runningCount} running
@@ -247,7 +308,9 @@ function OverviewView({ projects }: { projects: ProjectRecord[] }) {
 
 function ProjectView({ project }: { project: ProjectRecord }) {
   const selectEnvironment = useWorkspaceStore((s) => s.selectEnvironment);
-  const worktrees = project.environments.filter((environment) => environment.kind !== "local");
+  const worktrees = project.environments.filter(
+    (environment) => environment.kind !== "local",
+  );
 
   return (
     <div className="studio-project-view">
@@ -258,7 +321,9 @@ function ProjectView({ project }: { project: ProjectRecord }) {
       <div className="studio-project-view__envs">
         <h3 className="studio-section-label">Worktrees</h3>
         {worktrees.length === 0 ? (
-          <p className="studio-env-view__hint">No worktrees yet for this project.</p>
+          <p className="studio-env-view__hint">
+            No worktrees yet for this project.
+          </p>
         ) : null}
         {worktrees.map((env) => (
           <button
@@ -275,7 +340,8 @@ function ProjectView({ project }: { project: ProjectRecord }) {
             </div>
             <div className="studio-env-row__right">
               <span className="studio-env-row__threads">
-                {env.threads.filter((t) => t.status === "active").length} threads
+                {env.threads.filter((t) => t.status === "active").length}{" "}
+                threads
               </span>
               <RuntimeIndicator state={env.runtime.state} label />
             </div>
@@ -297,7 +363,12 @@ function EnvironmentView({ environment }: { environment: EnvironmentRecord }) {
       {environment.gitBranch && (
         <p className="studio-env-view__branch">
           Branch: <code>{environment.gitBranch}</code>
-          {environment.baseBranch && <> from <code>{environment.baseBranch}</code></>}
+          {environment.baseBranch && (
+            <>
+              {" "}
+              from <code>{environment.baseBranch}</code>
+            </>
+          )}
         </p>
       )}
       <p className="studio-env-view__hint">
