@@ -36,6 +36,7 @@ export function useComposerVoiceInput({
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const captureRef = useRef<ActiveVoiceCapture | null>(null);
+  const currentDraftRef = useRef(currentDraft);
   const mountedRef = useRef(true);
   const sessionEpochRef = useRef(0);
   const [phase, setPhase] = useState<
@@ -81,6 +82,10 @@ export function useComposerVoiceInput({
       "Voice transcription is unavailable right now."
     );
   }, [browserSupported, snapshot?.message, storeError]);
+
+  useEffect(() => {
+    currentDraftRef.current = currentDraft;
+  }, [currentDraft]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -188,7 +193,7 @@ export function useComposerVoiceInput({
       setRecordingStartedAt(null);
       setTranscribingDurationMs(0);
       setErrorMessage(null);
-      onChangeDraft(appendVoiceTranscript(currentDraft, result.text));
+      onChangeDraft(appendVoiceTranscript(currentDraftRef.current, result.text));
       window.requestAnimationFrame(() => {
         inputRef.current?.focus();
       });
@@ -204,7 +209,6 @@ export function useComposerVoiceInput({
       void refreshEnvironmentVoiceStatus(environmentId);
     }
   }, [
-    currentDraft,
     environmentId,
     inputRef,
     onChangeDraft,

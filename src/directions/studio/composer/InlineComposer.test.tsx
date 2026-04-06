@@ -28,6 +28,16 @@ vi.mock("./composer-voice-audio", () => ({
 const mockedBridge = vi.mocked(bridge);
 const mockedStartVoiceCapture = vi.mocked(startVoiceCapture);
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   useVoiceStatusStore.setState((state) => ({
@@ -186,6 +196,38 @@ describe("InlineComposer voice dictation", () => {
     ).toBeInTheDocument();
     expect(screen.getByDisplayValue("Keep draft")).toBeInTheDocument();
   });
+
+  it("appends the transcript onto the latest draft state after async transcription", async () => {
+    const transcription = createDeferred<{ text: string }>();
+    mockedStartVoiceCapture.mockResolvedValue(makeCapture());
+    mockedBridge.transcribeEnvironmentVoice.mockReturnValue(transcription.promise);
+
+    renderComposerWithExternalDraftAction("Plan:");
+
+    const startButton = await screen.findByRole("button", {
+      name: "Start voice dictation",
+    });
+    await waitFor(() => {
+      expect(startButton).toBeEnabled();
+    });
+
+    await userEvent.click(startButton);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Stop voice dictation" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedBridge.transcribeEnvironmentVoice).toHaveBeenCalledTimes(1);
+    });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Set draft externally" }),
+    );
+    transcription.resolve({ text: "voice note" });
+
+    expect(
+      await screen.findByDisplayValue("Edited while transcribing voice note"),
+    ).toBeInTheDocument();
+  });
 });
 
 function renderComposer(initialDraft: string) {
@@ -218,6 +260,51 @@ function renderComposer(initialDraft: string) {
         onSend={() => undefined}
         onUpdateComposer={() => undefined}
       />
+    );
+  }
+
+  return render(<Harness />);
+}
+
+function renderComposerWithExternalDraftAction(initialDraft: string) {
+  function Harness() {
+    const [draft, setDraft] = useState(initialDraft);
+    const [mentionBindings, setMentionBindings] = useState<
+      ComposerDraftMentionBinding[]
+    >([]);
+
+    return (
+      <>
+        <button
+          type="button"
+          aria-label="Set draft externally"
+          onClick={() => setDraft("Edited while transcribing")}
+        >
+          Set draft externally
+        </button>
+        <InlineComposer
+          environmentId="env-1"
+          threadId="thread-1"
+          composer={baseComposer}
+          collaborationModes={capabilitiesFixture.collaborationModes}
+          disabled={false}
+          draft={draft}
+          effortOptions={["low", "medium", "high", "xhigh"]}
+          focusKey="thread-1"
+          isBusy={false}
+          isSending={false}
+          isRefiningPlan={false}
+          mentionBindings={mentionBindings}
+          modelOptions={capabilitiesFixture.models}
+          tokenUsage={null}
+          onCancelRefine={() => undefined}
+          onChangeDraft={setDraft}
+          onChangeMentionBindings={setMentionBindings}
+          onInterrupt={() => undefined}
+          onSend={() => undefined}
+          onUpdateComposer={() => undefined}
+        />
+      </>
     );
   }
 

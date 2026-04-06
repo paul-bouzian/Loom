@@ -473,13 +473,14 @@ fn validate_transcription_input(
     input: TranscribeEnvironmentVoiceInput,
 ) -> AppResult<ValidatedVoiceUpload> {
     let environment_id = input.environment_id.trim().to_string();
+    let mime_type = input.mime_type.trim().to_string();
     if environment_id.is_empty() {
         return Err(AppError::Validation(
             "Environment id is required for voice transcription.".to_string(),
         ));
     }
 
-    if input.mime_type.trim() != "audio/wav" {
+    if mime_type != "audio/wav" {
         return Err(AppError::Validation(
             "Only WAV audio is supported for voice transcription.".to_string(),
         ));
@@ -513,7 +514,7 @@ fn validate_transcription_input(
 
     Ok(ValidatedVoiceUpload {
         environment_id,
-        mime_type: input.mime_type,
+        mime_type,
         audio_bytes,
     })
 }
@@ -617,6 +618,11 @@ fn validate_wav_buffer(audio_bytes: &[u8], expected_sample_rate_hz: u32) -> AppR
 
         match chunk_id {
             b"fmt " => {
+                if audio_format.is_some() {
+                    return Err(AppError::Validation(
+                        "The recorded audio is not a valid WAV file.".to_string(),
+                    ));
+                }
                 if chunk_size < 16 {
                     return Err(AppError::Validation(
                         "The recorded audio is not a valid WAV file.".to_string(),
@@ -628,6 +634,11 @@ fn validate_wav_buffer(audio_bytes: &[u8], expected_sample_rate_hz: u32) -> AppR
                 bits_per_sample = Some(read_u16_le(audio_bytes, chunk_payload_offset + 14)?);
             }
             b"data" => {
+                if data_size.is_some() {
+                    return Err(AppError::Validation(
+                        "The recorded audio is not a valid WAV file.".to_string(),
+                    ));
+                }
                 data_size = Some(chunk_size);
             }
             _ => {}
@@ -828,7 +839,7 @@ mod tests {
     fn validates_wav_upload_constraints() {
         let result = validate_transcription_input(TranscribeEnvironmentVoiceInput {
             environment_id: "env-1".to_string(),
-            mime_type: "audio/wav".to_string(),
+            mime_type: " audio/wav ".to_string(),
             sample_rate_hz: 24_000,
             duration_ms: 1_250,
             audio_base64: make_test_wav_base64(),
@@ -893,6 +904,23 @@ mod tests {
 
         assert_eq!(result.mime_type, "audio/wav");
         assert!(!result.audio_bytes.is_empty());
+    }
+
+    #[test]
+    fn rejects_wav_uploads_with_duplicate_data_chunks() {
+        let error = validate_transcription_input(TranscribeEnvironmentVoiceInput {
+            environment_id: "env-1".to_string(),
+            mime_type: "audio/wav".to_string(),
+            sample_rate_hz: 24_000,
+            duration_ms: 1_250,
+            audio_base64: make_test_wav_base64_with_duplicate_data_chunk(),
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            AppError::Validation(message) if message.contains("valid WAV")
+        ));
     }
 
     #[test]
@@ -1015,9 +1043,34 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(make_test_wav_bytes(1_250, true))
     }
 
+    fn make_test_wav_base64_with_duplicate_data_chunk() -> String {
+        base64::engine::general_purpose::STANDARD
+            .encode(make_test_wav_bytes_with_duplicate_data_chunk())
+    }
+
     fn make_test_wav_bytes(duration_ms: u32, include_extra_chunk: bool) -> Vec<u8> {
         let sample_count = ((duration_ms as u64) * 24_000).div_ceil(1000) as usize;
         let data_size = sample_count * 2;
+        let mut chunks: Vec<([u8; 4], Vec<u8>)> = vec![(*b"fmt ", make_test_fmt_payload())];
+        if include_extra_chunk {
+            chunks.push((*b"JUNK", vec![1, 2, 3]));
+        }
+        chunks.push((*b"data", vec![0; data_size]));
+
+        build_test_wav(chunks)
+    }
+
+    fn make_test_wav_bytes_with_duplicate_data_chunk() -> Vec<u8> {
+        let sample_count = ((1_250_u64) * 24_000).div_ceil(1000) as usize;
+        let data_size = sample_count * 2;
+        build_test_wav(vec![
+            (*b"fmt ", make_test_fmt_payload()),
+            (*b"data", vec![0; data_size / 2]),
+            (*b"data", vec![0; data_size / 2]),
+        ])
+    }
+
+    fn make_test_fmt_payload() -> Vec<u8> {
         let mut fmt_payload = Vec::with_capacity(16);
         fmt_payload.extend_from_slice(&(1_u16).to_le_bytes());
         fmt_payload.extend_from_slice(&(1_u16).to_le_bytes());
@@ -1025,13 +1078,10 @@ mod tests {
         fmt_payload.extend_from_slice(&(48_000_u32).to_le_bytes());
         fmt_payload.extend_from_slice(&(2_u16).to_le_bytes());
         fmt_payload.extend_from_slice(&(16_u16).to_le_bytes());
+        fmt_payload
+    }
 
-        let mut chunks: Vec<([u8; 4], Vec<u8>)> = vec![(*b"fmt ", fmt_payload)];
-        if include_extra_chunk {
-            chunks.push((*b"JUNK", vec![1, 2, 3]));
-        }
-        chunks.push((*b"data", vec![0; data_size]));
-
+    fn build_test_wav(chunks: Vec<([u8; 4], Vec<u8>)>) -> Vec<u8> {
         let riff_payload_size = chunks
             .iter()
             .map(|(_, payload)| 8 + payload.len() + (payload.len() % 2))
