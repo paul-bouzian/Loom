@@ -1007,9 +1007,14 @@ pub fn normalize_item(value: &Value) -> Option<ConversationItem> {
                 .iter()
                 .filter_map(user_content_to_image_attachment)
                 .collect::<Vec<_>>();
-            if is_hidden_control_message(&text) && images.is_empty() {
-                return None;
-            }
+            let text = if is_hidden_control_message(&text) {
+                if images.is_empty() {
+                    return None;
+                }
+                String::new()
+            } else {
+                text
+            };
             Some(ConversationItem::Message(ConversationMessageItem {
                 id,
                 role: ConversationRole::User,
@@ -1847,8 +1852,7 @@ fn user_content_to_image_attachment(value: &Value) -> Option<ConversationImageAt
         Some("localImage") => value
             .get("path")
             .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
+            .filter(|path| !path.trim().is_empty())
             .map(|path| ConversationImageAttachment::LocalImage {
                 path: path.to_string(),
             }),
@@ -2103,6 +2107,47 @@ mod tests {
             }
             _ => panic!("expected a message item"),
         }
+    }
+
+    #[test]
+    fn normalize_user_message_hides_control_text_but_keeps_images() {
+        let item = normalize_item(&json!({
+            "id": "user-approval-image",
+            "type": "userMessage",
+            "content": [
+                { "type": "text", "text": plan_approval_message() },
+                { "type": "localImage", "path": "/tmp/approval.png" }
+            ]
+        }))
+        .expect("item should normalize");
+
+        match item {
+            ConversationItem::Message(message) => {
+                assert_eq!(message.text, "");
+                assert_eq!(
+                    message.images,
+                    Some(vec![ConversationImageAttachment::LocalImage {
+                        path: "/tmp/approval.png".to_string(),
+                    }])
+                );
+            }
+            _ => panic!("expected a message item"),
+        }
+    }
+
+    #[test]
+    fn local_image_paths_preserve_leading_and_trailing_spaces() {
+        let image = user_content_to_image_attachment(&json!({
+            "type": "localImage",
+            "path": " /tmp/image with spaces.png "
+        }));
+
+        assert_eq!(
+            image,
+            Some(ConversationImageAttachment::LocalImage {
+                path: " /tmp/image with spaces.png ".to_string(),
+            })
+        );
     }
 
     #[test]
