@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 
 use crate::domain::conversation::ConversationComposerSettings;
 use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort};
+use crate::domain::voice::VoiceAuthMode;
 use crate::services::workspace::ThreadRuntimeContext;
 
 use super::session::RuntimeSession;
@@ -338,6 +339,11 @@ fn spawn_fake_codex(
                         }
                     }
                 }),
+                "getAuthStatus" => json!({
+                    "authMethod": "chatgpt",
+                    "authToken": "token-123",
+                    "requiresOpenaiAuth": false
+                }),
                 "turn/interrupt" => json!({}),
                 _ => json!({}),
             };
@@ -519,6 +525,27 @@ async fn send_message_starts_new_codex_thread_with_real_turn_params() {
         .iter()
         .any(|request| request.method == "skills/list"));
     assert!(!requests.iter().any(|request| request.method == "app/list"));
+}
+
+#[tokio::test]
+async fn read_auth_status_requests_token_refresh_fields() {
+    let (session, harness) = FakeCodexHarness::new().await;
+
+    let auth_status = session
+        .read_auth_status(true, true)
+        .await
+        .expect("auth status should load");
+
+    assert_eq!(auth_status.auth_token.as_deref(), Some("token-123"));
+    assert_eq!(auth_status.auth_method, Some(VoiceAuthMode::Chatgpt));
+
+    let requests = harness.requests().await;
+    let auth_request = requests
+        .iter()
+        .find(|request| request.method == "getAuthStatus")
+        .expect("getAuthStatus should be requested");
+    assert_eq!(auth_request.params["includeToken"], true);
+    assert_eq!(auth_request.params["refreshToken"], true);
 }
 
 #[tokio::test]

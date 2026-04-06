@@ -14,7 +14,7 @@ use crate::domain::conversation::{
 use crate::domain::workspace::{CodexRateLimitSnapshot, RuntimeState, RuntimeStatusSnapshot};
 use crate::error::{AppError, AppResult};
 use crate::runtime::codex_paths::{missing_codex_binary_message, resolve_auto_binary_path};
-use crate::runtime::session::{RuntimeSession, SendMessageResult};
+use crate::runtime::session::{AppServerAuthStatus, RuntimeSession, SendMessageResult};
 use crate::services::workspace::ThreadRuntimeContext;
 
 struct RunningRuntime {
@@ -157,6 +157,51 @@ impl RuntimeSupervisor {
 
                 match (result, stop_result) {
                     (Ok(rate_limits), Ok(())) => Ok(rate_limits),
+                    (Err(error), _) => Err(error),
+                    (Ok(_), Err(error)) => Err(error),
+                }
+            }
+        }
+    }
+
+    pub async fn read_auth_status(
+        &self,
+        environment_id: &str,
+        environment_path: &str,
+        codex_binary_path: Option<String>,
+        include_token: bool,
+        refresh_token: bool,
+    ) -> AppResult<AppServerAuthStatus> {
+        let read_target = {
+            let environment_lock = self.environment_lock(environment_id).await;
+            let _environment_guard = environment_lock.lock().await;
+            self.refresh_statuses().await?;
+
+            if let Some(runtime) = self.running_runtime(environment_id).await {
+                RateLimitReadTarget::Running(runtime.session)
+            } else {
+                let binary_path = resolve_binary_path(codex_binary_path)?;
+                let session = RuntimeSession::spawn_headless(
+                    environment_id.to_string(),
+                    environment_path.to_string(),
+                    binary_path,
+                    self.app_version.clone(),
+                )
+                .await?;
+                RateLimitReadTarget::Headless(Box::new(session))
+            }
+        };
+
+        match read_target {
+            RateLimitReadTarget::Running(session) => {
+                session.read_auth_status(include_token, refresh_token).await
+            }
+            RateLimitReadTarget::Headless(session) => {
+                let result = session.read_auth_status(include_token, refresh_token).await;
+                let stop_result = session.stop().await;
+
+                match (result, stop_result) {
+                    (Ok(auth_status), Ok(())) => Ok(auth_status),
                     (Err(error), _) => Err(error),
                     (Ok(_), Err(error)) => Err(error),
                 }

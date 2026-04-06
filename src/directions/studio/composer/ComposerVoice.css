@@ -1,0 +1,165 @@
+.tx-composer__voice-button {
+  position: relative;
+}
+
+.tx-composer__voice-button--recording {
+  color: var(--tx-danger);
+  border-color: color-mix(in srgb, var(--tx-danger) 42%, var(--tx-border-subtle));
+  background: color-mix(in srgb, var(--tx-danger) 12%, var(--tx-bg-base));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tx-danger) 14%, transparent);
+}
+
+.tx-composer__voice-button--recording::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--tx-danger) 35%, transparent);
+  animation: tx-voice-pulse 1.6s ease-out infinite;
+}
+
+.tx-voice-capsule {
+  display: grid;
+  gap: var(--tx-space-sm);
+  margin-top: var(--tx-space-md);
+  padding: var(--tx-space-md);
+  border-radius: var(--tx-radius-lg);
+  border: 1px solid var(--tx-border-subtle);
+  background: color-mix(in srgb, var(--tx-bg-raised) 84%, var(--tx-bg-hover));
+}
+
+.tx-voice-capsule--recording {
+  border-color: color-mix(in srgb, var(--tx-danger) 22%, var(--tx-border-subtle));
+  background: color-mix(in srgb, var(--tx-danger) 7%, var(--tx-bg-raised));
+}
+
+.tx-voice-capsule--transcribing {
+  border-color: color-mix(in srgb, var(--tx-accent) 22%, var(--tx-border-subtle));
+}
+
+.tx-voice-capsule--error {
+  border-color: color-mix(in srgb, var(--tx-danger) 28%, var(--tx-border-subtle));
+  background: color-mix(in srgb, var(--tx-danger) 10%, var(--tx-bg-raised));
+}
+
+.tx-voice-capsule__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tx-space-md);
+}
+
+.tx-voice-capsule__title-group {
+  display: grid;
+  gap: 2px;
+}
+
+.tx-voice-capsule__eyebrow {
+  color: var(--tx-text-muted);
+  font-size: var(--tx-text-xs);
+  font-weight: var(--tx-weight-bold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tx-voice-capsule__title {
+  color: var(--tx-text-primary);
+  font-size: var(--tx-text-sm);
+  font-weight: var(--tx-weight-semibold);
+}
+
+.tx-voice-capsule__duration {
+  color: var(--tx-text-secondary);
+  font-family: var(--tx-font-mono);
+  font-size: var(--tx-text-xs);
+}
+
+.tx-voice-capsule__canvas {
+  width: 100%;
+  height: 46px;
+  display: block;
+}
+
+.tx-voice-capsule__body {
+  color: var(--tx-text-secondary);
+  font-size: var(--tx-text-sm);
+  line-height: 1.55;
+}
+
+.tx-voice-capsule__progress {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--tx-bg-hover) 78%, transparent);
+}
+
+.tx-voice-capsule__progress::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 32%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--tx-accent) 24%, transparent),
+    var(--tx-accent),
+    color-mix(in srgb, var(--tx-accent) 18%, transparent)
+  );
+  animation: tx-voice-progress 1.2s ease-in-out infinite;
+}
+
+.tx-voice-capsule__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tx-text-muted);
+  transition:
+    border-color var(--tx-transition-fast),
+    background var(--tx-transition-fast),
+    color var(--tx-transition-fast);
+}
+
+.tx-voice-capsule__dismiss:hover:not(:disabled) {
+  border-color: var(--tx-border-subtle);
+  background: color-mix(in srgb, var(--tx-bg-hover) 74%, transparent);
+  color: var(--tx-text-primary);
+}
+
+.tx-voice-capsule__dismiss:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--tx-accent) 45%, var(--tx-border-subtle));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tx-accent) 14%, transparent);
+}
+
+@keyframes tx-voice-pulse {
+  0% {
+    opacity: 0.92;
+    transform: scale(0.98);
+  }
+
+  70% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes tx-voice-progress {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  100% {
+    transform: translateX(340%);
+  }
+}

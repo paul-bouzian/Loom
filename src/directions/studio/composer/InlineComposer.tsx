@@ -9,7 +9,7 @@ import type {
   ThreadComposerCatalog,
   ThreadTokenUsageSnapshot,
 } from "../../../lib/types";
-import { SendIcon, StopIcon } from "../../../shared/Icons";
+import { MicIcon, SendIcon, StopIcon } from "../../../shared/Icons";
 import { ComposerPicker } from "../ComposerPicker";
 import { ContextWindowMeter } from "../ContextWindowMeter";
 import {
@@ -32,8 +32,12 @@ import {
   replaceComposerToken,
   type ComposerAutocompleteItem,
 } from "./composer-model";
+import { useComposerVoiceInput } from "./useComposerVoiceInput";
+import { VoiceRecordingCapsule } from "./VoiceRecordingCapsule";
+import "./ComposerVoice.css";
 
 type Props = {
+  environmentId: string;
   threadId: string;
   composer: ConversationComposerSettings;
   collaborationModes: Array<{ id: string; label: string }>;
@@ -56,6 +60,7 @@ type Props = {
 };
 
 export function InlineComposer({
+  environmentId,
   threadId,
   composer,
   collaborationModes,
@@ -92,11 +97,33 @@ export function InlineComposer({
     ? "build"
     : "plan";
   const canToggleMode = collaborationModes.some((option) => option.id === nextMode);
-  const inputDisabled = isBusy || isSending || (disabled && !isRefiningPlan);
-  const controlsDisabled = isBusy || isSending || disabled;
+  const baseInputDisabled = isBusy || isSending || (disabled && !isRefiningPlan);
+  const baseControlsDisabled = isBusy || isSending || disabled;
   const placeholder = isRefiningPlan
     ? "Refine the proposed plan..."
     : "Message ThreadEx...";
+  const {
+    buttonDisabled: voiceButtonDisabled,
+    buttonLabel: voiceButtonLabel,
+    buttonTitle: voiceButtonTitle,
+    canvasRef: voiceCanvasRef,
+    errorMessage: voiceErrorMessage,
+    isRecording,
+    isTranscribing,
+    onDismissError,
+    onVoiceButtonClick,
+    voiceBusy,
+    voiceDurationMs,
+  } = useComposerVoiceInput({
+    currentDraft: draft,
+    environmentId,
+    inputRef: textareaRef,
+    locked: baseControlsDisabled,
+    onChangeDraft,
+    sessionKey: threadId,
+  });
+  const inputDisabled = baseInputDisabled || voiceBusy;
+  const controlsDisabled = baseControlsDisabled || voiceBusy;
 
   useEffect(() => {
     let cancelled = false;
@@ -360,6 +387,14 @@ export function InlineComposer({
             }}
           />
         </div>
+        <VoiceRecordingCapsule
+          canvasRef={voiceCanvasRef}
+          durationMs={voiceDurationMs}
+          errorMessage={voiceErrorMessage}
+          isRecording={isRecording}
+          isTranscribing={isTranscribing}
+          onDismissError={onDismissError}
+        />
       </div>
 
       <div className="tx-composer__controls">
@@ -422,6 +457,18 @@ export function InlineComposer({
         </div>
         <div className="tx-composer__controls-right">
           <ContextWindowMeter usage={tokenUsage} />
+          <button
+            type="button"
+            className={`tx-composer__send-button tx-composer__voice-button ${
+              isRecording ? "tx-composer__voice-button--recording" : ""
+            }`}
+            aria-label={voiceButtonLabel}
+            title={voiceButtonTitle}
+            disabled={voiceButtonDisabled}
+            onClick={onVoiceButtonClick}
+          >
+            {isRecording ? <StopIcon size={10} /> : <MicIcon size={12} />}
+          </button>
           {isBusy ? (
             <button
               type="button"

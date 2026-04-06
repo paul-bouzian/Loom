@@ -19,6 +19,7 @@ import {
   teardownConversationListener,
   useConversationStore,
 } from "../../stores/conversation-store";
+import { useVoiceStatusStore } from "../../stores/voice-status-store";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import { ConversationMarkdown } from "./ConversationMarkdown";
 import { ConversationPlanCard } from "./ConversationPlanCard";
@@ -34,6 +35,8 @@ vi.mock("../../lib/bridge", () => ({
   respondToApprovalRequest: vi.fn(),
   respondToUserInputRequest: vi.fn(),
   submitPlanDecision: vi.fn(),
+  getEnvironmentVoiceStatus: vi.fn(),
+  transcribeEnvironmentVoice: vi.fn(),
   listenToConversationEvents: vi.fn(),
 }));
 
@@ -69,6 +72,13 @@ function resetStores() {
     error: null,
     refreshSnapshot: vi.fn(async () => true),
   }));
+  useVoiceStatusStore.setState((state) => ({
+    ...state,
+    snapshotsByEnvironmentId: {},
+    loadingByEnvironmentId: {},
+    errorByEnvironmentId: {},
+    lastFetchedAtByEnvironmentId: {},
+  }));
 }
 
 beforeEach(() => {
@@ -80,6 +90,13 @@ beforeEach(() => {
     apps: [],
   });
   mockedBridge.searchThreadFiles.mockResolvedValue([]);
+  mockedBridge.getEnvironmentVoiceStatus.mockResolvedValue({
+    environmentId: "env-1",
+    available: false,
+    authMode: null,
+    unavailableReason: "tokenMissing",
+    message: "Sign in with ChatGPT before using voice transcription.",
+  });
 });
 
 describe("ThreadConversation", () => {

@@ -22,6 +22,7 @@ use crate::domain::conversation::{
     ThreadComposerCatalog, ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
 use crate::domain::settings::CollaborationMode;
+use crate::domain::voice::VoiceAuthMode;
 use crate::domain::workspace::CodexRateLimitSnapshot;
 use crate::error::{AppError, AppResult};
 use crate::runtime::codex_paths::build_codex_process_path;
@@ -88,6 +89,14 @@ struct PendingServerRequest {
 pub struct SendMessageResult {
     pub snapshot: ThreadConversationSnapshot,
     pub new_codex_thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppServerAuthStatus {
+    pub auth_method: Option<VoiceAuthMode>,
+    pub auth_token: Option<String>,
+    pub requires_openai_auth: Option<bool>,
 }
 
 pub struct RuntimeSession {
@@ -614,6 +623,21 @@ impl RuntimeSession {
             )
             .await?
             .rate_limits)
+    }
+
+    pub async fn read_auth_status(
+        &self,
+        include_token: bool,
+        refresh_token: bool,
+    ) -> AppResult<AppServerAuthStatus> {
+        self.request_typed::<AppServerAuthStatus>(
+            "getAuthStatus",
+            serde_json::json!({
+                "includeToken": include_token,
+                "refreshToken": refresh_token
+            }),
+        )
+        .await
     }
 
     pub async fn composer_catalog(

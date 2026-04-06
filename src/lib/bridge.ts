@@ -20,6 +20,7 @@ import type {
   GlobalSettings,
   GlobalSettingsPatch,
   ManagedWorktreeCreateResult,
+  EnvironmentVoiceStatusSnapshot,
   ProjectRecord,
   UpdateProjectSettingsRequest,
   RespondToApprovalRequestInput,
@@ -29,11 +30,13 @@ import type {
   RuntimeStatusSnapshot,
   SendThreadMessageInput,
   SubmitPlanDecisionInput,
+  TranscribeEnvironmentVoiceInput,
   ThreadComposerCatalog,
   ThreadConversationOpenResponse,
   ThreadConversationSnapshot,
   ThreadRecord,
   WorktreeScriptFailureEventPayload,
+  VoiceTranscriptionResult,
   WorkspaceSnapshot,
 } from "./types";
 
@@ -202,6 +205,20 @@ export function getEnvironmentCodexRateLimits(
   return invoke<CodexRateLimitSnapshot>("get_environment_codex_rate_limits", {
     environmentId,
   });
+}
+
+export function getEnvironmentVoiceStatus(
+  environmentId: string,
+): Promise<EnvironmentVoiceStatusSnapshot> {
+  return invoke<EnvironmentVoiceStatusSnapshot>("get_environment_voice_status", {
+    environmentId,
+  });
+}
+
+export function transcribeEnvironmentVoice(
+  input: TranscribeEnvironmentVoiceInput,
+): Promise<VoiceTranscriptionResult> {
+  return invoke<VoiceTranscriptionResult>("transcribe_environment_voice", { input });
 }
 
 export function listenToCodexUsageEvents(
