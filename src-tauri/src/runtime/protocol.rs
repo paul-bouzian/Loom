@@ -3,16 +3,16 @@ use serde_json::{json, Value};
 
 use crate::domain::conversation::{
     CollaborationModeOption, ConversationApprovalKind, ConversationComposerSettings,
-    ConversationErrorSnapshot, ConversationInteraction, ConversationItem, ConversationItemStatus,
-    ConversationMessageItem, ConversationReasoningItem, ConversationRole, ConversationStatus,
-    ConversationSystemItem, ConversationTaskSnapshot, ConversationTaskStatus, ConversationTone,
-    ConversationToolItem, FileSystemPermissionSnapshot, ModelOption,
-    NetworkApprovalContextSnapshot, NetworkPermissionSnapshot, NetworkPolicyAmendmentSnapshot,
-    NetworkPolicyRuleAction, PendingApprovalRequest, PendingUserInputOption,
-    PendingUserInputQuestion, PendingUserInputRequest, PermissionProfileSnapshot,
-    ProposedPlanSnapshot, ProposedPlanStatus, ProposedPlanStep, ProposedPlanStepStatus,
-    SubagentStatus, SubagentThreadSnapshot, ThreadConversationSnapshot, ThreadTokenUsageSnapshot,
-    TokenUsageBreakdown, UnsupportedInteractionRequest,
+    ConversationErrorSnapshot, ConversationImageAttachment, ConversationInteraction,
+    ConversationItem, ConversationItemStatus, ConversationMessageItem, ConversationReasoningItem,
+    ConversationRole, ConversationStatus, ConversationSystemItem, ConversationTaskSnapshot,
+    ConversationTaskStatus, ConversationTone, ConversationToolItem, FileSystemPermissionSnapshot,
+    InputModality, ModelOption, NetworkApprovalContextSnapshot, NetworkPermissionSnapshot,
+    NetworkPolicyAmendmentSnapshot, NetworkPolicyRuleAction, PendingApprovalRequest,
+    PendingUserInputOption, PendingUserInputQuestion, PendingUserInputRequest,
+    PermissionProfileSnapshot, ProposedPlanSnapshot, ProposedPlanStatus, ProposedPlanStep,
+    ProposedPlanStepStatus, SubagentStatus, SubagentThreadSnapshot, ThreadConversationSnapshot,
+    ThreadTokenUsageSnapshot, TokenUsageBreakdown, UnsupportedInteractionRequest,
 };
 use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort};
 use crate::domain::workspace::CodexRateLimitSnapshot;
@@ -310,6 +310,7 @@ pub struct OutgoingNamedInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutgoingUserInputPayload {
     pub text: String,
+    pub images: Vec<ConversationImageAttachment>,
     pub text_elements: Vec<OutgoingTextElement>,
     pub skills: Vec<OutgoingNamedInput>,
     pub mentions: Vec<OutgoingNamedInput>,
@@ -456,6 +457,8 @@ pub struct ModelWire {
     pub description: String,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOptionWire>,
     pub default_reasoning_effort: ReasoningEffort,
+    #[serde(default = "default_input_modalities")]
+    pub input_modalities: Vec<InputModality>,
     pub is_default: bool,
     pub hidden: bool,
 }
@@ -464,6 +467,10 @@ pub struct ModelWire {
 #[serde(rename_all = "camelCase")]
 pub struct ReasoningEffortOptionWire {
     pub reasoning_effort: ReasoningEffort,
+}
+
+fn default_input_modalities() -> Vec<InputModality> {
+    vec![InputModality::Text, InputModality::Image]
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -632,23 +639,41 @@ pub fn collaboration_mode_payload(composer: &ConversationComposerSettings) -> Va
 }
 
 pub fn user_input_payload(input: &OutgoingUserInputPayload) -> Value {
-    let mut payload = vec![json!({
-        "type": "text",
-        "text": input.text,
-        "text_elements": input
-            .text_elements
-            .iter()
-            .map(|element| {
-                json!({
-                    "byteRange": {
-                        "start": element.start,
-                        "end": element.end,
-                    },
-                    "placeholder": element.placeholder,
+    let mut payload = Vec::new();
+    if !input.text.is_empty() {
+        payload.push(json!({
+            "type": "text",
+            "text": input.text,
+            "text_elements": input
+                .text_elements
+                .iter()
+                .map(|element| {
+                    json!({
+                        "byteRange": {
+                            "start": element.start,
+                            "end": element.end,
+                        },
+                        "placeholder": element.placeholder,
+                    })
                 })
+                .collect::<Vec<_>>(),
+        }));
+    }
+
+    payload.extend(input.images.iter().map(|image| match image {
+        ConversationImageAttachment::Image { url } => {
+            json!({
+                "type": "image",
+                "url": url,
             })
-            .collect::<Vec<_>>(),
-    })];
+        }
+        ConversationImageAttachment::LocalImage { path } => {
+            json!({
+                "type": "localImage",
+                "path": path,
+            })
+        }
+    }));
 
     payload.extend(input.skills.iter().map(|skill| {
         json!({
@@ -790,6 +815,7 @@ pub fn model_options_from_response(response: ModelListResponse) -> Vec<ModelOpti
                 .into_iter()
                 .map(|option| option.reasoning_effort)
                 .collect(),
+            input_modalities: model.input_modalities,
             is_default: model.is_default,
         })
         .collect()
@@ -966,25 +992,29 @@ pub fn normalize_item(value: &Value) -> Option<ConversationItem> {
 
     match item_type {
         "userMessage" => {
-            let text = value
+            let content = value
                 .get("content")
                 .and_then(Value::as_array)
-                .map(|content| {
-                    content
-                        .iter()
-                        .map(user_content_to_visible_text)
-                        .filter(|part| !part.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("")
-                })
+                .cloned()
                 .unwrap_or_default();
-            if is_hidden_control_message(&text) {
+            let text = content
+                .iter()
+                .map(user_content_to_visible_text)
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("");
+            let images = content
+                .iter()
+                .filter_map(user_content_to_image_attachment)
+                .collect::<Vec<_>>();
+            if is_hidden_control_message(&text) && images.is_empty() {
                 return None;
             }
             Some(ConversationItem::Message(ConversationMessageItem {
                 id,
                 role: ConversationRole::User,
                 text,
+                images: (!images.is_empty()).then_some(images),
                 is_streaming: false,
             }))
         }
@@ -992,6 +1022,7 @@ pub fn normalize_item(value: &Value) -> Option<ConversationItem> {
             id,
             role: ConversationRole::Assistant,
             text: string_field(value, "text"),
+            images: None,
             is_streaming: false,
         })),
         "plan" => None,
@@ -1416,6 +1447,7 @@ pub fn append_agent_delta(items: &mut Vec<ConversationItem>, item_id: &str, delt
             id: item_id.to_string(),
             role: ConversationRole::Assistant,
             text: delta.to_string(),
+            images: None,
             is_streaming: true,
         })),
     }
@@ -1573,6 +1605,7 @@ fn merge_conversation_items(
             } else {
                 incoming_message.text
             },
+            images: incoming_message.images.or(existing_message.images),
             is_streaming: incoming_message.is_streaming,
         }),
         (ConversationItem::Tool(existing_tool), ConversationItem::Tool(incoming_tool)) => {
@@ -1796,9 +1829,30 @@ fn user_content_to_visible_text(value: &Value) -> String {
                 .into_iter()
                 .flatten(),
         ),
-        Some("image") | Some("localImage") => "[Image]".to_string(),
         Some("mention") | Some("skill") => String::new(),
         _ => String::new(),
+    }
+}
+
+fn user_content_to_image_attachment(value: &Value) -> Option<ConversationImageAttachment> {
+    match value.get("type").and_then(Value::as_str) {
+        Some("image") => value
+            .get("url")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .map(|url| ConversationImageAttachment::Image {
+                url: url.to_string(),
+            }),
+        Some("localImage") => value
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(|path| ConversationImageAttachment::LocalImage {
+                path: path.to_string(),
+            }),
+        _ => None,
     }
 }
 
@@ -1914,8 +1968,23 @@ fn optimistic_user_message_index(
                 if message.role == ConversationRole::User
                     && message.id.starts_with("local-user-")
                     && message.text == incoming_message.text
+                    && same_message_images(
+                        message.images.as_deref(),
+                        incoming_message.images.as_deref(),
+                    )
         )
     })
+}
+
+fn same_message_images(
+    left: Option<&[ConversationImageAttachment]>,
+    right: Option<&[ConversationImageAttachment]>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
 }
 
 fn find_message_mut<'a>(
@@ -1996,7 +2065,13 @@ mod tests {
         match item {
             ConversationItem::Message(message) => {
                 assert_eq!(message.role, ConversationRole::User);
-                assert_eq!(message.text, "Hello[Image]");
+                assert_eq!(message.text, "Hello");
+                assert_eq!(
+                    message.images,
+                    Some(vec![ConversationImageAttachment::Image {
+                        url: "https://example.com".to_string(),
+                    }])
+                );
             }
             _ => panic!("expected a message item"),
         }
@@ -2069,6 +2144,7 @@ mod tests {
             id: "local-user-1".to_string(),
             role: ConversationRole::User,
             text: "Salut".to_string(),
+            images: None,
             is_streaming: false,
         })];
 
@@ -2078,6 +2154,7 @@ mod tests {
                 id: "user-1".to_string(),
                 role: ConversationRole::User,
                 text: "Salut".to_string(),
+                images: None,
                 is_streaming: false,
             }),
         );

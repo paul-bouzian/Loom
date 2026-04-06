@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import * as bridge from "../../../lib/bridge";
 import {
@@ -16,6 +17,7 @@ import { startVoiceCapture } from "./composer-voice-audio";
 vi.mock("../../../lib/bridge", () => ({
   getThreadComposerCatalog: vi.fn(),
   searchThreadFiles: vi.fn(),
+  readImageAsDataUrl: vi.fn(),
   getEnvironmentVoiceStatus: vi.fn(),
   transcribeEnvironmentVoice: vi.fn(),
 }));
@@ -23,6 +25,16 @@ vi.mock("../../../lib/bridge", () => ({
 vi.mock("./composer-voice-audio", () => ({
   MAX_RECORDING_DURATION_MS: 120_000,
   startVoiceCapture: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: vi.fn(() => ({
+    onDragDropEvent: vi.fn(async () => () => undefined),
+  })),
 }));
 
 const mockedBridge = vi.mocked(bridge);
@@ -54,6 +66,9 @@ beforeEach(() => {
     apps: [],
   });
   mockedBridge.searchThreadFiles.mockResolvedValue([]);
+  mockedBridge.readImageAsDataUrl.mockResolvedValue(
+    "data:image/png;base64,aGVsbG8=",
+  );
   mockedBridge.getEnvironmentVoiceStatus.mockResolvedValue({
     environmentId: "env-1",
     available: true,
@@ -72,6 +87,7 @@ beforeEach(() => {
     configurable: true,
     value: class FakeAudioContext {},
   });
+  vi.mocked(open).mockResolvedValue(null);
 });
 
 describe("InlineComposer voice dictation", () => {
@@ -278,12 +294,68 @@ describe("InlineComposer voice dictation", () => {
   });
 });
 
+describe("InlineComposer image attachments", () => {
+  it("sends image-only drafts with attached files", async () => {
+    const onSend = vi.fn();
+    vi.mocked(open).mockResolvedValue(["/tmp/screenshot.png"]);
+
+    renderComposer("", { onSend });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Attach images" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("screenshot.png")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(onSend).toHaveBeenCalledWith("", [
+      { type: "localImage", path: "/tmp/screenshot.png" },
+    ]);
+  });
+
+  it("disables image attachments when the selected model lacks image input", async () => {
+    renderComposer("", {
+      modelOptions: [
+        {
+          ...capabilitiesFixture.models[0],
+          inputModalities: ["text"],
+        },
+      ],
+    });
+
+    const attachButton = await screen.findByRole("button", {
+      name: "Attach images",
+    });
+    expect(attachButton).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Image attachments are unavailable for GPT-5.4.",
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
 function renderComposer(
   initialDraft: string,
-  options: { disabled?: boolean } = {},
+  options: {
+    disabled?: boolean;
+    modelOptions?: typeof capabilitiesFixture.models;
+    onSend?: (
+      text: string,
+      images: Array<{ type: "image"; url: string } | { type: "localImage"; path: string }>,
+    ) => void;
+  } = {},
 ) {
   function Harness() {
     const [draft, setDraft] = useState(initialDraft);
+    const [images, setImages] = useState<
+      Array<
+        { type: "image"; url: string } | { type: "localImage"; path: string }
+      >
+    >([]);
     const [mentionBindings, setMentionBindings] = useState<
       ComposerDraftMentionBinding[]
     >([]);
@@ -298,17 +370,21 @@ function renderComposer(
         draft={draft}
         effortOptions={["low", "medium", "high", "xhigh"]}
         focusKey="thread-1"
+        images={images}
         isBusy={false}
         isSending={false}
         isRefiningPlan={false}
         mentionBindings={mentionBindings}
-        modelOptions={capabilitiesFixture.models}
+        modelOptions={options.modelOptions ?? capabilitiesFixture.models}
+        onChangeImages={setImages}
         tokenUsage={null}
         onCancelRefine={() => undefined}
         onChangeDraft={setDraft}
         onChangeMentionBindings={setMentionBindings}
         onInterrupt={() => undefined}
-        onSend={() => undefined}
+        onSend={(text, nextImages) =>
+          options.onSend?.(text, nextImages)
+        }
         onUpdateComposer={() => undefined}
       />
     );
@@ -320,6 +396,11 @@ function renderComposer(
 function renderComposerWithExternalDraftAction(initialDraft: string) {
   function Harness() {
     const [draft, setDraft] = useState(initialDraft);
+    const [images, setImages] = useState<
+      Array<
+        { type: "image"; url: string } | { type: "localImage"; path: string }
+      >
+    >([]);
     const [mentionBindings, setMentionBindings] = useState<
       ComposerDraftMentionBinding[]
     >([]);
@@ -342,11 +423,13 @@ function renderComposerWithExternalDraftAction(initialDraft: string) {
           draft={draft}
           effortOptions={["low", "medium", "high", "xhigh"]}
           focusKey="thread-1"
+          images={images}
           isBusy={false}
           isSending={false}
           isRefiningPlan={false}
           mentionBindings={mentionBindings}
           modelOptions={capabilitiesFixture.models}
+          onChangeImages={setImages}
           tokenUsage={null}
           onCancelRefine={() => undefined}
           onChangeDraft={setDraft}

@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::domain::conversation::{
     ConversationComposerSettings, ConversationInteraction, ConversationItem,
-    ConversationTaskStatus, ProposedPlanSnapshot, ProposedPlanStatus,
+    ConversationTaskStatus, InputModality, ProposedPlanSnapshot, ProposedPlanStatus,
 };
 use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort};
 
@@ -650,6 +650,7 @@ fn filters_hidden_models_and_preserves_effort_metadata() {
                     },
                 ],
                 default_reasoning_effort: ReasoningEffort::High,
+                input_modalities: vec![InputModality::Text, InputModality::Image],
                 is_default: true,
                 hidden: false,
             },
@@ -659,6 +660,7 @@ fn filters_hidden_models_and_preserves_effort_metadata() {
                 description: "Hidden".to_string(),
                 supported_reasoning_efforts: vec![],
                 default_reasoning_effort: ReasoningEffort::Medium,
+                input_modalities: vec![InputModality::Text],
                 is_default: false,
                 hidden: true,
             },

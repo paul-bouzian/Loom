@@ -15,11 +15,12 @@ use uuid::Uuid;
 
 use crate::domain::conversation::{
     ApprovalResponseInput, CommandApprovalDecisionInput, ComposerMentionBindingInput,
-    ConversationEventPayload, ConversationInteraction, ConversationItem, ConversationMessageItem,
-    ConversationRole, ConversationStatus, ConversationTaskStatus, EnvironmentCapabilitiesSnapshot,
-    FileChangeApprovalDecisionInput, PermissionGrantScope, PermissionsApprovalDecisionInput,
-    PlanDecisionAction, RespondToUserInputRequestInput, SubmitPlanDecisionInput,
-    ThreadComposerCatalog, ThreadConversationOpenResponse, ThreadConversationSnapshot,
+    ConversationEventPayload, ConversationImageAttachment, ConversationInteraction,
+    ConversationItem, ConversationMessageItem, ConversationRole, ConversationStatus,
+    ConversationTaskStatus, EnvironmentCapabilitiesSnapshot, FileChangeApprovalDecisionInput,
+    PermissionGrantScope, PermissionsApprovalDecisionInput, PlanDecisionAction,
+    RespondToUserInputRequestInput, SubmitPlanDecisionInput, ThreadComposerCatalog,
+    ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
 use crate::domain::settings::CollaborationMode;
 use crate::domain::voice::VoiceAuthMode;
@@ -393,8 +394,9 @@ impl RuntimeSession {
         &self,
         context: ThreadRuntimeContext,
         text: String,
+        images: Vec<ConversationImageAttachment>,
     ) -> AppResult<SendMessageResult> {
-        self.send_message_with_bindings(context, text, Vec::new())
+        self.send_message_with_bindings(context, text, images, Vec::new())
             .await
     }
 
@@ -402,9 +404,10 @@ impl RuntimeSession {
         &self,
         context: ThreadRuntimeContext,
         text: String,
+        images: Vec<ConversationImageAttachment>,
         mention_bindings: Vec<ComposerMentionBindingInput>,
     ) -> AppResult<SendMessageResult> {
-        self.send_message_with_visibility(context, text, true, mention_bindings)
+        self.send_message_with_visibility(context, text, images, true, mention_bindings)
             .await
     }
 
@@ -488,6 +491,7 @@ impl RuntimeSession {
                     .send_message_with_visibility(
                         context,
                         plan_approval_message().to_string(),
+                        Vec::new(),
                         false,
                         Vec::new(),
                     )
@@ -516,6 +520,7 @@ impl RuntimeSession {
                     .send_message_with_visibility(
                         context,
                         trimmed.to_string(),
+                        input.images.unwrap_or_default(),
                         true,
                         input.mention_bindings.unwrap_or_default(),
                     )
@@ -715,11 +720,13 @@ impl RuntimeSession {
         &self,
         context: &ThreadRuntimeContext,
         visible_text: &str,
+        images: &[ConversationImageAttachment],
         mention_bindings: &[ComposerMentionBindingInput],
     ) -> AppResult<OutgoingUserInputPayload> {
         if !visible_text.contains("/prompts:") && !visible_text.contains('$') {
             return Ok(OutgoingUserInputPayload {
                 text: visible_text.to_string(),
+                images: images.to_vec(),
                 text_elements: Vec::new(),
                 skills: Vec::new(),
                 mentions: Vec::new(),
@@ -749,6 +756,7 @@ impl RuntimeSession {
 
         Ok(OutgoingUserInputPayload {
             text: resolved.text,
+            images: images.to_vec(),
             text_elements: resolved
                 .text_elements
                 .into_iter()
@@ -781,15 +789,18 @@ impl RuntimeSession {
         &self,
         context: ThreadRuntimeContext,
         text: String,
+        images: Vec<ConversationImageAttachment>,
         visible_to_user: bool,
         mention_bindings: Vec<ComposerMentionBindingInput>,
     ) -> AppResult<SendMessageResult> {
         let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Err(AppError::Validation("Message cannot be empty.".to_string()));
+        if trimmed.is_empty() && images.is_empty() {
+            return Err(AppError::Validation(
+                "Message must include text or at least one image.".to_string(),
+            ));
         }
         let outgoing_input = self
-            .resolve_outgoing_user_input(&context, trimmed, &mention_bindings)
+            .resolve_outgoing_user_input(&context, trimmed, &images, &mention_bindings)
             .await?;
 
         let mut open = self.open_thread(context.clone()).await?;
@@ -799,6 +810,7 @@ impl RuntimeSession {
                 id: format!("local-user-{}", Uuid::now_v7()),
                 role: ConversationRole::User,
                 text: trimmed.to_string(),
+                images: (!images.is_empty()).then_some(images.clone()),
                 is_streaming: false,
             });
             upsert_item(&mut open.snapshot.items, user_item);
@@ -2343,6 +2355,7 @@ mod tests {
                 id: "assistant-1".to_string(),
                 role: ConversationRole::Assistant,
                 text: "Something went wrong".to_string(),
+                images: None,
                 is_streaming: false,
             }));
 

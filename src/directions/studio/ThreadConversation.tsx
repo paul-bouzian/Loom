@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import type {
   ComposerMentionBindingInput,
   ConversationItem,
+  ConversationImageAttachment,
   EnvironmentRecord,
   ThreadRecord,
 } from "../../lib/types";
@@ -16,6 +17,7 @@ import {
   useConversationStore,
 } from "../../stores/conversation-store";
 import { ConversationInteractionPanel } from "./ConversationInteractionPanel";
+import { ConversationMessageImages } from "./ConversationMessageImages";
 import { ConversationMarkdown } from "./ConversationMarkdown";
 import { ConversationMeta } from "./ConversationMeta";
 import { ConversationPlanCard } from "./ConversationPlanCard";
@@ -23,6 +25,7 @@ import { ConversationTaskCard } from "./ConversationTaskCard";
 import { SubagentStrip } from "./SubagentStrip";
 import { InlineComposer } from "./composer/InlineComposer";
 import type { ComposerDraftMentionBinding } from "./composer/composer-mention-bindings";
+import { modelSupportsImageInput } from "./conversation-images";
 import "./ThreadConversation.css";
 
 type Props = {
@@ -51,6 +54,7 @@ export function ThreadConversation({ environment, thread }: Props) {
   );
   const submitPlanDecision = useConversationStore((state) => state.submitPlanDecision);
   const [draft, setDraft] = useState("");
+  const [images, setImages] = useState<ConversationImageAttachment[]>([]);
   const [mentionBindings, setMentionBindings] = useState<ComposerDraftMentionBinding[]>([]);
   const [isRefiningPlan, setIsRefiningPlan] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -121,6 +125,7 @@ export function ThreadConversation({ environment, thread }: Props) {
   const resolvedComposer = composer ?? snapshot.composer;
   const selectedModel =
     capabilities?.models.find((candidate) => candidate.id === resolvedComposer.model) ?? null;
+  const selectedModelSupportsImages = modelSupportsImageInput(selectedModel);
   const effortOptions = selectedModel?.supportedReasoningEfforts ?? [
     resolvedComposer.reasoningEffort,
   ];
@@ -140,11 +145,26 @@ export function ThreadConversation({ environment, thread }: Props) {
     Boolean(interaction) || Boolean(activePlan?.isAwaitingDecision && !isRefiningPlan);
   const isRunning = snapshot.status === "running";
   const isMutating = isPending || isSubmitting;
+  const hasDraftContent = draft.trim().length > 0;
+  const hasAttachedImages = images.length > 0;
   const sendDisabled =
-    draft.trim().length === 0 || isRunning || isMutating || (composerLocked && !isRefiningPlan);
+    ((!hasDraftContent && !hasAttachedImages) ||
+      (hasAttachedImages && !selectedModelSupportsImages) ||
+      isRunning ||
+      isMutating ||
+      (composerLocked && !isRefiningPlan));
+
+  function resetComposerState() {
+    startTransition(() => {
+      setDraft("");
+      setImages([]);
+      setMentionBindings([]);
+    });
+  }
 
   async function handleSend(
     text: string,
+    images: ConversationImageAttachment[],
     mentionBindings: ComposerMentionBindingInput[],
   ) {
     if (sendDisabled || submitInFlightRef.current) return;
@@ -158,23 +178,18 @@ export function ThreadConversation({ environment, thread }: Props) {
           action: "refine",
           feedback: message,
           composer: { ...resolvedComposer, collaborationMode: "plan" },
+          ...(images.length > 0 ? { images } : {}),
           ...(mentionBindings.length > 0 ? { mentionBindings } : {}),
         });
         if (sent) {
-          startTransition(() => {
-            setDraft("");
-            setMentionBindings([]);
-          });
+          resetComposerState();
           setIsRefiningPlan(false);
         }
         return;
       }
-      const sent = await sendMessage(thread.id, message, mentionBindings);
+      const sent = await sendMessage(thread.id, message, images, mentionBindings);
       if (sent) {
-        startTransition(() => {
-          setDraft("");
-          setMentionBindings([]);
-        });
+        resetComposerState();
       }
     } finally {
       submitInFlightRef.current = false;
@@ -194,10 +209,7 @@ export function ThreadConversation({ environment, thread }: Props) {
       });
       if (sent) {
         setIsRefiningPlan(false);
-        startTransition(() => {
-          setDraft("");
-          setMentionBindings([]);
-        });
+        resetComposerState();
       }
     } finally {
       submitInFlightRef.current = false;
@@ -261,21 +273,24 @@ export function ThreadConversation({ environment, thread }: Props) {
         draft={draft}
         effortOptions={effortOptions}
         focusKey={thread.id}
+        images={images}
         isBusy={isRunning || isPending}
         isSending={isSubmitting}
         isRefiningPlan={isRefiningPlan}
         mentionBindings={mentionBindings}
         modelOptions={capabilities?.models ?? []}
+        onChangeImages={setImages}
         tokenUsage={snapshot.tokenUsage}
         onCancelRefine={() => {
-          setDraft("");
-          setMentionBindings([]);
+          resetComposerState();
           setIsRefiningPlan(false);
         }}
         onChangeDraft={setDraft}
         onChangeMentionBindings={setMentionBindings}
         onInterrupt={() => void interruptThread(thread.id)}
-        onSend={(text, mentionBindings) => void handleSend(text, mentionBindings)}
+        onSend={(text, images, mentionBindings) =>
+          void handleSend(text, images, mentionBindings)
+        }
         onUpdateComposer={(patch) => {
           if (patch.collaborationMode === "build") {
             setIsRefiningPlan(false);
@@ -292,6 +307,8 @@ function ConversationItemRow({ item }: { item: ConversationItem }) {
 
   if (item.kind === "message") {
     const shouldRenderMarkdown = item.role === "assistant";
+    const hasText = item.text.trim().length > 0;
+    const hasImages = Boolean(item.images && item.images.length > 0);
     const bodyClassName = [
       "tx-item__body",
       "tx-item__body--message",
@@ -303,14 +320,16 @@ function ConversationItemRow({ item }: { item: ConversationItem }) {
     return (
       <div className={`tx-item tx-item--message tx-item--${item.role}`}>
         <div className="tx-item__header">{item.role === "user" ? "You" : "Codex"}</div>
-        {shouldRenderMarkdown ? (
+        {hasImages ? <ConversationMessageImages images={item.images} /> : null}
+        {shouldRenderMarkdown && hasText ? (
           <ConversationMarkdown
             markdown={item.text}
             className={bodyClassName}
           />
-        ) : (
+        ) : null}
+        {!shouldRenderMarkdown && hasText ? (
           <div className={bodyClassName}>{item.text}</div>
-        )}
+        ) : null}
       </div>
     );
   }
