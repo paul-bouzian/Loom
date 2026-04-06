@@ -75,7 +75,12 @@ impl TerminalService {
         let key = terminal_session_key(&environment_id, &terminal_id);
 
         if let Some(existing) = self.sessions.lock().await.get(&key).cloned() {
-            return Ok(existing.snapshot().await);
+            if existing.status().await == TerminalStatus::Running {
+                return Ok(existing.snapshot().await);
+            }
+
+            self.sessions.lock().await.remove(&key);
+            kill_terminal_session(&existing).await;
         }
         let open_revision = {
             let mut revisions = self.revisions.lock().await;
@@ -139,13 +144,20 @@ impl TerminalService {
             return Err(AppError::Validation("Terminal is not running.".to_string()));
         }
 
-        let mut writer = session.writer.lock().await;
-        writer
-            .write_all(input.data.as_bytes())
-            .map_err(|error| AppError::Runtime(format!("Failed to write to terminal: {error}")))?;
-        writer.flush().map_err(|error| {
-            AppError::Runtime(format!("Failed to flush terminal input: {error}"))
-        })?;
+        let session = Arc::clone(&session);
+        let data = input.data;
+        tokio::task::spawn_blocking(move || -> AppResult<()> {
+            let mut writer = session.writer.blocking_lock();
+            writer.write_all(data.as_bytes()).map_err(|error| {
+                AppError::Runtime(format!("Failed to write to terminal: {error}"))
+            })?;
+            writer.flush().map_err(|error| {
+                AppError::Runtime(format!("Failed to flush terminal input: {error}"))
+            })?;
+            Ok(())
+        })
+        .await
+        .map_err(|error| AppError::Runtime(format!("Terminal write task failed: {error}")))??;
         Ok(())
     }
 

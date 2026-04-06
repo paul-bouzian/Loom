@@ -57,11 +57,13 @@ export function TerminalPanel({ environment, terminalId }: Props) {
     fitAddon.fit();
 
     const handleData = (data: string) => {
-      void bridge.writeEnvironmentTerminal({
-        environmentId: environment.id,
-        terminalId,
-        data,
-      });
+      void bridge
+        .writeEnvironmentTerminal({
+          environmentId: environment.id,
+          terminalId,
+          data,
+        })
+        .catch(() => undefined);
     };
     terminal.onData(handleData);
 
@@ -95,6 +97,7 @@ export function TerminalPanel({ environment, terminalId }: Props) {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
     const bufferedEvents: TerminalEventPayload[] = [];
+    let latestSequence = Number.NEGATIVE_INFINITY;
     let ready = false;
 
     setSnapshot(null);
@@ -135,6 +138,10 @@ export function TerminalPanel({ environment, terminalId }: Props) {
             bufferedEvents.push(payload);
             return;
           }
+          if (payload.sequence <= latestSequence) {
+            return;
+          }
+          latestSequence = payload.sequence;
           handleTerminalEvent(terminal, payload, setSnapshot, setError);
         });
 
@@ -153,11 +160,16 @@ export function TerminalPanel({ environment, terminalId }: Props) {
           terminal.write(openedSnapshot.history);
         }
         setSnapshot(openedSnapshot);
+        latestSequence = openedSnapshot.eventSequence;
         ready = true;
-        for (const payload of bufferedEvents) {
-          if (payload.sequence > openedSnapshot.eventSequence) {
-            handleTerminalEvent(terminal, payload, setSnapshot, setError);
+        for (const payload of bufferedEvents.sort(
+          compareTerminalEventSequence,
+        )) {
+          if (payload.sequence <= latestSequence) {
+            continue;
           }
+          latestSequence = payload.sequence;
+          handleTerminalEvent(terminal, payload, setSnapshot, setError);
         }
         bufferedEvents.length = 0;
         setLoading(false);
@@ -252,6 +264,13 @@ function terminalStatusLabel(
     case "error":
       return "Error";
   }
+}
+
+function compareTerminalEventSequence(
+  left: TerminalEventPayload,
+  right: TerminalEventPayload,
+) {
+  return left.sequence - right.sequence;
 }
 
 function handleTerminalEvent(
