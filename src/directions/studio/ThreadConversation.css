@@ -417,6 +417,20 @@ ol.tx-markdown__list {
   text-underline-offset: 2px;
 }
 
+.tx-markdown__file-ref {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 1px 6px;
+  border-radius: 8px;
+  color: var(--tx-text-primary);
+  font-family: var(--tx-font-mono);
+  font-size: 0.95em;
+  line-height: 1.4;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
 .tx-plan-card__placeholder {
   color: var(--tx-text-secondary);
   font-size: var(--tx-text-sm);
@@ -1117,8 +1131,8 @@ ol.tx-markdown__list {
 }
 
 .tx-inline-token--file {
-  background: color-mix(in srgb, var(--tx-success) 12%, transparent);
-  outline-color: color-mix(in srgb, var(--tx-success) 24%, transparent);
+  background: color-mix(in srgb, var(--tx-accent) 12%, transparent);
+  outline-color: color-mix(in srgb, var(--tx-accent) 24%, transparent);
 }
 
 .tx-inline-token__part--name {

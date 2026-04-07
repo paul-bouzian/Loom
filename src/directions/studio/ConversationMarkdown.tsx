@@ -1,6 +1,11 @@
 import { Fragment, type ReactNode } from "react";
 import {
+  parseFileReferenceTarget,
+  type FileReferenceTarget,
+} from "./conversation-file-references";
+import {
   handleExternalLinkClick,
+  isValidExternalUrl,
   renderTextWithExternalLinks,
 } from "./conversation-links";
 
@@ -19,14 +24,27 @@ type MarkdownBlock =
   | { kind: "blockquote"; text: string }
   | { kind: "codeBlock"; code: string };
 
-type InlineTokenKind = "code" | "link" | "strong" | "emphasis";
-
-type InlineTokenMatch = {
-  kind: InlineTokenKind;
-  start: number;
-  end: number;
-  captures: string[];
-};
+type InlineTokenMatch =
+  | {
+      kind: "code" | "strong" | "emphasis";
+      start: number;
+      end: number;
+      text: string;
+    }
+  | {
+      kind: "externalLink";
+      start: number;
+      end: number;
+      label: string;
+      href: string;
+    }
+  | {
+      kind: "fileReference";
+      start: number;
+      end: number;
+      label: string;
+      target: FileReferenceTarget;
+    };
 
 const FENCE_PATTERN = /^```([a-zA-Z0-9_+-]+)?\s*$/;
 const HEADING_PATTERN = /^(#{1,6})\s+(.+)$/;
@@ -323,33 +341,46 @@ function renderInlineMarkdown(
     if (token.kind === "code") {
       nodes.push(
         <code key={key} className="tx-markdown__code">
-          {token.captures[0]}
+          {token.text}
         </code>,
       );
-    } else if (token.kind === "link") {
+    } else if (token.kind === "externalLink") {
       nodes.push(
         <a
           key={key}
           className="tx-markdown__link"
-          href={token.captures[1]}
+          href={token.href}
           rel="noreferrer"
-          onClick={(event) => handleExternalLinkClick(event, token.captures[1])}
+          onClick={(event) => handleExternalLinkClick(event, token.href)}
         >
-          {renderInlineMarkdown(token.captures[0], key, {
+          {renderInlineMarkdown(token.label, key, {
             linkifyPlainText: false,
           })}
         </a>,
       );
+    } else if (token.kind === "fileReference") {
+      nodes.push(
+        <span
+          key={key}
+          className="tx-inline-token tx-inline-token--file tx-markdown__file-ref"
+          title={token.target.rawTarget}
+          data-file-path={token.target.filePath}
+          data-file-line={token.target.line ?? undefined}
+          data-file-column={token.target.column ?? undefined}
+        >
+          {token.label}
+        </span>,
+      );
     } else if (token.kind === "strong") {
       nodes.push(
         <strong key={key}>
-          {renderInlineMarkdown(token.captures[0], key)}
+          {renderInlineMarkdown(token.text, key)}
         </strong>,
       );
     } else {
       nodes.push(
         <em key={key}>
-          {renderInlineMarkdown(token.captures[0], key)}
+          {renderInlineMarkdown(token.text, key)}
         </em>,
       );
     }
@@ -405,7 +436,7 @@ function findCodeToken(text: string, startIndex: number): InlineTokenMatch | nul
         kind: "code",
         start: tokenStart,
         end: tokenEnd + 1,
-        captures: [text.slice(tokenStart + 1, tokenEnd)],
+        text: text.slice(tokenStart + 1, tokenEnd),
       };
     }
 
@@ -431,18 +462,34 @@ function findLinkToken(text: string, startIndex: number): InlineTokenMatch | nul
     }
 
     const label = text.slice(tokenStart + 1, labelEnd).trim();
-    const href = text.slice(labelEnd + 2, urlEnd).trim();
-    if (!label || !/^https?:\/\//.test(href)) {
+    const target = text.slice(labelEnd + 2, urlEnd).trim();
+    if (!label) {
       tokenStart = text.indexOf("[", tokenStart + 1);
       continue;
     }
 
-    return {
-      kind: "link",
-      start: tokenStart,
-      end: urlEnd + 1,
-      captures: [label, href],
-    };
+    if (isValidExternalUrl(target)) {
+      return {
+        kind: "externalLink",
+        start: tokenStart,
+        end: urlEnd + 1,
+        label,
+        href: target,
+      };
+    }
+
+    const fileReference = parseFileReferenceTarget(target);
+    if (fileReference) {
+      return {
+        kind: "fileReference",
+        start: tokenStart,
+        end: urlEnd + 1,
+        label,
+        target: fileReference,
+      };
+    }
+
+    tokenStart = text.indexOf("[", tokenStart + 1);
   }
 
   return null;
@@ -461,7 +508,7 @@ function findStrongToken(text: string, startIndex: number): InlineTokenMatch | n
         kind: "strong",
         start: tokenStart,
         end: tokenEnd + 2,
-        captures: [text.slice(tokenStart + 2, tokenEnd)],
+        text: text.slice(tokenStart + 2, tokenEnd),
       };
     }
 
@@ -492,7 +539,7 @@ function findEmphasisToken(text: string, startIndex: number): InlineTokenMatch |
         kind: "emphasis",
         start: tokenStart,
         end: tokenEnd + 1,
-        captures: [text.slice(tokenStart + 1, tokenEnd)],
+        text: text.slice(tokenStart + 1, tokenEnd),
       };
     }
 

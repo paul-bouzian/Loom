@@ -79,7 +79,7 @@ export function renderTextWithExternalLinks(text: string, keyPrefix: string): Re
   return nodes;
 }
 
-function isValidExternalUrl(value: string) {
+export function isValidExternalUrl(value: string) {
   const trimmed = value.trim();
   if (!/^https?:\/\//i.test(trimmed)) {
     return false;
