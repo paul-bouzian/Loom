@@ -6,7 +6,7 @@ mod runtime;
 mod services;
 mod state;
 
-use tauri::{Manager, WindowEvent};
+use tauri::{Manager, RunEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,7 +17,7 @@ pub fn run() {
         .compact()
         .init();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -27,13 +27,6 @@ pub fn run() {
             let app_state = state::AppState::new(app.handle())?;
             app.manage(app_state);
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { .. } = event {
-                if let Some(state) = window.try_state::<state::AppState>() {
-                    state.terminal.shutdown_all();
-                }
-            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::conversation::open_thread_conversation,
@@ -84,6 +77,14 @@ pub fn run() {
             commands::workspace::stop_environment_runtime,
             commands::workspace::get_environment_codex_rate_limits,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app, event| {
+        if let RunEvent::Exit = event {
+            if let Some(state) = app.try_state::<state::AppState>() {
+                state.terminal.shutdown_all();
+            }
+        }
+    });
 }

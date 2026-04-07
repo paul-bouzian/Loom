@@ -210,13 +210,19 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         existing.activeTabId === id
           ? (tabs[tabs.length - 1]?.id ?? null)
           : existing.activeTabId;
-      // Closing the last tab in this env hides the panel and removes the
-      // empty slot so byEnv doesn't grow forever.
+      // Closing the last tab in this env removes the empty slot so byEnv
+      // doesn't grow forever. Hide the panel only when no terminals remain
+      // anywhere in the workspace.
       if (tabs.length === 0) {
         const nextByEnv = { ...state.byEnv };
         delete nextByEnv[environmentId];
-        localStorage.setItem(VISIBLE_KEY, "0");
-        return { byEnv: nextByEnv, visible: false };
+        const hasTabsRemaining = Object.values(nextByEnv).some(
+          (slot) => slot.tabs.length > 0,
+        );
+        if (!hasTabsRemaining) {
+          localStorage.setItem(VISIBLE_KEY, "0");
+        }
+        return { byEnv: nextByEnv, visible: hasTabsRemaining ? state.visible : false };
       }
       return {
         byEnv: {

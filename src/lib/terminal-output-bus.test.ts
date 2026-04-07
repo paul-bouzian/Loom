@@ -37,7 +37,7 @@ afterEach(async () => {
 });
 
 describe("terminal-output-bus", () => {
-  it("buffers output that arrives before a subscriber is attached and flushes on subscribe", async () => {
+  it("replays buffered output that arrives before a subscriber is attached", async () => {
     let emit!: (payload: TerminalOutputPayload) => void;
     listenMock.mockImplementation(async (callback) => {
       emit = callback;
@@ -56,6 +56,35 @@ describe("terminal-output-bus", () => {
     });
 
     expect(received.join("")).toBe("hello world");
+  });
+
+  it("replays prior output again after a subscriber disconnects and remounts", async () => {
+    let emit!: (payload: TerminalOutputPayload) => void;
+    listenMock.mockImplementation(async (callback) => {
+      emit = callback;
+      return () => {};
+    });
+
+    const bus = await loadBus();
+    await bus.ensureTerminalOutputBusReady();
+
+    const firstReceived: string[] = [];
+    const unlisten = bus.subscribeToTerminalOutput("pty-1", (bytes) => {
+      firstReceived.push(bytesToString(bytes));
+    });
+
+    emit({ ptyId: "pty-1", dataBase64: encodeBase64("hello") });
+    emit({ ptyId: "pty-1", dataBase64: encodeBase64(" world") });
+    expect(firstReceived.join("")).toBe("hello world");
+
+    unlisten();
+
+    const secondReceived: string[] = [];
+    bus.subscribeToTerminalOutput("pty-1", (bytes) => {
+      secondReceived.push(bytesToString(bytes));
+    });
+
+    expect(secondReceived.join("")).toBe("hello world");
   });
 
   it("routes subsequent output directly to the active subscriber", async () => {

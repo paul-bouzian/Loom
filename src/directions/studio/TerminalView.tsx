@@ -10,6 +10,7 @@ import { subscribeToTerminalOutput } from "../../lib/terminal-output-bus";
 type Props = {
   ptyId: string;
   active: boolean;
+  exited: boolean;
 };
 
 const THEME = {
@@ -29,10 +30,27 @@ function encodeBase64(text: string): string {
   return btoa(binary);
 }
 
-export function TerminalView({ ptyId, active }: Props) {
+function isTerminalSessionGone(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    return error.code === "not_found";
+  }
+  if (error instanceof Error) {
+    return /terminal session not found/i.test(error.message);
+  }
+  return (
+    typeof error === "string" && /terminal session not found/i.test(error)
+  );
+}
+
+export function TerminalView({ ptyId, active, exited }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const terminalGoneRef = useRef(exited);
+
+  useEffect(() => {
+    terminalGoneRef.current = exited;
+  }, [exited]);
 
   // Fit xterm to its container and propagate the new dimensions to the PTY.
   // Safe to call when the container is hidden (clientWidth=0): no-ops instead
@@ -42,10 +60,19 @@ export function TerminalView({ ptyId, active }: Props) {
     const fit = fitRef.current;
     const container = containerRef.current;
     if (!term || !fit || !container) return;
+    if (terminalGoneRef.current) return;
     if (container.clientWidth === 0 || container.clientHeight === 0) return;
     try {
       fit.fit();
-      void bridge.resizeTerminal({ ptyId, cols: term.cols, rows: term.rows });
+      void bridge
+        .resizeTerminal({ ptyId, cols: term.cols, rows: term.rows })
+        .catch((error) => {
+          if (isTerminalSessionGone(error)) {
+            terminalGoneRef.current = true;
+            return;
+          }
+          console.error("Failed to resize terminal:", error);
+        });
     } catch {
       /* ignore */
     }
@@ -78,7 +105,16 @@ export function TerminalView({ ptyId, active }: Props) {
 
     // FE -> PTY: forward keystrokes / paste / wheel input.
     const dataSubscription = term.onData((data) => {
-      void bridge.writeTerminal({ ptyId, dataBase64: encodeBase64(data) });
+      if (terminalGoneRef.current) return;
+      void bridge
+        .writeTerminal({ ptyId, dataBase64: encodeBase64(data) })
+        .catch((error) => {
+          if (isTerminalSessionGone(error)) {
+            terminalGoneRef.current = true;
+            return;
+          }
+          console.error("Failed to write to terminal:", error);
+        });
     });
 
     // Reflow xterm whenever its container changes size.
@@ -105,7 +141,7 @@ export function TerminalView({ ptyId, active }: Props) {
   // When activating after being hidden, the container had clientWidth=0,
   // so the initial fit() couldn't run. Refit + focus on activation.
   useEffect(() => {
-    if (!active) return;
+    if (!active || terminalGoneRef.current) return;
     const id = requestAnimationFrame(() => {
       refit();
       termRef.current?.focus();

@@ -1,4 +1,5 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode, act } from "react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -99,13 +100,15 @@ beforeEach(() => {
 });
 
 describe("TerminalPanel", () => {
-  it("renders one terminal view per tab in the active env", () => {
+  it("renders only the active terminal view for the selected environment", () => {
     render(<TerminalPanel />);
     expect(screen.getByTestId("terminal-view-pty-existing-1")).toBeInTheDocument();
-    expect(screen.getByTestId("terminal-view-pty-existing-2")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("terminal-view-pty-existing-2"),
+    ).not.toBeInTheDocument();
   });
 
-  it("keeps terminal views mounted when switching environments", () => {
+  it("switches the mounted terminal view when switching environments", () => {
     const snapshotWithTwoEnvs = makeWorkspaceSnapshot();
     snapshotWithTwoEnvs.projects[0].environments.push({
       ...snapshotWithTwoEnvs.projects[0].environments[0],
@@ -143,30 +146,21 @@ describe("TerminalPanel", () => {
 
     const { rerender } = render(<TerminalPanel />);
 
-    expect(screen.getByTestId("terminal-view-pty-existing-1")).toHaveAttribute(
-      "data-active",
-      "true",
-    );
-    expect(screen.getByTestId("terminal-view-pty-existing-3")).toHaveAttribute(
-      "data-active",
-      "false",
-    );
+    expect(screen.getByTestId("terminal-view-pty-existing-1")).toHaveAttribute("data-active", "true");
+    expect(
+      screen.queryByTestId("terminal-view-pty-existing-3"),
+    ).not.toBeInTheDocument();
 
     act(() => {
       useWorkspaceStore.setState({ selectedEnvironmentId: "env-2" });
     });
     rerender(<TerminalPanel />);
 
-    expect(screen.getByTestId("terminal-view-pty-existing-1")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("terminal-view-pty-existing-1"),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("terminal-view-pty-existing-3")).toBeInTheDocument();
-    expect(screen.getByTestId("terminal-view-pty-existing-1")).toHaveAttribute(
-      "data-active",
-      "false",
-    );
-    expect(screen.getByTestId("terminal-view-pty-existing-3")).toHaveAttribute(
-      "data-active",
-      "true",
-    );
+    expect(screen.getByTestId("terminal-view-pty-existing-3")).toHaveAttribute("data-active", "true");
   });
 
   it("opens a new terminal in the active env when + is clicked", async () => {
@@ -198,6 +192,71 @@ describe("TerminalPanel", () => {
     expect(mockedBridge.killTerminal).toHaveBeenCalledWith({
       ptyId: "pty-existing-1",
     });
+  });
+
+  it("does not auto-bootstrap immediately after closing the last tab when another environment still has one", async () => {
+    const user = userEvent.setup();
+    const snapshotWithTwoEnvs = makeWorkspaceSnapshot();
+    snapshotWithTwoEnvs.projects[0].environments.push({
+      ...snapshotWithTwoEnvs.projects[0].environments[0],
+      id: "env-2",
+      name: "worktree-2",
+      path: "/tmp/env-2",
+    });
+    useWorkspaceStore.setState({
+      snapshot: snapshotWithTwoEnvs,
+      bootstrapStatus: null,
+      loadingState: "ready",
+      error: null,
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+      selectedThreadId: null,
+    });
+    useTerminalStore.setState({
+      visible: true,
+      height: 280,
+      knownEnvironmentIds: ["env-1", "env-2"],
+      byEnv: {
+        "env-1": {
+          tabs: [
+            {
+              id: "t1",
+              ptyId: "pty-existing-1",
+              cwd: "/p/a",
+              title: "a",
+              exited: false,
+            },
+          ],
+          activeTabId: "t1",
+        },
+        "env-2": {
+          tabs: [
+            {
+              id: "t2",
+              ptyId: "pty-existing-2",
+              cwd: "/p/b",
+              title: "b",
+              exited: false,
+            },
+          ],
+          activeTabId: "t2",
+        },
+      },
+    });
+    mockedBridge.spawnTerminal.mockClear();
+
+    render(<TerminalPanel />);
+
+    await user.click(screen.getByLabelText("Close terminal"));
+
+    await waitFor(() => {
+      expect(useTerminalStore.getState().byEnv["env-1"]).toBeUndefined();
+    });
+    expect(useTerminalStore.getState().visible).toBe(true);
+    expect(mockedBridge.spawnTerminal).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("No terminals are open in this worktree."),
+    ).toBeInTheDocument();
   });
 
   it("hides the panel when the hide button is clicked", async () => {
@@ -277,6 +336,26 @@ describe("TerminalPanel", () => {
     } finally {
       consoleSpy.mockRestore();
     }
+  });
+
+  it("deduplicates auto-bootstrap on the first strict-mode mount", async () => {
+    useTerminalStore.setState({
+      visible: true,
+      height: 280,
+      knownEnvironmentIds: [ENV_ID],
+      byEnv: {},
+    });
+
+    render(
+      <StrictMode>
+        <TerminalPanel />
+      </StrictMode>,
+    );
+
+    await waitFor(() => {
+      expect(mockedBridge.spawnTerminal).toHaveBeenCalledTimes(1);
+    });
+    expect(useTerminalStore.getState().byEnv[ENV_ID]?.tabs).toHaveLength(1);
   });
 
   it("retries bootstrap after switching away from a failed environment and back", async () => {

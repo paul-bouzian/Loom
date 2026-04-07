@@ -184,6 +184,7 @@ describe("terminal-store", () => {
 
     expect(useTerminalStore.getState().byEnv[ENV_A]).toBeUndefined();
     expect(slotForB().tabs).toHaveLength(1);
+    expect(useTerminalStore.getState().visible).toBe(true);
   });
 
   it("activateTab updates only the targeted env", async () => {

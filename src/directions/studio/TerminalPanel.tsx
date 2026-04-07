@@ -15,6 +15,24 @@ import {
 import { TerminalView } from "./TerminalView";
 import "./TerminalPanel.css";
 
+const bootstrapOpenPromises = new Map<string, Promise<string | null>>();
+
+function ensureBootstrapTab(
+  environmentId: string,
+  openTab: (environmentId: string) => Promise<string | null>,
+) {
+  const existing = bootstrapOpenPromises.get(environmentId);
+  if (existing) return existing;
+
+  const promise = openTab(environmentId).finally(() => {
+    if (bootstrapOpenPromises.get(environmentId) === promise) {
+      bootstrapOpenPromises.delete(environmentId);
+    }
+  });
+  bootstrapOpenPromises.set(environmentId, promise);
+  return promise;
+}
+
 export function TerminalPanel() {
   const visible = useTerminalStore((s) => s.visible);
   const openTab = useTerminalStore((s) => s.openTab);
@@ -25,32 +43,30 @@ export function TerminalPanel() {
 
   const env = useWorkspaceStore(selectSelectedEnvironment);
   const environmentId = env?.id ?? null;
-
-  const byEnv = useTerminalStore((s) => s.byEnv);
   const slot = useTerminalStore(selectTerminalSlot(environmentId));
   const { tabs, activeTabId } = slot;
   const selectedEnvironmentId = environmentId ?? "";
-  const mountedTabs = Object.entries(byEnv).flatMap(([envId, envSlot]) =>
-    envSlot.tabs.map((tab) => ({
-      envId,
-      tab,
-      active: envId === environmentId && envSlot.activeTabId === tab.id,
-    })),
-  );
+  const activeTab =
+    tabs.find((tab) => tab.id === activeTabId) ?? tabs[tabs.length - 1] ?? null;
 
   // Auto-open one tab whenever the panel becomes visible with zero tabs in
   // the active env (initial mount with persisted visible=true once the
-  // workspace snapshot resolves the env, or reopening after closing the last
-  // tab). bootstrapInFlight is state (not a ref) on purpose: we need the
+  // workspace snapshot resolves the env, or reopening an explicitly hidden
+  // panel). bootstrapInFlight is state (not a ref) on purpose: we need the
   // effect to re-run after the promise settles so we can bootstrap the NEXT
   // env if the user switched worktrees while the first spawn was pending.
   // bootstrapFailedEnvId short-circuits the effect after a spawn failure so
   // we don't hammer the backend in a tight retry loop; it resets when the
-  // panel is hidden or the user switches to a different env.
+  // panel is hidden or the user switches to a different env. Explicitly
+  // closing the last tab in an env dismisses auto-bootstrap for that env
+  // until the panel is hidden again or the user opens a new tab manually.
   const [bootstrapInFlight, setBootstrapInFlight] = useState(false);
   const [bootstrapFailedEnvId, setBootstrapFailedEnvId] = useState<
     string | null
   >(null);
+  const [dismissedBootstrapEnvIds, setDismissedBootstrapEnvIds] = useState<
+    string[]
+  >([]);
   const tabButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   useEffect(() => {
@@ -62,14 +78,24 @@ export function TerminalPanel() {
   useEffect(() => {
     if (!visible) {
       setBootstrapFailedEnvId(null);
+      setDismissedBootstrapEnvIds([]);
       return;
     }
+  }, [visible]);
+
+  useEffect(() => {
     if (!environmentId || tabs.length > 0) return;
     if (bootstrapInFlight) return;
     if (bootstrapFailedEnvId === environmentId) return;
+    if (dismissedBootstrapEnvIds.includes(environmentId)) return;
     setBootstrapInFlight(true);
-    openTab(environmentId)
-      .then(() => setBootstrapFailedEnvId(null))
+    ensureBootstrapTab(environmentId, openTab)
+      .then(() => {
+        setBootstrapFailedEnvId(null);
+        setDismissedBootstrapEnvIds((current) =>
+          current.filter((id) => id !== environmentId),
+        );
+      })
       .catch((error) => {
         console.error("Failed to open terminal:", error);
         setBootstrapFailedEnvId(environmentId);
@@ -82,6 +108,7 @@ export function TerminalPanel() {
     openTab,
     bootstrapInFlight,
     bootstrapFailedEnvId,
+    dismissedBootstrapEnvIds,
   ]);
 
   // Subscribe once to terminal-exit events at the panel level.
@@ -144,6 +171,16 @@ export function TerminalPanel() {
     });
   }
 
+  function handleCloseTab(tabId: string) {
+    if (!environmentId) return;
+    if (tabs.length === 1) {
+      setDismissedBootstrapEnvIds((current) =>
+        current.includes(environmentId) ? current : [...current, environmentId],
+      );
+    }
+    void closeTab(environmentId, tabId);
+  }
+
   return (
     <div className="terminal-panel">
       <div className="terminal-panel__header">
@@ -182,7 +219,7 @@ export function TerminalPanel() {
                   type="button"
                   className="terminal-tab__close"
                   aria-label="Close terminal"
-                  onClick={() => void closeTab(selectedEnvironmentId, tab.id)}
+                  onClick={() => handleCloseTab(tab.id)}
                 >
                   <CloseIcon size={11} />
                 </button>
@@ -226,20 +263,28 @@ export function TerminalPanel() {
       </div>
       <div
         className={`terminal-panel__body ${
-          environmentId ? "" : "terminal-panel__body--empty"
+          activeTab ? "" : "terminal-panel__body--empty"
         }`}
       >
-        {mountedTabs.map(({ envId, tab, active }) => (
+        {activeTab && (
           <TerminalView
-            key={`${envId}:${tab.id}`}
-            ptyId={tab.ptyId}
-            active={active}
+            key={`${selectedEnvironmentId}:${activeTab.id}`}
+            ptyId={activeTab.ptyId}
+            active
+            exited={activeTab.exited}
           />
-        ))}
+        )}
         {!environmentId && (
           <div className="terminal-panel__empty-state">
             <p className="terminal-panel__hint">
               Select a worktree to open a terminal.
+            </p>
+          </div>
+        )}
+        {environmentId && !activeTab && (
+          <div className="terminal-panel__empty-state">
+            <p className="terminal-panel__hint">
+              No terminals are open in this worktree.
             </p>
           </div>
         )}
