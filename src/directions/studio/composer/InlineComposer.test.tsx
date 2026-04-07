@@ -9,6 +9,7 @@ import {
   baseComposer,
   capabilitiesFixture,
 } from "../../../test/fixtures/conversation";
+import { resetVoiceSessionStore } from "../../../stores/voice-session-store";
 import { useVoiceStatusStore } from "../../../stores/voice-status-store";
 import { InlineComposer } from "./InlineComposer";
 import type { ComposerDraftMentionBinding } from "./composer-mention-bindings";
@@ -50,8 +51,9 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  await resetVoiceSessionStore();
   useVoiceStatusStore.setState((state) => ({
     ...state,
     snapshotsByEnvironmentId: {},
@@ -291,6 +293,74 @@ describe("InlineComposer voice dictation", () => {
     transcription.resolve({ text: "voice note" });
 
     expect(await screen.findByDisplayValue("voice note")).toBeInTheDocument();
+  });
+
+  it("keeps recording active when switching threads and restores it on return", async () => {
+    const capture = makeCapture();
+    mockedStartVoiceCapture.mockResolvedValue(capture);
+
+    renderComposerWithDynamicThread("");
+
+    const startButton = await screen.findByRole("button", {
+      name: "Start voice dictation",
+    });
+    await waitFor(() => {
+      expect(startButton).toBeEnabled();
+    });
+
+    await userEvent.click(startButton);
+    expect(await screen.findByText("Listening")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Switch to thread 2" }));
+
+    const threadTwoVoiceButton = await screen.findByRole("button", {
+      name: "Start voice dictation",
+    });
+    expect(threadTwoVoiceButton).toBeDisabled();
+    expect(threadTwoVoiceButton.parentElement).toHaveAttribute(
+      "title",
+      expect.stringContaining("Voice dictation is already active"),
+    );
+    expect(screen.queryByText("Listening")).toBeNull();
+    expect(capture.cancel).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Switch to thread 1" }));
+
+    expect(await screen.findByText("Listening")).toBeInTheDocument();
+    expect(capture.cancel).not.toHaveBeenCalled();
+  });
+
+  it("applies a completed transcript after returning to the owner thread", async () => {
+    const transcription = createDeferred<{ text: string }>();
+    mockedStartVoiceCapture.mockResolvedValue(makeCapture());
+    mockedBridge.transcribeEnvironmentVoice.mockReturnValue(transcription.promise);
+
+    renderComposerWithDynamicThread("Plan:");
+
+    const startButton = await screen.findByRole("button", {
+      name: "Start voice dictation",
+    });
+    await waitFor(() => {
+      expect(startButton).toBeEnabled();
+    });
+
+    await userEvent.click(startButton);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Stop voice dictation" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedBridge.transcribeEnvironmentVoice).toHaveBeenCalledTimes(1);
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Switch to thread 2" }));
+    transcription.resolve({ text: "voice note" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Switch to thread 1" }));
+
+    expect(
+      await screen.findByDisplayValue("Plan: voice note"),
+    ).toBeInTheDocument();
   });
 });
 
@@ -598,6 +668,58 @@ function renderComposerWithDynamicDisabledState(initialDraft: string) {
           draft={draft}
           effortOptions={["low", "medium", "high", "xhigh"]}
           focusKey="thread-1"
+          images={images}
+          isBusy={false}
+          isSending={false}
+          isRefiningPlan={false}
+          mentionBindings={mentionBindings}
+          modelOptions={capabilitiesFixture.models}
+          onChangeImages={setImages}
+          tokenUsage={null}
+          onCancelRefine={() => undefined}
+          onChangeDraft={setDraft}
+          onChangeMentionBindings={setMentionBindings}
+          onInterrupt={() => undefined}
+          onSend={() => undefined}
+          onUpdateComposer={() => undefined}
+        />
+      </>
+    );
+  }
+
+  return render(<Harness />);
+}
+
+function renderComposerWithDynamicThread(initialDraft: string) {
+  function Harness() {
+    const [draft, setDraft] = useState(initialDraft);
+    const [images, setImages] = useState<
+      Array<
+        { type: "image"; url: string } | { type: "localImage"; path: string }
+      >
+    >([]);
+    const [mentionBindings, setMentionBindings] = useState<
+      ComposerDraftMentionBinding[]
+    >([]);
+    const [threadId, setThreadId] = useState("thread-1");
+
+    return (
+      <>
+        <button type="button" onClick={() => setThreadId("thread-1")}>
+          Switch to thread 1
+        </button>
+        <button type="button" onClick={() => setThreadId("thread-2")}>
+          Switch to thread 2
+        </button>
+        <InlineComposer
+          environmentId="env-1"
+          threadId={threadId}
+          composer={baseComposer}
+          collaborationModes={capabilitiesFixture.collaborationModes}
+          disabled={false}
+          draft={draft}
+          effortOptions={["low", "medium", "high", "xhigh"]}
+          focusKey={threadId}
           images={images}
           isBusy={false}
           isSending={false}

@@ -11,6 +11,7 @@ import {
 import { useCodexUsageStore } from "../../stores/codex-usage-store";
 import { useConversationStore } from "../../stores/conversation-store";
 import { useGitReviewStore } from "../../stores/git-review-store";
+import { resetVoiceSessionStore } from "../../stores/voice-session-store";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import { StudioShell } from "./StudioShell";
 
@@ -72,8 +73,9 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   storageState.clear();
+  await resetVoiceSessionStore();
   mockedBridge.updateGlobalSettings.mockReset();
   mockedBridge.updateProjectSettings.mockReset();
   mockedBridge.updateGlobalSettings.mockResolvedValue(makeGlobalSettings());
