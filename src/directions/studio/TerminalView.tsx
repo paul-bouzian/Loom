@@ -60,10 +60,10 @@ export function TerminalView({ ptyId, active, exited }: Props) {
     const fit = fitRef.current;
     const container = containerRef.current;
     if (!term || !fit || !container) return;
-    if (terminalGoneRef.current) return;
     if (container.clientWidth === 0 || container.clientHeight === 0) return;
     try {
       fit.fit();
+      if (terminalGoneRef.current) return;
       void bridge
         .resizeTerminal({ ptyId, cols: term.cols, rows: term.rows })
         .catch((error) => {

@@ -477,7 +477,9 @@ describe("TerminalPanel", () => {
     });
 
     // User switches to env-2 mid-spawn.
-    useWorkspaceStore.setState({ selectedEnvironmentId: "env-2" });
+    act(() => {
+      useWorkspaceStore.setState({ selectedEnvironmentId: "env-2" });
+    });
 
     // Resolve the first spawn. The tab lands in byEnv["env-1"]. The effect
     // should then re-run for env-2 and trigger a second spawn.

@@ -6,6 +6,7 @@ import { TerminalView } from "./TerminalView";
 
 let latestOnData: ((data: string) => void) | null = null;
 let latestResizeObserverTrigger: (() => void) | null = null;
+let latestFitSpy: ReturnType<typeof vi.fn> | null = null;
 
 class MockResizeObserver {
   constructor(callback: ResizeObserverCallback) {
@@ -37,7 +38,11 @@ vi.mock("@xterm/xterm", () => ({
 
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class MockFitAddon {
-    fit = vi.fn();
+    fit = vi.fn(() => {});
+
+    constructor() {
+      latestFitSpy = this.fit;
+    }
   },
 }));
 
@@ -60,6 +65,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   latestOnData = null;
   latestResizeObserverTrigger = null;
+  latestFitSpy = null;
   globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
   Object.defineProperty(HTMLDivElement.prototype, "clientWidth", {
     configurable: true,
@@ -89,6 +95,7 @@ describe("TerminalView", () => {
     await flushEffects();
 
     expect(mockedBridge.resizeTerminal).toHaveBeenCalledTimes(1);
+    expect(latestFitSpy).toHaveBeenCalledTimes(1);
 
     latestOnData?.("pwd\n");
     await flushEffects();
@@ -100,5 +107,6 @@ describe("TerminalView", () => {
 
     expect(mockedBridge.writeTerminal).toHaveBeenCalledTimes(1);
     expect(mockedBridge.resizeTerminal).toHaveBeenCalledTimes(1);
+    expect(latestFitSpy).toHaveBeenCalledTimes(2);
   });
 });
