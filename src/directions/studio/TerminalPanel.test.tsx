@@ -171,6 +171,37 @@ describe("TerminalPanel", () => {
     expect(mockedBridge.spawnTerminal).not.toHaveBeenCalled();
   });
 
+  it("short-circuits bootstrap retry after spawn failure and resumes on hide/show", async () => {
+    useTerminalStore.setState({ visible: true, height: 280, byEnv: {} });
+    mockedBridge.spawnTerminal.mockReset();
+    mockedBridge.spawnTerminal.mockRejectedValue(new Error("spawn failed"));
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { rerender } = render(<TerminalPanel />);
+
+    // Wait for the first failure to propagate.
+    await waitFor(() => {
+      expect(mockedBridge.spawnTerminal).toHaveBeenCalledTimes(1);
+    });
+
+    // Give React a handful of render cycles to ensure the effect does NOT
+    // re-fire in a tight loop after the failure.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    rerender(<TerminalPanel />);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mockedBridge.spawnTerminal).toHaveBeenCalledTimes(1);
+
+    // Hide + show: the failed-env cache resets and bootstrap retries once.
+    useTerminalStore.setState({ visible: false });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    useTerminalStore.setState({ visible: true });
+    await waitFor(() => {
+      expect(mockedBridge.spawnTerminal).toHaveBeenCalledTimes(2);
+    });
+
+    consoleSpy.mockRestore();
+  });
+
   it("bootstraps the newly selected env when the user switches during a pending spawn", async () => {
     // Seed env A with no tabs so the panel tries to auto-bootstrap.
     const snapshotWithTwoEnvs = makeWorkspaceSnapshot();

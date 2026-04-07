@@ -34,15 +34,37 @@ export function TerminalPanel() {
   // tab). bootstrapInFlight is state (not a ref) on purpose: we need the
   // effect to re-run after the promise settles so we can bootstrap the NEXT
   // env if the user switched worktrees while the first spawn was pending.
+  // bootstrapFailedEnvId short-circuits the effect after a spawn failure so
+  // we don't hammer the backend in a tight retry loop; it resets when the
+  // panel is hidden or the user switches to a different env.
   const [bootstrapInFlight, setBootstrapInFlight] = useState(false);
+  const [bootstrapFailedEnvId, setBootstrapFailedEnvId] = useState<
+    string | null
+  >(null);
   useEffect(() => {
-    if (!visible || !environmentId || tabs.length > 0) return;
+    if (!visible) {
+      setBootstrapFailedEnvId(null);
+      return;
+    }
+    if (!environmentId || tabs.length > 0) return;
     if (bootstrapInFlight) return;
+    if (bootstrapFailedEnvId === environmentId) return;
     setBootstrapInFlight(true);
     openTab(environmentId)
-      .catch((error) => console.error("Failed to open terminal:", error))
+      .then(() => setBootstrapFailedEnvId(null))
+      .catch((error) => {
+        console.error("Failed to open terminal:", error);
+        setBootstrapFailedEnvId(environmentId);
+      })
       .finally(() => setBootstrapInFlight(false));
-  }, [visible, environmentId, tabs.length, openTab, bootstrapInFlight]);
+  }, [
+    visible,
+    environmentId,
+    tabs.length,
+    openTab,
+    bootstrapInFlight,
+    bootstrapFailedEnvId,
+  ]);
 
   // Subscribe once to terminal-exit events at the panel level.
   useEffect(() => {

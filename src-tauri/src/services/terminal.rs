@@ -73,14 +73,22 @@ impl TerminalService {
             cwd.to_string()
         };
 
-        // Resolve shell: $SHELL > /bin/zsh > /bin/sh.
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| {
-            if std::path::Path::new("/bin/zsh").exists() {
-                "/bin/zsh".to_string()
-            } else {
-                "/bin/sh".to_string()
-            }
-        });
+        // Resolve shell: $SHELL > /bin/zsh > /bin/sh. Reject SHELL when it is
+        // empty or points to a non-existent binary, otherwise spawn_command
+        // fails later with a cryptic error.
+        let shell = std::env::var("SHELL")
+            .ok()
+            .filter(|value| {
+                let trimmed = value.trim();
+                !trimmed.is_empty() && std::path::Path::new(trimmed).exists()
+            })
+            .unwrap_or_else(|| {
+                if std::path::Path::new("/bin/zsh").exists() {
+                    "/bin/zsh".to_string()
+                } else {
+                    "/bin/sh".to_string()
+                }
+            });
 
         let mut cmd = CommandBuilder::new(&shell);
         // Login shell: source .zprofile/.zshrc/etc so PATH/nvm/mise/pyenv work.
