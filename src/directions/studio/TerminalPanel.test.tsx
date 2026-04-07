@@ -20,6 +20,13 @@ vi.mock("../../lib/bridge", () => ({
   listenToTerminalExit: vi.fn().mockResolvedValue(() => {}),
 }));
 
+vi.mock("../../lib/terminal-output-bus", () => ({
+  ensureTerminalOutputBusReady: vi.fn().mockResolvedValue(undefined),
+  dropPendingTerminalOutput: vi.fn(),
+  subscribeToTerminalOutput: vi.fn(() => () => {}),
+  __resetTerminalOutputBus: vi.fn(),
+}));
+
 const mockedBridge = vi.mocked(bridge);
 
 const storageState = new Map<string, string>();
@@ -162,5 +169,74 @@ describe("TerminalPanel", () => {
       screen.getByText("Select a worktree to open a terminal."),
     ).toBeInTheDocument();
     expect(mockedBridge.spawnTerminal).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps the newly selected env when the user switches during a pending spawn", async () => {
+    // Seed env A with no tabs so the panel tries to auto-bootstrap.
+    const snapshotWithTwoEnvs = makeWorkspaceSnapshot();
+    snapshotWithTwoEnvs.projects[0].environments.push({
+      ...snapshotWithTwoEnvs.projects[0].environments[0],
+      id: "env-2",
+      name: "worktree-2",
+      path: "/tmp/env-2",
+    });
+    useWorkspaceStore.setState({
+      snapshot: snapshotWithTwoEnvs,
+      bootstrapStatus: null,
+      loadingState: "ready",
+      error: null,
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+      selectedThreadId: null,
+    });
+    useTerminalStore.setState({
+      visible: true,
+      height: 280,
+      byEnv: {},
+    });
+
+    // Control the first spawn so it stays pending.
+    let resolveFirst: (value: { ptyId: string; cwd: string }) => void = () => {};
+    const firstPending = new Promise<{ ptyId: string; cwd: string }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    mockedBridge.spawnTerminal
+      .mockImplementationOnce(() => firstPending)
+      .mockImplementationOnce(async ({ environmentId }) => ({
+        ptyId: `pty-${environmentId}`,
+        cwd: `/tmp/${environmentId}`,
+      }));
+
+    render(<TerminalPanel />);
+
+    // Bootstrap for env-1 is in flight but not yet resolved.
+    await waitFor(() => {
+      expect(mockedBridge.spawnTerminal).toHaveBeenCalledTimes(1);
+    });
+    expect(mockedBridge.spawnTerminal).toHaveBeenNthCalledWith(1, {
+      environmentId: "env-1",
+      cols: 80,
+      rows: 24,
+    });
+
+    // User switches to env-2 mid-spawn.
+    useWorkspaceStore.setState({ selectedEnvironmentId: "env-2" });
+
+    // Resolve the first spawn. The tab lands in byEnv["env-1"]. The effect
+    // should then re-run for env-2 and trigger a second spawn.
+    resolveFirst({ ptyId: "pty-1", cwd: "/tmp/env-1" });
+
+    await waitFor(() => {
+      expect(mockedBridge.spawnTerminal).toHaveBeenCalledTimes(2);
+    });
+    expect(mockedBridge.spawnTerminal).toHaveBeenNthCalledWith(2, {
+      environmentId: "env-2",
+      cols: 80,
+      rows: 24,
+    });
+
+    await waitFor(() => {
+      expect(useTerminalStore.getState().byEnv["env-2"]?.tabs.length).toBe(1);
+    });
   });
 });

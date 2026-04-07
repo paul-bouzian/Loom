@@ -1,6 +1,10 @@
 import { create } from "zustand";
 
 import * as bridge from "../lib/bridge";
+import {
+  dropPendingTerminalOutput,
+  ensureTerminalOutputBusReady,
+} from "../lib/terminal-output-bus";
 
 const HEIGHT_KEY = "threadex-terminal-height";
 const VISIBLE_KEY = "threadex-terminal-visible";
@@ -97,6 +101,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   openTab: async (environmentId) => {
     const slot = get().byEnv[environmentId] ?? EMPTY_TERMINAL_SLOT;
     if (slot.tabs.length >= MAX_TABS) return null;
+    // Attach the output bus BEFORE spawning so any bytes emitted between
+    // spawn and the TerminalView subscribe are buffered, not dropped.
+    await ensureTerminalOutputBusReady();
     // Generous defaults; FitAddon will resize immediately after mount.
     const { ptyId, cwd } = await bridge.spawnTerminal({
       environmentId,
@@ -113,6 +120,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       } catch {
         /* ignore: terminal may already be dead */
       }
+      dropPendingTerminalOutput(ptyId);
       return null;
     }
     const id = crypto.randomUUID();
@@ -143,6 +151,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     } catch {
       /* ignore: terminal may already be dead */
     }
+    dropPendingTerminalOutput(tab.ptyId);
     set((state) => {
       const existing = state.byEnv[environmentId];
       if (!existing) return state;

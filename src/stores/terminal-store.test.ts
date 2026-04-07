@@ -12,6 +12,13 @@ vi.mock("../lib/bridge", () => ({
   killTerminal: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../lib/terminal-output-bus", () => ({
+  ensureTerminalOutputBusReady: vi.fn().mockResolvedValue(undefined),
+  dropPendingTerminalOutput: vi.fn(),
+  subscribeToTerminalOutput: vi.fn(() => () => {}),
+  __resetTerminalOutputBus: vi.fn(),
+}));
+
 const mockedBridge = vi.mocked(bridge);
 
 const storageState = new Map<string, string>();

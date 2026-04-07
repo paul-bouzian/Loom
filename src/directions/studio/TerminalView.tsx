@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 
 import * as bridge from "../../lib/bridge";
+import { subscribeToTerminalOutput } from "../../lib/terminal-output-bus";
 
 type Props = {
   ptyId: string;
@@ -26,15 +27,6 @@ function encodeBase64(text: string): string {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
-}
-
-function decodeBase64(input: string): Uint8Array {
-  const binary = atob(input);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
 }
 
 export function TerminalView({ ptyId, active }: Props) {
@@ -93,27 +85,17 @@ export function TerminalView({ ptyId, active }: Props) {
     const resizeObserver = new ResizeObserver(refit);
     resizeObserver.observe(container);
 
-    // PTY -> FE: write incoming bytes (filtered by ptyId at the listener).
-    let unlistenOutput: (() => void) | null = null;
-    let cancelled = false;
-    bridge
-      .listenToTerminalOutput((payload) => {
-        if (payload.ptyId !== ptyId) return;
-        term.write(decodeBase64(payload.dataBase64));
-      })
-      .then((unlisten) => {
-        if (cancelled) {
-          unlisten();
-        } else {
-          unlistenOutput = unlisten;
-        }
-      });
+    // PTY -> FE: attach to the output bus. The bus flushes any output
+    // received before this subscribe (emitted between spawn and mount) so
+    // the initial prompt isn't lost.
+    const unlistenOutput = subscribeToTerminalOutput(ptyId, (bytes) => {
+      term.write(bytes);
+    });
 
     return () => {
-      cancelled = true;
       dataSubscription.dispose();
       resizeObserver.disconnect();
-      unlistenOutput?.();
+      unlistenOutput();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;

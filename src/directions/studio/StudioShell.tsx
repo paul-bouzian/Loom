@@ -50,11 +50,10 @@ export function StudioShell() {
 
   useEffect(() => {
     function handleKeydown(event: KeyboardEvent) {
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.code === "Backquote" &&
-        !event.repeat
-      ) {
+      // Ctrl+` on all platforms (matches VS Code / Cursor). We intentionally
+      // do not bind Cmd+` on macOS: it's the native "cycle app windows"
+      // shortcut and stealing it globally is bad UX.
+      if (event.ctrlKey && event.code === "Backquote" && !event.repeat) {
         event.preventDefault();
         useTerminalStore.getState().toggleVisible();
       }

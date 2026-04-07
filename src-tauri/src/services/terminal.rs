@@ -74,7 +74,13 @@ impl TerminalService {
         };
 
         // Resolve shell: $SHELL > /bin/zsh > /bin/sh.
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+            if std::path::Path::new("/bin/zsh").exists() {
+                "/bin/zsh".to_string()
+            } else {
+                "/bin/sh".to_string()
+            }
+        });
 
         let mut cmd = CommandBuilder::new(&shell);
         // Login shell: source .zprofile/.zshrc/etc so PATH/nvm/mise/pyenv work.
@@ -133,12 +139,15 @@ impl TerminalService {
                     Err(_) => break,
                 }
             }
-            // Reader EOF / error => child has likely exited. Collect exit code.
+            // Reader EOF / error => child has likely exited. Use try_wait so
+            // we never hold the child mutex through a blocking wait(): that
+            // would deadlock shutdown_all() on CloseRequested if a child
+            // closes its tty without exiting (rare but possible).
             let exit_code = session_for_reader
                 .child
                 .lock()
                 .ok()
-                .and_then(|mut c| c.wait().ok())
+                .and_then(|mut c| c.try_wait().ok().flatten())
                 .and_then(|s| i32::try_from(s.exit_code()).ok());
             let _ = app_for_reader.emit(
                 "threadex://terminal-exit",

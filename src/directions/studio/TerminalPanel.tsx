@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 
 import * as bridge from "../../lib/bridge";
 import { CloseIcon, PlusIcon } from "../../shared/Icons";
@@ -31,19 +31,18 @@ export function TerminalPanel() {
   // Auto-open one tab whenever the panel becomes visible with zero tabs in
   // the active env (initial mount with persisted visible=true once the
   // workspace snapshot resolves the env, or reopening after closing the last
-  // tab). The in-flight ref guards against re-entry while the spawn is
-  // pending.
-  const bootstrapInFlight = useRef(false);
+  // tab). bootstrapInFlight is state (not a ref) on purpose: we need the
+  // effect to re-run after the promise settles so we can bootstrap the NEXT
+  // env if the user switched worktrees while the first spawn was pending.
+  const [bootstrapInFlight, setBootstrapInFlight] = useState(false);
   useEffect(() => {
     if (!visible || !environmentId || tabs.length > 0) return;
-    if (bootstrapInFlight.current) return;
-    bootstrapInFlight.current = true;
+    if (bootstrapInFlight) return;
+    setBootstrapInFlight(true);
     openTab(environmentId)
       .catch((error) => console.error("Failed to open terminal:", error))
-      .finally(() => {
-        bootstrapInFlight.current = false;
-      });
-  }, [visible, environmentId, tabs.length, openTab]);
+      .finally(() => setBootstrapInFlight(false));
+  }, [visible, environmentId, tabs.length, openTab, bootstrapInFlight]);
 
   // Subscribe once to terminal-exit events at the panel level.
   useEffect(() => {
