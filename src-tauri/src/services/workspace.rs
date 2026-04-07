@@ -241,24 +241,7 @@ impl WorkspaceService {
 
     pub fn project_environment_ids(&self, project_id: &str) -> AppResult<Vec<String>> {
         let connection = self.database.open()?;
-        let project_exists = connection
-            .query_row(
-                "SELECT 1 FROM projects WHERE id = ?1 AND archived_at IS NULL",
-                params![project_id],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some();
-
-        if !project_exists {
-            return Err(AppError::NotFound("Project not found.".to_string()));
-        }
-
-        if self.project_has_managed_worktrees(&connection, project_id)? {
-            return Err(AppError::Validation(
-                "Delete this project's worktrees before removing it from ThreadEx.".to_string(),
-            ));
-        }
+        self.ensure_project_can_be_removed_with_connection(&connection, project_id)?;
 
         let mut statement = connection.prepare(
             "
@@ -275,11 +258,7 @@ impl WorkspaceService {
 
     pub fn remove_project(&self, project_id: &str) -> AppResult<()> {
         let connection = self.database.open()?;
-        if self.project_has_managed_worktrees(&connection, project_id)? {
-            return Err(AppError::Validation(
-                "Delete this project's worktrees before removing it from ThreadEx.".to_string(),
-            ));
-        }
+        self.ensure_project_can_be_removed_with_connection(&connection, project_id)?;
 
         let managed_worktree_dir = connection
             .query_row(
@@ -314,6 +293,11 @@ impl WorkspaceService {
         }
 
         Ok(())
+    }
+
+    pub fn ensure_project_can_be_removed(&self, project_id: &str) -> AppResult<()> {
+        let connection = self.database.open()?;
+        self.ensure_project_can_be_removed_with_connection(&connection, project_id)
     }
 
     pub fn create_managed_worktree(
@@ -436,6 +420,9 @@ impl WorkspaceService {
 
     pub fn delete_worktree_environment(&self, environment_id: &str) -> AppResult<()> {
         let metadata = self.deletable_worktree_environment_metadata(environment_id)?;
+        if matches!(metadata.kind, EnvironmentKind::ManagedWorktree) {
+            self.ensure_project_managed_worktree_dir(&metadata.project_id, &metadata.project_root)?;
+        }
 
         if metadata.project_root.is_dir() {
             git::remove_worktree(&metadata.project_root, &metadata.environment_path)?;
@@ -990,6 +977,33 @@ impl WorkspaceService {
             )
             .optional()?
             .is_some())
+    }
+
+    fn ensure_project_can_be_removed_with_connection(
+        &self,
+        connection: &rusqlite::Connection,
+        project_id: &str,
+    ) -> AppResult<()> {
+        let project_exists = connection
+            .query_row(
+                "SELECT 1 FROM projects WHERE id = ?1 AND archived_at IS NULL",
+                params![project_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+
+        if !project_exists {
+            return Err(AppError::NotFound("Project not found.".to_string()));
+        }
+
+        if self.project_has_managed_worktrees(connection, project_id)? {
+            return Err(AppError::Validation(
+                "Delete this project's worktrees before removing it from ThreadEx.".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 
     fn project_metadata(&self, project_id: &str) -> AppResult<ProjectMetadata> {
@@ -1613,6 +1627,55 @@ mod tests {
             .expect("project should be removed");
 
         assert!(managed_path.exists());
+        assert!(repo.path.exists());
+    }
+
+    #[test]
+    fn deleting_the_last_legacy_worktree_backfills_project_directory_for_cleanup() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("legacy-cleanup-repo"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let result = harness
+            .service
+            .create_managed_worktree(&project.id)
+            .expect("worktree should be created");
+        let managed_dir = harness
+            .project_managed_worktree_dir(&project.id)
+            .expect("managed dir should exist");
+        let managed_path = harness.managed_root.join(&managed_dir);
+
+        harness
+            .open_connection()
+            .execute(
+                "UPDATE projects SET managed_worktree_dir = NULL WHERE id = ?1",
+                params![project.id],
+            )
+            .expect("project dir should be cleared");
+
+        harness
+            .service
+            .delete_worktree_environment(&result.environment.id)
+            .expect("worktree should be deleted");
+
+        assert_eq!(
+            harness.project_managed_worktree_dir(&project.id),
+            Some(managed_dir.clone())
+        );
+
+        harness
+            .service
+            .remove_project(&project.id)
+            .expect("project should be removed");
+
+        assert!(!managed_path.exists());
         assert!(repo.path.exists());
     }
 

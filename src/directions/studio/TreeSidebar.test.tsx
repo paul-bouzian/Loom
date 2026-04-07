@@ -19,6 +19,7 @@ const confirmMock = vi.fn();
 const messageMock = vi.fn();
 
 vi.mock("../../lib/bridge", () => ({
+  ensureProjectCanBeRemoved: vi.fn(),
   removeProject: vi.fn(),
   createManagedWorktree: vi.fn(),
   deleteWorktreeEnvironment: vi.fn(),
@@ -53,6 +54,7 @@ const onToggleTheme = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   messageMock.mockResolvedValue("Ok");
+  mockedBridge.ensureProjectCanBeRemoved.mockResolvedValue(undefined);
   useConversationStore.setState((state) => ({
     ...state,
     snapshotsByThreadId: {},
@@ -178,6 +180,9 @@ describe("TreeSidebar", () => {
       screen.getByRole("button", { name: "Remove from ThreadEx" }),
     );
 
+    expect(mockedBridge.ensureProjectCanBeRemoved).toHaveBeenCalledWith(
+      "project-1",
+    );
     expect(confirmMock).toHaveBeenCalledWith(
       expect.stringContaining("The repository stays on disk."),
       expect.objectContaining({
@@ -194,27 +199,11 @@ describe("TreeSidebar", () => {
   });
 
   it("blocks project removal before confirmation when managed worktrees still exist", async () => {
-    useWorkspaceStore.setState((state) => ({
-      ...state,
-      snapshot: makeWorkspaceSnapshot({
-        projects: [
-          makeProject({
-            environments: [
-              makeEnvironment({
-                id: "env-local",
-                kind: "local",
-                isDefault: true,
-              }),
-              makeEnvironment({
-                id: "env-worktree",
-                kind: "managedWorktree",
-                name: "fuzzy-tiger",
-              }),
-            ],
-          }),
-        ],
-      }),
-    }));
+    mockedBridge.ensureProjectCanBeRemoved.mockRejectedValue({
+      code: "validation_error",
+      message:
+        "Delete this project's worktrees before removing it from ThreadEx.",
+    });
 
     renderSidebar();
 
@@ -226,6 +215,9 @@ describe("TreeSidebar", () => {
     );
 
     expect(confirmMock).not.toHaveBeenCalled();
+    expect(mockedBridge.ensureProjectCanBeRemoved).toHaveBeenCalledWith(
+      "project-1",
+    );
     expect(messageMock).toHaveBeenCalledWith(
       "Delete this project's worktrees before removing it from ThreadEx.",
       expect.objectContaining({
@@ -236,7 +228,7 @@ describe("TreeSidebar", () => {
     expect(mockedBridge.removeProject).not.toHaveBeenCalled();
   });
 
-  it("shows the serialized Tauri error message when project removal fails", async () => {
+  it("shows the native blocker dialog when project removal fails in the backend", async () => {
     confirmMock.mockResolvedValue(true);
     mockedBridge.removeProject.mockRejectedValue({
       code: "validation_error",
@@ -264,11 +256,31 @@ describe("TreeSidebar", () => {
     );
 
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          "Delete this project's worktrees before removing it from ThreadEx.",
-        ),
-      ).toBeInTheDocument();
+      expect(messageMock).toHaveBeenCalledWith(
+        "Delete this project's worktrees before removing it from ThreadEx.",
+        expect.objectContaining({
+          title: "Remove project",
+          kind: "info",
+        }),
+      );
+    });
+  });
+
+  it("keeps generic project removal failures in the sidebar notice", async () => {
+    confirmMock.mockResolvedValue(true);
+    mockedBridge.removeProject.mockRejectedValue(new Error("Disk is unavailable."));
+
+    renderSidebar();
+
+    fireEvent.contextMenu(
+      screen.getAllByRole("button", { name: /ThreadEx/i })[0],
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove from ThreadEx" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Disk is unavailable.")).toBeInTheDocument();
     });
   });
 

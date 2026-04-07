@@ -45,6 +45,10 @@ type ContextMenuState = {
   y: number;
 };
 
+const PROJECT_REMOVAL_BLOCKED_MESSAGE =
+  "Delete this project's worktrees before removing it from ThreadEx.";
+const PROJECT_REMOVAL_DIALOG_TITLE = "Remove project";
+
 export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
   const projects = useWorkspaceStore(selectProjects);
   const snapshotsByThreadId = useConversationStore(
@@ -113,26 +117,21 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
 
   async function handleRemoveProject(projectId: string, projectName: string) {
     setContextMenu(null);
-    const project = projects.find((candidate) => candidate.id === projectId);
-    const hasManagedWorktrees = project?.environments.some(
-      (environment) => environment.kind !== "local",
-    );
-    if (hasManagedWorktrees) {
-      resetMessages();
-      await message(
-        "Delete this project's worktrees before removing it from ThreadEx.",
-        {
-          title: "Remove project",
-          kind: "info",
-        },
-      );
+    resetMessages();
+    try {
+      await bridge.ensureProjectCanBeRemoved(projectId);
+    } catch (cause: unknown) {
+      if (await showProjectRemovalBlockedDialog(cause)) {
+        return;
+      }
+      setActionError(actionErrorMessage(cause, "Failed to remove project"));
       return;
     }
 
     const approved = await confirm(
       `Remove "${projectName}" from ThreadEx? The repository stays on disk. ThreadEx may also remove its empty managed worktree folder.`,
       {
-        title: "Remove project",
+        title: PROJECT_REMOVAL_DIALOG_TITLE,
         kind: "warning",
       },
     );
@@ -142,10 +141,12 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
     }
 
     try {
-      resetMessages();
       await bridge.removeProject(projectId);
       await refreshSnapshot();
     } catch (cause: unknown) {
+      if (await showProjectRemovalBlockedDialog(cause)) {
+        return;
+      }
       setActionError(actionErrorMessage(cause, "Failed to remove project"));
     }
   }
@@ -449,17 +450,40 @@ function environmentIndicatorTone(
   );
 }
 
-function actionErrorMessage(cause: unknown, fallback: string) {
+async function showProjectRemovalBlockedDialog(cause: unknown): Promise<boolean> {
+  const errorMessage = extractErrorMessage(cause);
+  if (errorMessage !== PROJECT_REMOVAL_BLOCKED_MESSAGE) {
+    return false;
+  }
+
+  await message(errorMessage, {
+    title: PROJECT_REMOVAL_DIALOG_TITLE,
+    kind: "info",
+  });
+  return true;
+}
+
+function extractErrorMessage(cause: unknown): string | null {
   if (
     typeof cause === "object" &&
     cause !== null &&
     "message" in cause &&
-    typeof cause.message === "string" &&
-    cause.message.trim().length > 0
+    typeof cause.message === "string"
   ) {
-    return cause.message;
+    const message = cause.message.trim();
+    return message.length > 0 ? message : null;
   }
-  return cause instanceof Error ? cause.message : fallback;
+
+  if (cause instanceof Error) {
+    const message = cause.message.trim();
+    return message.length > 0 ? message : null;
+  }
+
+  return null;
+}
+
+function actionErrorMessage(cause: unknown, fallback: string) {
+  return extractErrorMessage(cause) ?? fallback;
 }
 
 function buildProjectContextMenuState(
