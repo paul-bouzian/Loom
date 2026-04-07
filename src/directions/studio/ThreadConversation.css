@@ -46,6 +46,10 @@
   padding-right: var(--tx-space-xs);
 }
 
+.tx-conversation__timeline > * {
+  flex: 0 0 auto;
+}
+
 .tx-conversation__empty {
   padding: var(--tx-space-xl);
   border: 1px dashed var(--tx-border-muted);
