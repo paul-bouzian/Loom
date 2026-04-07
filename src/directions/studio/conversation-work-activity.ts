@@ -97,6 +97,10 @@ export function buildConversationTimeline(
     getOrCreateGroup(groupsByTurn, subagentTurnId).subagents = snapshot.subagents;
   }
 
+  if (snapshot.activeTurnId) {
+    getOrCreateGroup(groupsByTurn, snapshot.activeTurnId);
+  }
+
   const finalizedGroups = new Map<string, ConversationWorkActivityGroup>();
   for (const [turnId, group] of groupsByTurn) {
     finalizedGroups.set(turnId, finalizeGroup(group, snapshot, latestWorkTurnId));
@@ -223,6 +227,8 @@ function inferEffectiveTurnIds(snapshot: ThreadConversationSnapshot) {
     nextTurnIds[index] = nextTurnId;
   }
 
+  const activeTurnAnchorIndex = findActiveTurnAnchorIndex(snapshot);
+
   snapshot.items.forEach((item, index) => {
     if (
       turnIds.has(item.id) ||
@@ -233,8 +239,9 @@ function inferEffectiveTurnIds(snapshot: ThreadConversationSnapshot) {
     }
 
     const inferredTurnId =
-      previousTurnIds[index] ??
       nextTurnIds[index] ??
+      inferActiveTurnId(snapshot, index, activeTurnAnchorIndex) ??
+      previousTurnIds[index] ??
       snapshot.activeTurnId ??
       snapshot.taskPlan?.turnId ??
       null;
@@ -245,6 +252,43 @@ function inferEffectiveTurnIds(snapshot: ThreadConversationSnapshot) {
   });
 
   return turnIds;
+}
+
+function findActiveTurnAnchorIndex(snapshot: ThreadConversationSnapshot) {
+  if (!snapshot.activeTurnId) {
+    return null;
+  }
+
+  for (let index = snapshot.items.length - 1; index >= 0; index -= 1) {
+    if (snapshot.items[index]?.turnId === snapshot.activeTurnId) {
+      return index;
+    }
+  }
+
+  for (let index = snapshot.items.length - 1; index >= 0; index -= 1) {
+    const item = snapshot.items[index];
+    if (
+      item?.kind === "message" &&
+      item.role === "user" &&
+      !item.turnId
+    ) {
+      return index;
+    }
+  }
+
+  return null;
+}
+
+function inferActiveTurnId(
+  snapshot: ThreadConversationSnapshot,
+  index: number,
+  activeTurnAnchorIndex: number | null,
+) {
+  if (!snapshot.activeTurnId || activeTurnAnchorIndex === null) {
+    return null;
+  }
+
+  return index > activeTurnAnchorIndex ? snapshot.activeTurnId : null;
 }
 
 function findLatestWorkTurnId(
