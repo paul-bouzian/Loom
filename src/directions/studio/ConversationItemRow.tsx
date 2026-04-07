@@ -5,6 +5,7 @@ import { ChevronRightIcon } from "../../shared/Icons";
 import { ConversationLinkedText } from "./ConversationLinkedText";
 import { ConversationMessageImages } from "./ConversationMessageImages";
 import { ConversationMarkdown } from "./ConversationMarkdown";
+import { shouldRenderConversationItem } from "./conversation-item-visibility";
 
 type Props = {
   item: ConversationItem;
@@ -56,11 +57,7 @@ export function ConversationItemRow({ item, compact = false }: Props) {
   }
 
   if (item.kind === "reasoning") {
-    if (
-      !item.isStreaming &&
-      item.summary.trim().length === 0 &&
-      item.content.trim().length === 0
-    ) {
+    if (!shouldRenderConversationItem(item)) {
       return null;
     }
 

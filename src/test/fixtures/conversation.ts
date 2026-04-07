@@ -1,6 +1,3 @@
-import {
-  DEFAULT_GLOBAL_SETTINGS,
-} from "../../lib/types";
 import type {
   ConversationTaskSnapshot,
   PendingApprovalRequest,
@@ -13,6 +10,7 @@ import type {
   GitChangeSectionSnapshot,
   GitFileDiff,
   GitReviewSnapshot,
+  GlobalSettings,
   ProjectRecord,
   ThreadConversationSnapshot,
   ThreadRecord,
@@ -44,6 +42,20 @@ export const capabilitiesFixture: EnvironmentCapabilitiesSnapshot = {
     { id: "plan", label: "Plan", mode: "plan", reasoningEffort: "high" },
   ],
 };
+
+export function makeGlobalSettings(
+  overrides: Partial<GlobalSettings> = {},
+): GlobalSettings {
+  return {
+    defaultModel: "gpt-5.4",
+    defaultReasoningEffort: "high",
+    defaultCollaborationMode: "build",
+    defaultApprovalPolicy: "askToEdit",
+    collapseWorkActivity: true,
+    codexBinaryPath: undefined,
+    ...overrides,
+  };
+}
 
 export function makeThread(
   overrides: Partial<ThreadRecord> = {},
@@ -111,7 +123,7 @@ export function makeWorkspaceSnapshot(
   overrides: Partial<WorkspaceSnapshot> = {},
 ): WorkspaceSnapshot {
   return {
-    settings: { ...DEFAULT_GLOBAL_SETTINGS },
+    settings: makeGlobalSettings(),
     projects: [makeProject()],
     ...overrides,
   };

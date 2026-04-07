@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as bridge from "../../lib/bridge";
 import {
+  makeGlobalSettings,
   makeProject,
   makeWorkspaceSnapshot,
 } from "../../test/fixtures/conversation";
@@ -75,14 +76,7 @@ beforeEach(() => {
   storageState.clear();
   mockedBridge.updateGlobalSettings.mockReset();
   mockedBridge.updateProjectSettings.mockReset();
-  mockedBridge.updateGlobalSettings.mockResolvedValue({
-    defaultModel: "gpt-5.4",
-    defaultReasoningEffort: "high",
-    defaultCollaborationMode: "build",
-    defaultApprovalPolicy: "askToEdit",
-    collapseWorkActivity: true,
-    codexBinaryPath: "/opt/homebrew/bin/codex",
-  });
+  mockedBridge.updateGlobalSettings.mockResolvedValue(makeGlobalSettings());
   mockedBridge.updateProjectSettings.mockResolvedValue(makeWorkspaceSnapshot().projects[0]);
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,

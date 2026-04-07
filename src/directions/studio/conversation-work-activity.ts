@@ -6,6 +6,7 @@ import type {
   SubagentThreadSnapshot,
   ThreadConversationSnapshot,
 } from "../../lib/types";
+import { shouldRenderConversationItem } from "./conversation-item-visibility";
 
 export type WorkActivityStatus =
   | "running"
@@ -66,6 +67,7 @@ export function buildConversationTimeline(
   const groupsByTurn = new Map<string, MutableGroup>();
   const actionTurnIds = collectActionTurnIds(snapshot);
   const effectiveTurnIds = inferEffectiveTurnIds(snapshot);
+  const latestWorkTurnId = findLatestWorkTurnId(snapshot, effectiveTurnIds);
   const finalAssistantMessageIds = collectFinalAssistantMessageIds(
     snapshot,
     snapshot.items,
@@ -76,7 +78,11 @@ export function buildConversationTimeline(
 
   for (const item of snapshot.items) {
     const turnId = effectiveTurnIds.get(item.id) ?? null;
-    if (!turnId || !isGroupedWorkItem(item, turnId, finalAssistantMessageIds)) {
+    if (
+      !turnId ||
+      !shouldRenderConversationItem(item) ||
+      !isGroupedWorkItem(item, turnId, finalAssistantMessageIds)
+    ) {
       continue;
     }
     getOrCreateGroup(groupsByTurn, turnId).items.push(item);
@@ -93,7 +99,7 @@ export function buildConversationTimeline(
 
   const finalizedGroups = new Map<string, ConversationWorkActivityGroup>();
   for (const [turnId, group] of groupsByTurn) {
-    finalizedGroups.set(turnId, finalizeGroup(group, snapshot));
+    finalizedGroups.set(turnId, finalizeGroup(group, snapshot, latestWorkTurnId));
   }
 
   const entries: ConversationTimelineEntry[] = [];
@@ -218,7 +224,11 @@ function inferEffectiveTurnIds(snapshot: ThreadConversationSnapshot) {
   }
 
   snapshot.items.forEach((item, index) => {
-    if (turnIds.has(item.id) || (item.kind === "message" && item.role === "user")) {
+    if (
+      turnIds.has(item.id) ||
+      item.kind === "system" ||
+      (item.kind === "message" && item.role === "user")
+    ) {
       return;
     }
 
@@ -235,6 +245,47 @@ function inferEffectiveTurnIds(snapshot: ThreadConversationSnapshot) {
   });
 
   return turnIds;
+}
+
+function findLatestWorkTurnId(
+  snapshot: ThreadConversationSnapshot,
+  effectiveTurnIds: Map<string, string>,
+) {
+  if (snapshot.activeTurnId) {
+    return snapshot.activeTurnId;
+  }
+
+  for (let index = snapshot.pendingInteractions.length - 1; index >= 0; index -= 1) {
+    const turnId = snapshot.pendingInteractions[index]?.turnId;
+    if (turnId) {
+      return turnId;
+    }
+  }
+
+  if (shouldRenderProposedPlan(snapshot.proposedPlan)) {
+    return snapshot.proposedPlan!.turnId;
+  }
+
+  if (snapshot.taskPlan) {
+    return snapshot.taskPlan.turnId;
+  }
+
+  for (let index = snapshot.items.length - 1; index >= 0; index -= 1) {
+    const item = snapshot.items[index];
+    if (
+      !shouldRenderConversationItem(item) ||
+      (item.kind === "message" && item.role === "user")
+    ) {
+      continue;
+    }
+
+    const turnId = effectiveTurnIds.get(item.id);
+    if (turnId) {
+      return turnId;
+    }
+  }
+
+  return null;
 }
 
 function getOrCreateGroup(groupsByTurn: Map<string, MutableGroup>, turnId: string) {
@@ -256,23 +307,25 @@ function getOrCreateGroup(groupsByTurn: Map<string, MutableGroup>, turnId: strin
 function finalizeGroup(
   group: MutableGroup,
   snapshot: ThreadConversationSnapshot,
+  latestWorkTurnId: string | null,
 ): ConversationWorkActivityGroup {
+  const renderableItems = group.items.filter(shouldRenderConversationItem);
   const counts = {
-    updateCount: group.items.filter((item) => item.kind === "message").length,
-    reasoningCount: group.items.filter((item) => item.kind === "reasoning").length,
-    toolCount: group.items.filter((item) => item.kind === "tool").length,
-    systemCount: group.items.filter((item) => item.kind === "system").length,
+    updateCount: renderableItems.filter((item) => item.kind === "message").length,
+    reasoningCount: renderableItems.filter((item) => item.kind === "reasoning").length,
+    toolCount: renderableItems.filter((item) => item.kind === "tool").length,
+    systemCount: renderableItems.filter((item) => item.kind === "system").length,
     subagentCount: group.subagents.length,
   };
 
   return {
     id: `work-${group.turnId}`,
     turnId: group.turnId,
-    items: group.items,
+    items: renderableItems,
     taskPlan: group.taskPlan,
     subagents: group.subagents,
     counts,
-    status: statusForGroup(group.turnId, group, snapshot),
+    status: statusForGroup(group.turnId, group, snapshot, latestWorkTurnId),
   };
 }
 
@@ -280,8 +333,13 @@ function statusForGroup(
   turnId: string,
   group: MutableGroup,
   snapshot: ThreadConversationSnapshot,
+  latestWorkTurnId: string | null,
 ): WorkActivityStatus {
   if (snapshot.activeTurnId === turnId) {
+    return statusFromConversationStatus(snapshot.status);
+  }
+
+  if (turnId === latestWorkTurnId && snapshot.status !== "idle") {
     return statusFromConversationStatus(snapshot.status);
   }
 

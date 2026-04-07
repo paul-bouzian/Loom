@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -371,6 +371,174 @@ describe("ThreadConversation", () => {
     expect(
       screen.getByText("Indexing the workspace before answering."),
     ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["failed", "Failed"],
+    ["interrupted", "Interrupted"],
+  ] as const)(
+    "keeps the latest compact work activity status aligned after a %s turn ends",
+    async (status, label) => {
+      setCompactWorkActivity(true);
+      mockedBridge.openThreadConversation.mockResolvedValue({
+        snapshot: makeConversationSnapshot({
+          status,
+          activeTurnId: null,
+          items: [
+            {
+              kind: "message",
+              id: `user-${status}-1`,
+              turnId: `turn-${status}-1`,
+              role: "user",
+              text: "Inspect the repository",
+              images: null,
+              isStreaming: false,
+            },
+            {
+              kind: "tool",
+              id: `tool-${status}-1`,
+              turnId: `turn-${status}-1`,
+              toolType: "commandExecution",
+              title: "Command",
+              status: "failed",
+              summary: "bun run verify",
+              output: "command failed",
+            },
+          ],
+        }),
+        capabilities: capabilitiesFixture,
+      });
+
+      render(
+        <ThreadConversation
+          environment={makeEnvironment()}
+          thread={makeThread()}
+        />,
+      );
+
+      const toggle = await screen.findByRole("button", {
+        name: "Show work activity details",
+      });
+      const group = toggle.closest("section");
+      expect(group).not.toBeNull();
+      expect(within(group!).getByText(label)).toBeInTheDocument();
+    },
+  );
+
+  it("marks the latest compact work activity as waiting when the turn pauses for input", async () => {
+    setCompactWorkActivity(true);
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "waitingForExternalAction",
+        activeTurnId: null,
+        items: [
+          {
+            kind: "message",
+            id: "user-waiting-1",
+            turnId: "turn-waiting-1",
+            role: "user",
+            text: "Inspect the repository",
+            images: null,
+            isStreaming: false,
+          },
+          {
+            kind: "message",
+            id: "assistant-waiting-1",
+            turnId: "turn-waiting-1",
+            role: "assistant",
+            text: "I need approval before I continue.",
+            images: null,
+            isStreaming: false,
+          },
+        ],
+        pendingInteractions: [makeApprovalRequest({ turnId: "turn-waiting-1" })],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    const toggle = await screen.findByRole("button", {
+      name: "Show work activity details",
+    });
+    const group = toggle.closest("section");
+    expect(group).not.toBeNull();
+    expect(within(group!).getByText("Waiting")).toBeInTheDocument();
+  });
+
+  it("skips whitespace-only completed reasoning from compact work activity summaries", async () => {
+    setCompactWorkActivity(true);
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        items: [
+          {
+            kind: "message",
+            id: "user-compact-whitespace-1",
+            turnId: "turn-compact-whitespace-1",
+            role: "user",
+            text: "Inspect the repository",
+            images: null,
+            isStreaming: false,
+          },
+          {
+            kind: "reasoning",
+            id: "reason-compact-whitespace-1",
+            turnId: "turn-compact-whitespace-1",
+            summary: "   ",
+            content: "\n\n",
+            isStreaming: false,
+          },
+          {
+            kind: "tool",
+            id: "tool-compact-whitespace-1",
+            turnId: "turn-compact-whitespace-1",
+            toolType: "commandExecution",
+            title: "Command",
+            status: "completed",
+            summary: "bun run test",
+            output: "3 tests passed",
+          },
+          {
+            kind: "message",
+            id: "assistant-compact-whitespace-1",
+            turnId: "turn-compact-whitespace-1",
+            role: "assistant",
+            text: "The workspace looks healthy.",
+            images: null,
+            isStreaming: false,
+          },
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    const toggle = await screen.findByRole("button", {
+      name: "Show work activity details",
+    });
+    const group = toggle.closest("section");
+    expect(group).not.toBeNull();
+    expect(within(group!).getByText("1 tool call")).toBeInTheDocument();
+    expect(within(group!).queryByText(/thinking/i)).toBeNull();
+
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "Show Command details" }));
+
+    expect(
+      screen.queryByRole("button", { name: "Show thinking details" }),
+    ).toBeNull();
+    expect(screen.getByText("3 tests passed")).toBeInTheDocument();
   });
 
   it("renders assistant markdown for regular Codex messages", async () => {
@@ -1145,6 +1313,12 @@ describe("ThreadConversation", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("Approve plan")).toBeNull();
+      expect(screen.getByText("Plan approved")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "ThreadEx approved the current plan and switched the thread to Build mode.",
+        ),
+      ).toBeInTheDocument();
       expect(
         screen.getByText("Starting implementation now."),
       ).toBeInTheDocument();
