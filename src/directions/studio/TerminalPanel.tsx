@@ -87,6 +87,9 @@ export function TerminalPanel() {
         } else {
           unlisten = un;
         }
+      })
+      .catch((error) => {
+        console.error("Failed to subscribe to terminal exit events:", error);
       });
     return () => {
       cancelled = true;

@@ -19,7 +19,9 @@ function clampHeight(value: number): number {
 
 function readHeight(): number {
   try {
-    const value = Number(localStorage.getItem(HEIGHT_KEY));
+    const rawValue = localStorage.getItem(HEIGHT_KEY);
+    if (rawValue == null) return DEFAULT_HEIGHT;
+    const value = Number(rawValue);
     if (Number.isFinite(value)) return clampHeight(value);
   } catch {
     /* ignore */
@@ -36,7 +38,7 @@ function readVisible(): boolean {
 }
 
 function basenameOf(path: string): string {
-  return path.split("/").filter(Boolean).pop() ?? "shell";
+  return path.split(/[/\\]/).filter(Boolean).pop() ?? "shell";
 }
 
 export type TerminalTab = {
@@ -65,6 +67,7 @@ type TerminalState = {
   // visible tab list; PTYs from inactive environments stay alive in the
   // background until their tabs are explicitly closed.
   byEnv: Record<string, EnvironmentTerminalSlot>;
+  knownEnvironmentIds: string[];
 
   toggleVisible: () => void;
   setVisible: (visible: boolean) => void;
@@ -81,6 +84,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   visible: readVisible(),
   height: readHeight(),
   byEnv: {},
+  knownEnvironmentIds: [],
 
   toggleVisible: () => {
     const next = !get().visible;
@@ -115,13 +119,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       }
 
       const visible =
-        state.visible && Object.keys(nextByEnv).length > 0;
-      if (!visible) {
+        validEnvironmentIds.size === 0 ? false : state.visible;
+      if (!visible && validEnvironmentIds.size === 0) {
         localStorage.setItem(VISIBLE_KEY, "0");
       }
 
       return {
         byEnv: nextByEnv,
+        knownEnvironmentIds: environmentIds,
         visible,
       };
     }),
@@ -142,7 +147,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // both pass the initial check. If we raced past the cap, kill the PTY we
     // just created and bail.
     const slotAfter = get().byEnv[environmentId] ?? EMPTY_TERMINAL_SLOT;
-    if (slotAfter.tabs.length >= MAX_TABS) {
+    const knownEnvironmentIds = get().knownEnvironmentIds;
+    const environmentKnown =
+      knownEnvironmentIds.length === 0 ||
+      knownEnvironmentIds.includes(environmentId);
+    if (!environmentKnown || slotAfter.tabs.length >= MAX_TABS) {
       try {
         await bridge.killTerminal({ ptyId });
       } catch {

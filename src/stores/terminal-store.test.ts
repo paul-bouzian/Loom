@@ -52,6 +52,7 @@ beforeEach(() => {
     visible: false,
     height: 280,
     byEnv: {},
+    knownEnvironmentIds: [],
   });
   let counter = 0;
   mockedBridge.spawnTerminal.mockImplementation(async ({ environmentId }) => {
@@ -85,6 +86,13 @@ describe("terminal-store", () => {
     });
   });
 
+  it("uses the default height when no persisted value exists", async () => {
+    vi.resetModules();
+    const { useTerminalStore: freshStore } = await import("./terminal-store");
+
+    expect(freshStore.getState().height).toBe(280);
+  });
+
   it("keeps tabs from different environments isolated", async () => {
     await useTerminalStore.getState().openTab(ENV_A);
     await useTerminalStore.getState().openTab(ENV_A);
@@ -112,6 +120,17 @@ describe("terminal-store", () => {
     const id = await useTerminalStore.getState().openTab(ENV_B);
     expect(id).not.toBeNull();
     expect(slotForB().tabs).toHaveLength(1);
+  });
+
+  it("derives titles from Windows-style cwd paths", async () => {
+    mockedBridge.spawnTerminal.mockResolvedValueOnce({
+      ptyId: "pty-win",
+      cwd: "C:\\Users\\paul\\repo",
+    });
+
+    await useTerminalStore.getState().openTab(ENV_A);
+
+    expect(slotForA().tabs[0]?.title).toBe("repo");
   });
 
   it("closeTab removes a tab from its env and re-elects the active one", async () => {
@@ -224,6 +243,40 @@ describe("terminal-store", () => {
 
     expect(useTerminalStore.getState().byEnv).toEqual({});
     expect(useTerminalStore.getState().visible).toBe(false);
+  });
+
+  it("preserves visible state when environments exist but tabs have not been restored yet", () => {
+    localStorage.setItem("threadex-terminal-visible", "1");
+    useTerminalStore.setState({
+      visible: true,
+      height: 280,
+      byEnv: {},
+      knownEnvironmentIds: [],
+    });
+
+    useTerminalStore.getState().reconcileEnvironments([ENV_A]);
+
+    expect(useTerminalStore.getState().visible).toBe(true);
+    expect(localStorage.getItem("threadex-terminal-visible")).toBe("1");
+  });
+
+  it("kills the PTY if the environment disappears while openTab is in flight", async () => {
+    let resolveSpawn: (value: { ptyId: string; cwd: string }) => void = () => {};
+    const pendingSpawn = new Promise<{ ptyId: string; cwd: string }>((resolve) => {
+      resolveSpawn = resolve;
+    });
+    mockedBridge.spawnTerminal.mockImplementationOnce(() => pendingSpawn);
+    useTerminalStore.getState().reconcileEnvironments([ENV_A]);
+
+    const openPromise = useTerminalStore.getState().openTab(ENV_A);
+    useTerminalStore.getState().reconcileEnvironments([ENV_B]);
+    resolveSpawn({ ptyId: "pty-pending", cwd: `/path/to/${ENV_A}` });
+
+    await expect(openPromise).resolves.toBeNull();
+    expect(mockedBridge.killTerminal).toHaveBeenCalledWith({
+      ptyId: "pty-pending",
+    });
+    expect(useTerminalStore.getState().byEnv[ENV_A]).toBeUndefined();
   });
 
   it("selectTerminalSlot returns an empty slot when env is null or unknown", () => {

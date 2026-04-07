@@ -18,6 +18,7 @@ beforeEach(() => {
     visible: false,
     height: 280,
     byEnv: {},
+    knownEnvironmentIds: [],
   });
   useWorkspaceStore.setState((state) => ({
     ...state,
@@ -134,6 +135,7 @@ describe("workspace store", () => {
     useTerminalStore.setState({
       visible: true,
       height: 280,
+      knownEnvironmentIds: ["env-local", "env-worktree"],
       byEnv: {
         "env-local": {
           tabs: [],

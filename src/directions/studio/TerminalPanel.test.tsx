@@ -73,6 +73,7 @@ beforeEach(() => {
   useTerminalStore.setState({
     visible: true,
     height: 280,
+    knownEnvironmentIds: [ENV_ID],
     byEnv: {
       [ENV_ID]: {
         tabs: [
@@ -225,7 +226,12 @@ describe("TerminalPanel", () => {
       selectedEnvironmentId: null,
       selectedThreadId: null,
     });
-    useTerminalStore.setState({ visible: true, height: 280, byEnv: {} });
+    useTerminalStore.setState({
+      visible: true,
+      height: 280,
+      knownEnvironmentIds: [],
+      byEnv: {},
+    });
 
     render(<TerminalPanel />);
 
@@ -236,7 +242,12 @@ describe("TerminalPanel", () => {
   });
 
   it("short-circuits bootstrap retry after spawn failure and resumes on hide/show", async () => {
-    useTerminalStore.setState({ visible: true, height: 280, byEnv: {} });
+    useTerminalStore.setState({
+      visible: true,
+      height: 280,
+      knownEnvironmentIds: [ENV_ID],
+      byEnv: {},
+    });
     mockedBridge.spawnTerminal.mockReset();
     mockedBridge.spawnTerminal.mockRejectedValue(new Error("spawn failed"));
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -287,6 +298,7 @@ describe("TerminalPanel", () => {
     useTerminalStore.setState({
       visible: true,
       height: 280,
+      knownEnvironmentIds: ["env-1", "env-2"],
       byEnv: {},
     });
 
