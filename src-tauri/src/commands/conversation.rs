@@ -121,6 +121,7 @@ pub async fn send_thread_message(
                     thread_id: Some(rename.thread_id.clone()),
                 },
             );
+            state.pull_requests.refresh_now();
             if let Err(error) = state.runtime.stop(&rename.environment_id).await {
                 warn!(
                     environment_id = rename.environment_id,

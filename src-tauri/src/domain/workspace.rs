@@ -26,6 +26,22 @@ pub enum RuntimeState {
     Exited,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PullRequestState {
+    Open,
+    Merged,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentPullRequestSnapshot {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: PullRequestState,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadOverrides {
@@ -96,6 +112,7 @@ pub struct EnvironmentRecord {
     pub git_branch: Option<String>,
     pub base_branch: Option<String>,
     pub is_default: bool,
+    pub pull_request: Option<EnvironmentPullRequestSnapshot>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub threads: Vec<ThreadRecord>,
@@ -154,6 +171,7 @@ pub struct WorktreeScriptFailureEvent {
 #[serde(rename_all = "camelCase")]
 pub enum WorkspaceEventKind {
     EnvironmentRenamed,
+    EnvironmentPullRequestChanged,
     ThreadAutoRenamed,
 }
 
