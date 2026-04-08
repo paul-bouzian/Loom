@@ -789,6 +789,43 @@ describe("ThreadConversation", () => {
     expect(container.querySelectorAll(".tx-markdown__list")).toHaveLength(1);
   });
 
+  it("renders assistant file references as compact tokens instead of inline paths", async () => {
+    const filePath =
+      "/Users/paulbouzian/.threadex/worktrees/threadex-019d5b55/lively-dolphin/src/directions/studio/ThreadConversation.tsx";
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        items: [
+          {
+            kind: "message",
+            id: "assistant-file-reference-1",
+            role: "assistant",
+            text: `Updated [ThreadConversation.tsx](${filePath}:544) to reuse the renderer.`,
+            images: null,
+            isStreaming: false,
+          },
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    const { container } = render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    const token = await screen.findByText("ThreadConversation.tsx");
+    expect(token).toHaveClass("tx-markdown__file-ref");
+    expect(token).toHaveAttribute("title", `${filePath}:544`);
+    expect(token).toHaveAttribute("data-file-path", filePath);
+    expect(token).toHaveAttribute("data-file-line", "544");
+    expect(container.textContent).toContain(
+      "Updated ThreadConversation.tsx to reuse the renderer.",
+    );
+    expect(container.textContent).not.toContain(filePath);
+  });
+
   it("renders markdown inside expanded thinking details", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({
