@@ -116,6 +116,7 @@ function ConversationMessageRow({
   compact: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const isMountedRef = useRef(true);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
   const shouldRenderMarkdown = item.role === "assistant";
   const hasText = item.text.trim().length > 0;
@@ -152,7 +153,12 @@ function ConversationMessageRow({
     copyFeedbackTimeoutRef.current = null;
   }, []);
 
-  useEffect(() => clearCopyFeedbackTimeout, [clearCopyFeedbackTimeout]);
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+      clearCopyFeedbackTimeout();
+    };
+  }, [clearCopyFeedbackTimeout]);
 
   const handleCopy = useCallback(async () => {
     if (!hasText) {
@@ -166,9 +172,15 @@ function ConversationMessageRow({
 
     try {
       await clipboard.writeText(item.text);
+      if (!isMountedRef.current) {
+        return;
+      }
       setCopied(true);
       clearCopyFeedbackTimeout();
       copyFeedbackTimeoutRef.current = window.setTimeout(() => {
+        if (!isMountedRef.current) {
+          return;
+        }
         setCopied(false);
         copyFeedbackTimeoutRef.current = null;
       }, 1200);

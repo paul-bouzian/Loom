@@ -836,6 +836,51 @@ describe("ThreadConversation", () => {
     });
   });
 
+  it("does not schedule copy feedback after the message row unmounts", async () => {
+    const clipboardDeferred = createDeferred<void>();
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    clipboardWriteTextMock.mockReturnValueOnce(clipboardDeferred.promise);
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        items: [
+          {
+            kind: "message",
+            id: "assistant-copy-unmount-1",
+            role: "assistant",
+            text: "Unmount-safe copy",
+            images: null,
+            isStreaming: false,
+          },
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    try {
+      const { unmount } = render(
+        <ThreadConversation
+          environment={makeEnvironment()}
+          thread={makeThread()}
+        />,
+      );
+
+      const copyButton = await screen.findByRole("button", { name: "Copy message" });
+      fireEvent.click(copyButton);
+
+      expect(clipboardWriteTextMock).toHaveBeenCalledWith("Unmount-safe copy");
+      const timeoutCountBeforeUnmount = setTimeoutSpy.mock.calls.length;
+
+      unmount();
+      clipboardDeferred.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(timeoutCountBeforeUnmount);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("renders assistant file references as compact tokens instead of inline paths", async () => {
     const filePath =
       "/Users/paulbouzian/.threadex/worktrees/threadex-019d5b55/lively-dolphin/src/directions/studio/ThreadConversation.tsx";
