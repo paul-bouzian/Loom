@@ -396,8 +396,8 @@ fn clamp_slug(value: &str, max_chars: usize) -> String {
 
     let mut cutoff = 0usize;
     let mut boundary = 0usize;
-    for (index, character) in trimmed.char_indices() {
-        if index > max_chars {
+    for (character_count, (index, character)) in trimmed.char_indices().enumerate() {
+        if character_count >= max_chars {
             break;
         }
         cutoff = index + character.len_utf8();
@@ -494,7 +494,7 @@ impl Drop for TempFileGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_text, compact_message_for_naming, derive_thread_title_from_message,
+        clamp_slug, clamp_text, compact_message_for_naming, derive_thread_title_from_message,
         ensure_unique_branch_slug, is_auto_generated_thread_title, is_auto_generated_worktree_name,
         parse_first_prompt_naming, sanitize_branch_slug,
     };
@@ -570,6 +570,11 @@ mod tests {
         let value = clamp_text("éééééééééééé", 10).expect("label should clamp");
 
         assert_eq!(value, "ééééééé...");
+    }
+
+    #[test]
+    fn clamps_branch_slugs_without_off_by_one_overflow() {
+        assert_eq!(clamp_slug("abcdefg", 5), "abcde");
     }
 
     #[test]
