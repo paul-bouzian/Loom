@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { ConversationItem } from "../../lib/types";
-import { ChevronRightIcon } from "../../shared/Icons";
+import type { ConversationItem, ConversationMessageItem } from "../../lib/types";
+import { CheckIcon, ChevronRightIcon, CopyIcon } from "../../shared/Icons";
 import { ConversationLinkedText } from "./ConversationLinkedText";
 import { ConversationMessageImages } from "./ConversationMessageImages";
 import { ConversationMarkdown } from "./ConversationMarkdown";
@@ -16,44 +16,7 @@ export function ConversationItemRow({ item, compact = false }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   if (item.kind === "message") {
-    const shouldRenderMarkdown = item.role === "assistant";
-    const hasText = item.text.trim().length > 0;
-    const hasImages = Boolean(item.images && item.images.length > 0);
-    const className = [
-      "tx-item",
-      "tx-item--message",
-      `tx-item--${item.role}`,
-      compact ? "tx-item--compact" : null,
-    ]
-      .filter(Boolean)
-      .join(" ");
-    const bodyClassName = [
-      "tx-item__body",
-      "tx-item__body--message",
-      item.role === "user" ? "tx-item__body--message-plain" : null,
-    ]
-      .filter(Boolean)
-      .join(" ");
-
-    return (
-      <div className={className}>
-        <div className="tx-item__header">{item.role === "user" ? "You" : "Codex"}</div>
-        {hasImages ? <ConversationMessageImages images={item.images ?? []} /> : null}
-        {shouldRenderMarkdown && hasText ? (
-          <ConversationMarkdown
-            markdown={item.text}
-            className={bodyClassName}
-          />
-        ) : null}
-        {!shouldRenderMarkdown && hasText ? (
-          <ConversationLinkedText
-            as="div"
-            className={bodyClassName}
-            text={item.text}
-          />
-        ) : null}
-      </div>
-    );
+    return <ConversationMessageRow item={item} compact={compact} />;
   }
 
   if (item.kind === "reasoning") {
@@ -143,6 +106,105 @@ export function ConversationItemRow({ item, compact = false }: Props) {
   }
 
   return <ConversationBanner tone={item.tone} title={item.title} body={item.body} compact={compact} />;
+}
+
+function ConversationMessageRow({
+  item,
+  compact,
+}: {
+  item: ConversationMessageItem;
+  compact: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copyFeedbackTimeoutRef = useRef<number | null>(null);
+  const shouldRenderMarkdown = item.role === "assistant";
+  const hasText = item.text.trim().length > 0;
+  const hasImages = Boolean(item.images && item.images.length > 0);
+  const className = [
+    "tx-item",
+    "tx-item--message",
+    `tx-item--${item.role}`,
+    compact ? "tx-item--compact" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const bodyClassName = [
+    "tx-item__body",
+    "tx-item__body--message",
+    item.role === "user" ? "tx-item__body--message-plain" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const copyButtonClassName = [
+    "tx-item__copy-button",
+    compact ? "tx-item__copy-button--compact" : null,
+    copied ? "is-copied" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const clearCopyFeedbackTimeout = useCallback(() => {
+    if (copyFeedbackTimeoutRef.current === null) {
+      return;
+    }
+
+    window.clearTimeout(copyFeedbackTimeoutRef.current);
+    copyFeedbackTimeoutRef.current = null;
+  }, []);
+
+  useEffect(() => clearCopyFeedbackTimeout, [clearCopyFeedbackTimeout]);
+
+  const handleCopy = useCallback(async () => {
+    if (!hasText) {
+      return;
+    }
+
+    const clipboard = typeof navigator === "undefined" ? null : navigator.clipboard;
+    if (!clipboard?.writeText) {
+      return;
+    }
+
+    try {
+      await clipboard.writeText(item.text);
+      setCopied(true);
+      clearCopyFeedbackTimeout();
+      copyFeedbackTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false);
+        copyFeedbackTimeoutRef.current = null;
+      }, 1200);
+    } catch {
+      // Clipboard access can fail in restricted contexts; the UI should remain stable.
+    }
+  }, [clearCopyFeedbackTimeout, hasText, item.text]);
+
+  return (
+    <div className={className}>
+      <div className="tx-item__header">{item.role === "user" ? "You" : "Codex"}</div>
+      {hasImages ? <ConversationMessageImages images={item.images ?? []} /> : null}
+      {shouldRenderMarkdown && hasText ? (
+        <ConversationMarkdown markdown={item.text} className={bodyClassName} />
+      ) : null}
+      {!shouldRenderMarkdown && hasText ? (
+        <ConversationLinkedText as="div" className={bodyClassName} text={item.text} />
+      ) : null}
+      {hasText ? (
+        <button
+          type="button"
+          className={copyButtonClassName}
+          aria-label="Copy message"
+          title="Copy message"
+          onClick={() => {
+            void handleCopy();
+          }}
+        >
+          <span className="tx-item__copy-icon" aria-hidden="true">
+            <CopyIcon size={14} className="tx-item__copy-icon-copy" />
+            <CheckIcon size={14} className="tx-item__copy-icon-check" />
+          </span>
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 export function ConversationBanner({

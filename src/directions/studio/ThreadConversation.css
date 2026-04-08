@@ -101,6 +101,10 @@
   background: var(--tx-bg-raised);
 }
 
+.tx-item--message {
+  position: relative;
+}
+
 .tx-item--user {
   background: color-mix(in srgb, var(--tx-accent) 14%, var(--tx-bg-raised));
   border-color: color-mix(in srgb, var(--tx-accent) 35%, var(--tx-border-subtle));
@@ -171,6 +175,104 @@
 
 .tx-item__body--message-plain {
   white-space: pre-wrap;
+}
+
+.tx-item__copy-button {
+  position: absolute;
+  right: var(--tx-space-lg);
+  bottom: calc(var(--tx-space-sm) * -1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--tx-border-muted);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tx-bg-overlay) 92%, var(--tx-bg-raised));
+  box-shadow: var(--tx-shadow-sm);
+  color: var(--tx-text-muted);
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity var(--tx-transition-fast),
+    transform var(--tx-transition-fast),
+    border-color var(--tx-transition-fast),
+    background var(--tx-transition-fast),
+    color var(--tx-transition-fast);
+}
+
+.tx-item__copy-button--compact {
+  right: var(--tx-space-md);
+  bottom: calc(var(--tx-space-xs) * -1);
+}
+
+.tx-item--message:hover .tx-item__copy-button,
+.tx-item--message:focus-within .tx-item__copy-button {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.tx-item__copy-button:hover,
+.tx-item__copy-button:focus-visible {
+  border-color: color-mix(in srgb, var(--tx-accent) 42%, var(--tx-border-subtle));
+  background: color-mix(in srgb, var(--tx-bg-raised) 96%, var(--tx-bg-hover));
+  color: var(--tx-text-primary);
+}
+
+.tx-item__copy-button:focus-visible {
+  outline: none;
+  box-shadow:
+    var(--tx-shadow-sm),
+    0 0 0 3px color-mix(in srgb, var(--tx-accent) 16%, transparent);
+}
+
+.tx-item__copy-button.is-copied {
+  border-color: color-mix(in srgb, var(--tx-accent) 42%, var(--tx-border-subtle));
+  color: var(--tx-accent);
+}
+
+.tx-item__copy-icon {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tx-item__copy-icon > svg {
+  position: absolute;
+  inset: 0;
+  transition:
+    opacity var(--tx-transition-fast),
+    transform var(--tx-transition-fast),
+    filter var(--tx-transition-fast);
+}
+
+.tx-item__copy-icon-copy {
+  opacity: 1;
+  transform: scale(1);
+  filter: blur(0);
+}
+
+.tx-item__copy-icon-check {
+  opacity: 0;
+  transform: scale(0.82);
+  filter: blur(2px);
+  transition-delay: 60ms;
+}
+
+.tx-item__copy-button.is-copied .tx-item__copy-icon-copy {
+  opacity: 0;
+  transform: scale(0.82);
+  filter: blur(2px);
+}
+
+.tx-item__copy-button.is-copied .tx-item__copy-icon-check {
+  opacity: 1;
+  transform: scale(1);
+  filter: blur(0);
 }
 
 .tx-message-images {
@@ -1335,5 +1437,12 @@ ol.tx-markdown__list {
 
   .tx-button {
     width: 100%;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .tx-item__copy-button {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

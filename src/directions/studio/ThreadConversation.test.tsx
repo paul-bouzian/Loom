@@ -28,6 +28,7 @@ import { ConversationPlanCard } from "./ConversationPlanCard";
 import { ThreadConversation } from "./ThreadConversation";
 
 const openUrlMock = vi.fn();
+const clipboardWriteTextMock = vi.fn();
 
 vi.mock("../../lib/bridge", () => ({
   openThreadConversation: vi.fn(),
@@ -116,6 +117,14 @@ function resetStores() {
 beforeEach(async () => {
   vi.clearAllMocks();
   openUrlMock.mockReset();
+  clipboardWriteTextMock.mockReset();
+  clipboardWriteTextMock.mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (...args: unknown[]) => clipboardWriteTextMock(...args),
+    },
+  });
   await resetVoiceSessionStore();
   resetStores();
   mockedBridge.getThreadComposerCatalog.mockResolvedValue({
@@ -789,6 +798,44 @@ describe("ThreadConversation", () => {
     expect(container.querySelectorAll(".tx-markdown__list")).toHaveLength(1);
   });
 
+  it("copies the raw markdown for assistant messages", async () => {
+    const markdown =
+      "## Release notes\n\n**Bold guidance** with `bun`.\n\n- First step\n- Second step";
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        items: [
+          {
+            kind: "message",
+            id: "assistant-copy-1",
+            role: "assistant",
+            text: markdown,
+            images: null,
+            isStreaming: false,
+          },
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "Release notes", level: 2 });
+    const copyButton = screen.getByRole("button", { name: "Copy message" });
+    await userEvent.click(copyButton);
+
+    await waitFor(() => {
+      expect(clipboardWriteTextMock).toHaveBeenCalledWith(markdown);
+    });
+    await waitFor(() => {
+      expect(copyButton).toHaveClass("is-copied");
+    });
+  });
+
   it("renders assistant file references as compact tokens instead of inline paths", async () => {
     const filePath =
       "/Users/paulbouzian/.threadex/worktrees/threadex-019d5b55/lively-dolphin/src/directions/studio/ThreadConversation.tsx";
@@ -928,6 +975,7 @@ describe("ThreadConversation", () => {
   });
 
   it("preserves multiline user messages with the plain-text message class", async () => {
+    const multilineMessage = "Line one\nLine two";
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({
         items: [
@@ -935,7 +983,7 @@ describe("ThreadConversation", () => {
             kind: "message",
             id: "user-multiline-1",
             role: "user",
-            text: "Line one\nLine two",
+            text: multilineMessage,
             images: null,
             isStreaming: false,
           },
@@ -956,6 +1004,106 @@ describe("ThreadConversation", () => {
     });
 
     expect(body).toHaveClass("tx-item__body--message-plain");
+
+    const copyButton = screen.getByRole("button", { name: "Copy message" });
+    await userEvent.click(copyButton);
+
+    await waitFor(() => {
+      expect(clipboardWriteTextMock).toHaveBeenCalledWith(multilineMessage);
+    });
+    await waitFor(() => {
+      expect(copyButton).toHaveClass("is-copied");
+    });
+  });
+
+  it("copies assistant updates rendered inside compact work activity", async () => {
+    setCompactWorkActivity(true);
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        codexThreadId: null,
+        status: "running",
+        activeTurnId: "turn-copy-update-1",
+        items: [
+          {
+            kind: "message",
+            id: "user-copy-update-1",
+            turnId: "turn-copy-update-1",
+            role: "user",
+            text: "Inspect the repository",
+            images: null,
+            isStreaming: false,
+          },
+          {
+            kind: "message",
+            id: "assistant-copy-update-1",
+            turnId: "turn-copy-update-1",
+            role: "assistant",
+            text: "I am checking the runtime flow now.",
+            images: null,
+            isStreaming: true,
+          },
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    await screen.findByText("Inspect the repository");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show work activity details" }),
+    );
+
+    const updateRow = screen
+      .getByText("I am checking the runtime flow now.")
+      .closest(".tx-item--message");
+    expect(updateRow).not.toBeNull();
+    if (!(updateRow instanceof HTMLElement)) {
+      throw new Error("Expected the compact work activity update row to render.");
+    }
+
+    await userEvent.click(within(updateRow).getByRole("button", { name: "Copy message" }));
+
+    await waitFor(() => {
+      expect(clipboardWriteTextMock).toHaveBeenCalledWith(
+        "I am checking the runtime flow now.",
+      );
+    });
+  });
+
+  it("does not render a copy action for image-only messages", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        items: [
+          {
+            kind: "message",
+            id: "assistant-image-only-1",
+            role: "assistant",
+            text: "",
+            images: [{ type: "image", url: "https://example.com/mock.png" }],
+            isStreaming: false,
+          },
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    await screen.findByRole("img", { name: "Pasted image" });
+    expect(
+      screen.queryByRole("button", { name: "Copy message" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders clickable bare URLs in tool summaries, tool output, and system banners", async () => {
