@@ -1672,8 +1672,45 @@ describe("ThreadConversation", () => {
     expect(await screen.findByText("Ship the fix")).toBeInTheDocument();
 
     deferred.resolve(makeConversationSnapshot({ status: "running" }));
+    await expect(deferred.promise).resolves.toMatchObject({
+      status: "running",
+    });
     await waitFor(() => {
-      expect(mockedBridge.sendThreadMessage).toHaveBeenCalledTimes(1);
+      expect(
+        useConversationStore.getState().snapshotsByThreadId["thread-1"]?.status,
+      ).toBe("running");
+    });
+  });
+
+  it("restores the full draft after a send failure", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({ status: "idle" }),
+      capabilities: capabilitiesFixture,
+    });
+    mockedBridge.sendThreadMessage.mockRejectedValue(new Error("send failed"));
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    const input = await screen.findByPlaceholderText("Message ThreadEx...");
+    await userEvent.type(input, "  Ship the fix  ");
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(mockedBridge.sendThreadMessage).toHaveBeenCalledWith({
+        threadId: "thread-1",
+        text: "Ship the fix",
+        composer: expect.objectContaining({
+          collaborationMode: "build",
+        }),
+      });
+    });
+    await waitFor(() => {
+      expect(input).toHaveValue("  Ship the fix  ");
     });
   });
 

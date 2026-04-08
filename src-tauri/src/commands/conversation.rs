@@ -79,8 +79,9 @@ pub async fn send_thread_message(
 ) -> Result<ThreadConversationSnapshot, CommandError> {
     let mut context = state.workspace.thread_runtime_context(&input.thread_id)?;
     let should_auto_rename = state.workspace.thread_needs_auto_title(&input.thread_id)?;
+    let requested_composer = input.composer.clone();
     let message_text = input.text;
-    if let Some(composer) = input.composer.clone() {
+    if let Some(composer) = requested_composer.clone() {
         context.composer = composer;
     }
     let rename_result = if !message_text.trim().is_empty() {
@@ -91,15 +92,16 @@ pub async fn send_thread_message(
             model: context.composer.model.clone(),
             codex_binary_path: context.codex_binary_path.clone(),
         };
-        match spawn_blocking(move || workspace.maybe_auto_rename_first_prompt_environment(rename_request))
-            .await
+        match spawn_blocking(move || {
+            workspace.maybe_auto_rename_first_prompt_environment(rename_request)
+        })
+        .await
         {
             Ok(result) => result,
             Err(error) => {
                 warn!(
                     thread_id = input.thread_id,
-                    "failed to auto-rename first prompt environment: {}",
-                    error.message
+                    "failed to auto-rename first prompt environment: {}", error.message
                 );
                 None
             }
@@ -126,6 +128,9 @@ pub async fn send_thread_message(
                 );
             }
             context = state.workspace.thread_runtime_context(&input.thread_id)?;
+            if let Some(composer) = requested_composer.clone() {
+                context.composer = composer;
+            }
         }
         if rename.thread_renamed && !rename.environment_renamed {
             emit_workspace_event(
@@ -151,7 +156,9 @@ pub async fn send_thread_message(
         .await?;
 
     if should_auto_rename
-        && !rename_result.as_ref().is_some_and(|rename| rename.thread_renamed)
+        && !rename_result
+            .as_ref()
+            .is_some_and(|rename| rename.thread_renamed)
         && state
             .workspace
             .auto_rename_thread_from_message(&input.thread_id, &message_text)?
@@ -249,8 +256,6 @@ where
 {
     tokio::task::spawn_blocking(operation)
         .await
-        .map_err(|error| {
-            CommandError::from(crate::error::AppError::Runtime(error.to_string()))
-        })?
+        .map_err(|error| CommandError::from(crate::error::AppError::Runtime(error.to_string())))?
         .map_err(CommandError::from)
 }

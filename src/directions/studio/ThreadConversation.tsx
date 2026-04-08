@@ -242,7 +242,7 @@ export function ThreadConversation({ environment, thread }: Props) {
       if (sent) {
         return;
       }
-      restoreComposerState(message, nextImages, nextMentionBindings);
+      restoreComposerState(text, nextImages, nextMentionBindings);
     } finally {
       setIsPreparingWorktreeName(false);
       submitInFlightRef.current = false;

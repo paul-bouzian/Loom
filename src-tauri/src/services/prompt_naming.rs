@@ -215,8 +215,7 @@ fn build_first_prompt_naming_prompt(message: &str) -> String {
          - Output JSON only.\n\n\
          Model reasoning effort for this task: {}.\n\n\
          User request excerpt:\n{}\n",
-        NAMING_REASONING_EFFORT,
-        message_excerpt
+        NAMING_REASONING_EFFORT, message_excerpt
     )
 }
 
@@ -253,8 +252,13 @@ fn compact_message_for_naming(message: &str) -> String {
     }
 
     let excerpt = if excerpt_parts.is_empty() {
-        clamp_text(message, MAX_NAMING_MESSAGE_CHARS)
-            .unwrap_or_else(|| message.trim().chars().take(MAX_NAMING_MESSAGE_CHARS).collect())
+        clamp_text(message, MAX_NAMING_MESSAGE_CHARS).unwrap_or_else(|| {
+            message
+                .trim()
+                .chars()
+                .take(MAX_NAMING_MESSAGE_CHARS)
+                .collect()
+        })
     } else {
         excerpt_parts.join(" | ")
     };
@@ -264,9 +268,12 @@ fn compact_message_for_naming(message: &str) -> String {
 
 fn parse_first_prompt_naming(raw: &str) -> AppResult<FirstPromptNamingSuggestion> {
     let parsed = parse_first_prompt_naming_wire(raw)?;
-    let thread_title = clamp_text(&parsed.thread_title, MAX_THREAD_TITLE_CHARS).ok_or_else(|| {
-        AppError::Runtime("Codex returned an empty thread title for first prompt naming.".to_string())
-    })?;
+    let thread_title =
+        clamp_text(&parsed.thread_title, MAX_THREAD_TITLE_CHARS).ok_or_else(|| {
+            AppError::Runtime(
+                "Codex returned an empty thread title for first prompt naming.".to_string(),
+            )
+        })?;
     let worktree_label =
         clamp_text(&parsed.worktree_label, MAX_WORKTREE_LABEL_CHARS).ok_or_else(|| {
             AppError::Runtime(
@@ -274,7 +281,9 @@ fn parse_first_prompt_naming(raw: &str) -> AppResult<FirstPromptNamingSuggestion
             )
         })?;
     let branch_slug = sanitize_branch_slug(&parsed.branch_slug).ok_or_else(|| {
-        AppError::Runtime("Codex returned an invalid branch slug for first prompt naming.".to_string())
+        AppError::Runtime(
+            "Codex returned an invalid branch slug for first prompt naming.".to_string(),
+        )
     })?;
 
     Ok(FirstPromptNamingSuggestion {
@@ -335,7 +344,9 @@ fn extract_json_object(value: &str) -> Option<String> {
 
 fn clamp_text(value: &str, max_chars: usize) -> Option<String> {
     let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trimmed = compact.trim_matches([' ', '"', '\'', '.', ',', ':', ';', '!', '?', '-', '#', '*', '>']);
+    let trimmed = compact.trim_matches([
+        ' ', '"', '\'', '.', ',', ':', ';', '!', '?', '-', '#', '*', '>',
+    ]);
     if trimmed.is_empty() {
         return None;
     }
@@ -344,32 +355,36 @@ fn clamp_text(value: &str, max_chars: usize) -> Option<String> {
         return Some(trimmed.to_string());
     }
 
-    let mut boundary = 0usize;
+    let ellipsis = "...";
+    let available_chars = max_chars.saturating_sub(ellipsis.chars().count());
+    if available_chars == 0 {
+        return Some(ellipsis.chars().take(max_chars).collect());
+    }
+
+    let mut cutoff = 0usize;
+    let mut boundary = None;
+    let mut character_count = 0usize;
     for (index, character) in trimmed.char_indices() {
-        if index > max_chars.saturating_sub(3) {
+        if character_count >= available_chars {
             break;
         }
+        character_count += 1;
+        cutoff = index + character.len_utf8();
         if character.is_whitespace() {
-            boundary = index;
+            boundary = Some((index, character_count.saturating_sub(1)));
         }
     }
 
-    let cutoff = if boundary >= 12 {
-        boundary
-    } else {
-        trimmed
-            .char_indices()
-            .take_while(|(index, _)| *index <= max_chars.saturating_sub(3))
-            .map(|(index, character)| index + character.len_utf8())
-            .last()
-            .unwrap_or(trimmed.len())
+    let cutoff = match boundary {
+        Some((index, boundary_chars)) if boundary_chars >= 12 => index,
+        _ => cutoff,
     };
 
     let shortened = trimmed[..cutoff].trim_end_matches([' ', '.', ',', ':', ';', '!', '?']);
     if shortened.is_empty() {
         None
     } else {
-        Some(format!("{shortened}..."))
+        Some(format!("{shortened}{ellipsis}"))
     }
 }
 
@@ -450,7 +465,10 @@ fn read_stderr(child: &mut std::process::Child) -> String {
 }
 
 fn is_ascii_lower_token(value: &str) -> bool {
-    !value.is_empty() && value.chars().all(|character| character.is_ascii_lowercase())
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_lowercase())
 }
 
 struct TempFileGuard {
@@ -477,9 +495,8 @@ impl Drop for TempFileGuard {
 mod tests {
     use super::{
         clamp_text, compact_message_for_naming, derive_thread_title_from_message,
-        ensure_unique_branch_slug,
-        is_auto_generated_thread_title, is_auto_generated_worktree_name, parse_first_prompt_naming,
-        sanitize_branch_slug,
+        ensure_unique_branch_slug, is_auto_generated_thread_title, is_auto_generated_worktree_name,
+        parse_first_prompt_naming, sanitize_branch_slug,
     };
 
     #[test]
@@ -546,6 +563,13 @@ mod tests {
         .expect("label should clamp");
 
         assert_eq!(value, "Investigate why the environment status...");
+    }
+
+    #[test]
+    fn clamps_unicode_labels_by_character_count() {
+        let value = clamp_text("éééééééééééé", 10).expect("label should clamp");
+
+        assert_eq!(value, "ééééééé...");
     }
 
     #[test]
