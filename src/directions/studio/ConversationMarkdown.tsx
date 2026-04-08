@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import {
+  isWindowsAbsolutePath,
   parseFileReferenceTarget,
   type FileReferenceTarget,
 } from "./conversation-file-references";
@@ -499,12 +500,21 @@ function findLinkToken(text: string, startIndex: number): InlineTokenMatch | nul
 
 function findMarkdownTargetEnd(text: string, startIndex: number) {
   let parenthesisDepth = 0;
+  const isWindowsPath = isWindowsAbsolutePath(text.slice(startIndex));
 
   for (let index = startIndex; index < text.length; index += 1) {
     const character = text[index];
     if (character === "\\") {
-      index += 1;
-      continue;
+      const nextCharacter = text[index + 1];
+      const escapesMarkdownTarget =
+        !isWindowsPath &&
+        (nextCharacter === "\\" ||
+          nextCharacter === "(" ||
+          nextCharacter === ")");
+      if (escapesMarkdownTarget) {
+        index += 1;
+        continue;
+      }
     }
 
     if (character === "(") {

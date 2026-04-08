@@ -8,8 +8,75 @@ export type FileReferenceTarget = {
 const HASH_POSITION_PATTERN = /#L(\d+)(?:C(\d+))?$/;
 const COLON_POSITION_PATTERN = /:(\d+)(?::(\d+))?$/;
 const WINDOWS_ABSOLUTE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
-const ROOT_LEVEL_FILE_PATTERN =
-  /^(?:\.[A-Za-z0-9._-]+|[A-Za-z0-9_-][A-Za-z0-9() _-]*\.[A-Za-z0-9._-]+)$/;
+const FILE_NAME_PATTERN =
+  /^(?:\.[A-Za-z0-9._-]+|[A-Za-z0-9_-][A-Za-z0-9()_-]*(?:\.[A-Za-z0-9._-]+)+)$/;
+const COMMON_EXTENSIONLESS_FILE_NAMES = new Set([
+  "dockerfile",
+  "makefile",
+  "license",
+  "readme",
+  "changelog",
+  "notice",
+  "procfile",
+  "gemfile",
+  "podfile",
+  "brewfile",
+  "vagrantfile",
+  "rakefile",
+  "jenkinsfile",
+  "justfile",
+]);
+const RECOGNIZED_FILE_EXTENSIONS = new Set([
+  "bash",
+  "c",
+  "cc",
+  "conf",
+  "cpp",
+  "css",
+  "csv",
+  "cxx",
+  "dart",
+  "env",
+  "go",
+  "h",
+  "hpp",
+  "html",
+  "ini",
+  "java",
+  "js",
+  "json",
+  "jsx",
+  "kt",
+  "kts",
+  "less",
+  "lock",
+  "lua",
+  "m",
+  "md",
+  "mm",
+  "php",
+  "plist",
+  "py",
+  "rb",
+  "rs",
+  "sass",
+  "scala",
+  "scss",
+  "sh",
+  "sql",
+  "svg",
+  "svelte",
+  "swift",
+  "toml",
+  "ts",
+  "tsx",
+  "txt",
+  "vue",
+  "xml",
+  "yaml",
+  "yml",
+  "zsh",
+]);
 
 export function parseFileReferenceTarget(target: string): FileReferenceTarget | null {
   const rawTarget = target.trim();
@@ -77,19 +144,44 @@ function hasUriScheme(value: string) {
   return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(value);
 }
 
-function isWindowsAbsolutePath(value: string) {
+export function isWindowsAbsolutePath(value: string) {
   return WINDOWS_ABSOLUTE_PATH_PATTERN.test(value);
 }
 
 function isLikelyRelativeFilePath(value: string) {
+  const segments = value.trim().split(/[\\/]/).filter(Boolean);
+  if (segments.length === 0) {
+    return false;
+  }
+
+  return isLikelyFileName(segments[segments.length - 1] ?? "");
+}
+
+function isLikelyFileName(value: string) {
   const normalized = value.trim();
-  if (ROOT_LEVEL_FILE_PATTERN.test(normalized)) {
+  if (!normalized || normalized.includes(" ")) {
+    return false;
+  }
+
+  const lowerCased = normalized.toLowerCase();
+  if (COMMON_EXTENSIONLESS_FILE_NAMES.has(lowerCased)) {
     return true;
   }
 
-  const segments = normalized.split(/[\\/]/).filter(Boolean);
-  const tail = segments[segments.length - 1] ?? "";
-  return segments.length > 1 && ROOT_LEVEL_FILE_PATTERN.test(tail);
+  if (looksLikeVersionLiteral(lowerCased) || !FILE_NAME_PATTERN.test(normalized)) {
+    return false;
+  }
+
+  if (normalized.startsWith(".")) {
+    return true;
+  }
+
+  const extension = normalized.split(".").pop()?.toLowerCase() ?? "";
+  return RECOGNIZED_FILE_EXTENSIONS.has(extension);
+}
+
+function looksLikeVersionLiteral(value: string) {
+  return /^v?\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.-]+)?$/.test(value);
 }
 
 function parsePositiveInteger(value: string | undefined) {

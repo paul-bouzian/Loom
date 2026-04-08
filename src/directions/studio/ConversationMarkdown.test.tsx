@@ -124,6 +124,27 @@ describe("ConversationMarkdown", () => {
       "42",
       null,
     ],
+    [
+      "common extensionless root file reference",
+      "Dockerfile",
+      "Dockerfile",
+      null,
+      null,
+    ],
+    [
+      "common extensionless nested file reference",
+      "infra/Makefile:9",
+      "infra/Makefile",
+      "9",
+      null,
+    ],
+    [
+      "common extensionless license reference",
+      "LICENSE",
+      "LICENSE",
+      null,
+      null,
+    ],
   ])(
     "parses %s metadata from file references",
     (_name, rawTarget, expectedPath, expectedLine, expectedColumn) => {
@@ -160,6 +181,34 @@ describe("ConversationMarkdown", () => {
     expect(token).toHaveAttribute("title", "src/app/(auth)/page.tsx:42");
     expect(token).toHaveAttribute("data-file-path", "src/app/(auth)/page.tsx");
     expect(token).toHaveAttribute("data-file-line", "42");
+  });
+
+  it("keeps windows paths with parenthesized folders intact while scanning markdown targets", () => {
+    render(
+      <ConversationMarkdown
+        markdown={"Inspect [page.tsx](C:\\repo\\(auth)\\page.tsx:42) before shipping."}
+      />,
+    );
+
+    const token = screen.getByText("page.tsx");
+    expect(token).toHaveAttribute("title", "C:\\repo\\(auth)\\page.tsx:42");
+    expect(token).toHaveAttribute("data-file-path", "C:\\repo\\(auth)\\page.tsx");
+    expect(token).toHaveAttribute("data-file-line", "42");
+  });
+
+  it.each([
+    "www.example.com",
+    "www.example.com:443",
+    "Section 1.2",
+    "v1.2.3",
+  ])("leaves ambiguous dotted target %s as plain text", (rawTarget) => {
+    const { container } = render(
+      <ConversationMarkdown markdown={`Inspect [literal](${rawTarget}) before shipping.`} />,
+    );
+
+    expect(container.querySelector(".tx-markdown__file-ref")).toBeNull();
+    expect(screen.queryByRole("link", { name: "literal" })).toBeNull();
+    expect(container.textContent).toBe(`Inspect [literal](${rawTarget}) before shipping.`);
   });
 
   it("leaves non-http, non-local markdown targets as plain text", () => {
