@@ -61,9 +61,7 @@
 }
 
 .tx-context-meter__tooltip {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 10px);
+  position: fixed;
   width: max-content;
   max-width: 280px;
   padding: var(--tx-space-md);
@@ -72,19 +70,8 @@
   background: color-mix(in srgb, var(--tx-bg-raised) 94%, transparent);
   box-shadow: var(--tx-shadow-lg);
   color: var(--tx-text-primary);
-  opacity: 0;
   pointer-events: none;
-  transform: translateY(4px);
-  transition:
-    opacity var(--tx-transition-fast),
-    transform var(--tx-transition-fast);
   backdrop-filter: blur(16px);
-}
-
-.tx-context-meter:hover .tx-context-meter__tooltip,
-.tx-context-meter__trigger:focus-visible + .tx-context-meter__tooltip {
-  opacity: 1;
-  transform: translateY(0);
 }
 
 .tx-context-meter__tooltip-label {
