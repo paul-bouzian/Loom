@@ -19,11 +19,16 @@ function App() {
   const initializeWorkspaceListener = useWorkspaceStore(
     (s) => s.initializeListener,
   );
+  const workspaceSnapshot = useWorkspaceStore((s) => s.snapshot);
   const loadingState = useWorkspaceStore((s) => s.loadingState);
   const error = useWorkspaceStore((s) => s.error);
   const initializeConversationListener = useConversationStore(
     (s) => s.initializeListener,
   );
+  const preloadActiveThreads = useConversationStore(
+    (s) => s.preloadActiveThreads,
+  );
+  const conversationListenerReady = useConversationStore((s) => s.listenerReady);
   const initializeCodexUsageListener = useCodexUsageStore(
     (s) => s.initializeListener,
   );
@@ -46,6 +51,23 @@ function App() {
   useEffect(() => {
     void initializeConversationListener();
   }, [initializeConversationListener]);
+
+  useEffect(() => {
+    if (
+      loadingState !== "ready" ||
+      !conversationListenerReady ||
+      workspaceSnapshot === null
+    ) {
+      return;
+    }
+
+    void preloadActiveThreads();
+  }, [
+    conversationListenerReady,
+    loadingState,
+    preloadActiveThreads,
+    workspaceSnapshot,
+  ]);
 
   useEffect(() => {
     void initializeCodexUsageListener();
