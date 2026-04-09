@@ -4,6 +4,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   CODEX_USAGE_EVENT_NAME,
   CONVERSATION_EVENT_NAME,
+  MENU_CHECK_FOR_UPDATES_EVENT_NAME,
+  MENU_OPEN_SETTINGS_EVENT_NAME,
   TERMINAL_EXIT_EVENT_NAME,
   TERMINAL_OUTPUT_EVENT_NAME,
   WORKSPACE_EVENT_NAME,
@@ -256,6 +258,18 @@ export function listenToWorkspaceEvents(
   return listen<WorkspaceEventPayload>(WORKSPACE_EVENT_NAME, (event) =>
     callback(event.payload),
   );
+}
+
+export function listenToMenuOpenSettings(
+  callback: () => void,
+): Promise<UnlistenFn> {
+  return listen(MENU_OPEN_SETTINGS_EVENT_NAME, () => callback());
+}
+
+export function listenToMenuCheckForUpdates(
+  callback: () => void,
+): Promise<UnlistenFn> {
+  return listen(MENU_CHECK_FOR_UPDATES_EVENT_NAME, () => callback());
 }
 
 export function updateGlobalSettings(

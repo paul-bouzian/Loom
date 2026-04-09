@@ -34,6 +34,17 @@ function makeUpdate(overrides?: Partial<Record<string, unknown>>) {
   };
 }
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
+}
+
 beforeEach(async () => {
   useAppUpdateStore.getState().dismiss();
   vi.clearAllMocks();
@@ -43,6 +54,8 @@ beforeEach(async () => {
     error: null,
     downloadedBytes: 0,
     contentLength: null,
+    noticeVisible: false,
+    hasInitialized: false,
   });
 });
 
@@ -53,9 +66,50 @@ describe("app-update-store", () => {
     await useAppUpdateStore.getState().initialize();
 
     expect(useAppUpdateStore.getState().state).toBe("available");
+    expect(useAppUpdateStore.getState().noticeVisible).toBe(true);
     expect(useAppUpdateStore.getState().snapshot?.releaseUrl).toBe(
       "https://github.com/paul-bouzian/Loom/releases/tag/v0.2.0",
     );
+  });
+
+  it("announces when no update is available after a manual check", async () => {
+    checkMock.mockResolvedValue(null);
+
+    await useAppUpdateStore.getState().checkNow();
+
+    expect(useAppUpdateStore.getState().state).toBe("latest");
+    expect(useAppUpdateStore.getState().noticeVisible).toBe(true);
+  });
+
+  it("replays a manual check after the silent startup check finishes", async () => {
+    const silentCheck = createDeferred<ReturnType<typeof makeUpdate> | null>();
+    checkMock
+      .mockImplementationOnce(() => silentCheck.promise)
+      .mockResolvedValueOnce(null);
+
+    const initializePromise = useAppUpdateStore.getState().initialize();
+    const manualCheckPromise = useAppUpdateStore.getState().checkNow();
+
+    expect(checkMock).toHaveBeenCalledTimes(1);
+
+    silentCheck.resolve(null);
+    await initializePromise;
+    await manualCheckPromise;
+
+    expect(checkMock).toHaveBeenCalledTimes(2);
+    expect(useAppUpdateStore.getState().state).toBe("latest");
+    expect(useAppUpdateStore.getState().noticeVisible).toBe(true);
+  });
+
+  it("runs initialize only once across the app lifetime", async () => {
+    checkMock.mockResolvedValue(null);
+
+    await useAppUpdateStore.getState().initialize();
+    await useAppUpdateStore.getState().initialize();
+
+    expect(checkMock).toHaveBeenCalledTimes(1);
+    expect(useAppUpdateStore.getState().hasInitialized).toBe(true);
+    expect(useAppUpdateStore.getState().state).toBe("idle");
   });
 
   it("downloads, installs, and restarts the app", async () => {
@@ -99,5 +153,16 @@ describe("app-update-store", () => {
     expect(openUrlMock).toHaveBeenCalledWith(
       "https://github.com/paul-bouzian/Loom/releases/tag/v0.2.0",
     );
+  });
+
+  it("hides the toast without dropping the pending update", async () => {
+    checkMock.mockResolvedValue(makeUpdate());
+
+    await useAppUpdateStore.getState().initialize();
+    useAppUpdateStore.getState().dismiss();
+
+    expect(useAppUpdateStore.getState().state).toBe("available");
+    expect(useAppUpdateStore.getState().snapshot?.availableVersion).toBe("0.2.0");
+    expect(useAppUpdateStore.getState().noticeVisible).toBe(false);
   });
 });

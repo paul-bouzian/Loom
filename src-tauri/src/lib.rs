@@ -3,6 +3,8 @@ mod commands;
 mod domain;
 mod error;
 mod infrastructure;
+#[cfg(target_os = "macos")]
+mod menu;
 mod runtime;
 mod services;
 mod state;
@@ -18,7 +20,16 @@ pub fn run() {
         .compact()
         .init();
 
-    let app = tauri::Builder::default()
+    #[cfg(target_os = "macos")]
+    let builder = tauri::Builder::default()
+        .on_menu_event(menu::handle_menu_event)
+        .enable_macos_default_menu(false)
+        .menu(menu::build_menu);
+
+    #[cfg(not(target_os = "macos"))]
+    let builder = tauri::Builder::default();
+
+    let app = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())

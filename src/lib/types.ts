@@ -319,7 +319,8 @@ export type AppUpdateState =
   | "checking"
   | "available"
   | "installing"
-  | "dismissed";
+  | "latest"
+  | "error";
 
 export type AppUpdateSnapshot = {
   currentVersion: string;

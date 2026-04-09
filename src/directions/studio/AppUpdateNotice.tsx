@@ -9,11 +9,17 @@ export function AppUpdateNotice() {
   const error = useAppUpdateStore((store) => store.error);
   const downloadedBytes = useAppUpdateStore((store) => store.downloadedBytes);
   const contentLength = useAppUpdateStore((store) => store.contentLength);
+  const noticeVisible = useAppUpdateStore((store) => store.noticeVisible);
+  const checkNow = useAppUpdateStore((store) => store.checkNow);
   const dismiss = useAppUpdateStore((store) => store.dismiss);
   const viewChanges = useAppUpdateStore((store) => store.viewChanges);
   const install = useAppUpdateStore((store) => store.install);
 
-  if (!snapshot || (state !== "available" && state !== "installing")) {
+  if (!noticeVisible && state !== "installing") {
+    return null;
+  }
+
+  if (!snapshot && state !== "checking" && state !== "latest" && state !== "error") {
     return null;
   }
 
@@ -21,19 +27,29 @@ export function AppUpdateNotice() {
     contentLength && contentLength > 0
       ? Math.min(downloadedBytes / contentLength, 1)
       : null;
+  const title =
+    state === "checking"
+      ? "Checking for updates"
+      : state === "latest"
+        ? "Loom is up to date"
+        : state === "error"
+          ? "Update check failed"
+          : `Loom ${snapshot?.availableVersion ?? ""}`.trim();
+  const meta = snapshot
+    ? `Installed ${snapshot.currentVersion}${snapshot.releaseDate ? ` • ${formatReleaseDate(snapshot)}` : ""}`
+    : null;
 
   return (
     <aside className="tx-update-notice" aria-live="polite">
       <div className="tx-update-notice__header">
         <div>
-          <p className="tx-update-notice__eyebrow">Update available</p>
-          <h3 className="tx-update-notice__title">
-            Loom {snapshot.availableVersion}
-          </h3>
-          <p className="tx-update-notice__meta">
-            Installed {snapshot.currentVersion}
-            {snapshot.releaseDate ? ` • ${formatReleaseDate(snapshot)}` : ""}
+          <p className="tx-update-notice__eyebrow">
+            {state === "available" || state === "installing"
+              ? "Update available"
+              : "Application update"}
           </p>
+          <h3 className="tx-update-notice__title">{title}</h3>
+          {meta ? <p className="tx-update-notice__meta">{meta}</p> : null}
         </div>
         <button
           type="button"
@@ -45,11 +61,38 @@ export function AppUpdateNotice() {
         </button>
       </div>
 
-      {snapshot.notes ? (
+      {snapshot?.notes ? (
         <p className="tx-update-notice__notes">{summarizeNotes(snapshot)}</p>
       ) : null}
 
       {error ? <p className="tx-update-notice__error">{error}</p> : null}
+
+      {state === "checking" ? (
+        <p className="tx-update-notice__meta">Checking for updates…</p>
+      ) : null}
+
+      {state === "latest" ? (
+        <p className="tx-update-notice__meta">Loom is already up to date.</p>
+      ) : null}
+
+      {state === "error" ? (
+        <div className="tx-update-notice__actions">
+          <button
+            type="button"
+            className="tx-update-notice__secondary"
+            onClick={dismiss}
+          >
+            Dismiss
+          </button>
+          <button
+            type="button"
+            className="tx-update-notice__primary"
+            onClick={() => void checkNow()}
+          >
+            Try again
+          </button>
+        </div>
+      ) : null}
 
       {state === "installing" ? (
         <div className="tx-update-notice__progress">
@@ -66,7 +109,7 @@ export function AppUpdateNotice() {
             />
           </div>
         </div>
-      ) : (
+      ) : state === "available" ? (
         <div className="tx-update-notice__actions">
           <button
             type="button"
@@ -84,7 +127,19 @@ export function AppUpdateNotice() {
             <span>Install update</span>
           </button>
         </div>
-      )}
+      ) : null}
+
+      {state === "latest" ? (
+        <div className="tx-update-notice__actions">
+          <button
+            type="button"
+            className="tx-update-notice__secondary"
+            onClick={dismiss}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
     </aside>
   );
 }

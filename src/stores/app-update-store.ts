@@ -12,7 +12,10 @@ type UpdateStore = {
   error: string | null;
   downloadedBytes: number;
   contentLength: number | null;
+  noticeVisible: boolean;
+  hasInitialized: boolean;
   initialize: () => Promise<void>;
+  checkNow: (options?: { announceNoUpdate?: boolean }) => Promise<void>;
   dismiss: () => void;
   viewChanges: () => Promise<void>;
   install: () => Promise<void>;
@@ -27,6 +30,7 @@ type UpdateSetter = (
 
 let pendingUpdate: Update | null = null;
 let initialization: Promise<void> | null = null;
+let queuedManualCheck: Promise<void> | null = null;
 
 export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
   state: "idle",
@@ -34,65 +38,133 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
   error: null,
   downloadedBytes: 0,
   contentLength: null,
+  noticeVisible: false,
+  hasInitialized: false,
 
   initialize: async () => {
-    if (get().state !== "idle") return;
+    if (get().hasInitialized) {
+      return;
+    }
+
     if (initialization) {
       await initialization;
       return;
     }
 
-    const task = (async () => {
-      set({ state: "checking", error: null });
-      try {
-        const update = await check();
-        await replacePendingUpdate(update);
-        if (!update) {
-          set({
-            state: "idle",
-            snapshot: null,
-            error: null,
-            downloadedBytes: 0,
-            contentLength: null,
-          });
-          return;
-        }
-
-        set({
-          state: "available",
-          snapshot: toUpdateSnapshot(update),
-          error: null,
-          downloadedBytes: 0,
-          contentLength: null,
-        });
-      } catch {
-        await replacePendingUpdate(null);
-        set({
-          state: "idle",
-          snapshot: null,
-          error: null,
-          downloadedBytes: 0,
-          contentLength: null,
-        });
-      }
-    })();
-
+    const task = get().checkNow({ announceNoUpdate: false });
     initialization = task;
     try {
       await task;
     } finally {
+      set({ hasInitialized: true });
       if (initialization === task) {
         initialization = null;
       }
     }
   },
 
-  dismiss: () => {
-    void replacePendingUpdate(null);
+  checkNow: async (options) => {
+    if (get().state === "installing") {
+      return;
+    }
+
+    const announceNoUpdate = options?.announceNoUpdate ?? true;
+    const silent = !announceNoUpdate;
+
+    if (get().state === "checking") {
+      if (!initialization || !announceNoUpdate) {
+        return;
+      }
+      if (queuedManualCheck) {
+        await queuedManualCheck;
+        return;
+      }
+
+      const followUpCheck = (async () => {
+        await initialization;
+        if (get().state === "idle" && !get().snapshot) {
+          await get().checkNow(options);
+        }
+      })();
+
+      queuedManualCheck = followUpCheck;
+      try {
+        await followUpCheck;
+      } finally {
+        if (queuedManualCheck === followUpCheck) {
+          queuedManualCheck = null;
+        }
+      }
+      return;
+    }
+
     set({
-      state: "dismissed",
+      state: "checking",
       snapshot: null,
       error: null,
+      noticeVisible: !silent,
+      downloadedBytes: 0,
+      contentLength: null,
+    });
+
+    try {
+      const update = await check();
+      await replacePendingUpdate(update);
+      if (!update) {
+        set({
+          state: announceNoUpdate ? "latest" : "idle",
+          snapshot: null,
+          error: null,
+          noticeVisible: announceNoUpdate,
+          downloadedBytes: 0,
+          contentLength: null,
+        });
+        return;
+      }
+
+      set({
+        state: "available",
+        snapshot: toUpdateSnapshot(update),
+        error: null,
+        noticeVisible: true,
+        downloadedBytes: 0,
+        contentLength: null,
+      });
+    } catch (cause: unknown) {
+      await replacePendingUpdate(null);
+      const message =
+        cause instanceof Error ? cause.message : "Failed to check for updates";
+      set({
+        state: silent ? "idle" : "error",
+        snapshot: null,
+        error: silent ? null : message,
+        noticeVisible: !silent,
+        downloadedBytes: 0,
+        contentLength: null,
+      });
+    }
+  },
+
+  dismiss: () => {
+    const state = get().state;
+    if (state === "installing") {
+      return;
+    }
+
+    if (state === "available") {
+      set({
+        noticeVisible: false,
+        error: null,
+      });
+      return;
+    }
+
+    void replacePendingUpdate(null);
+    set({
+      state: "idle",
+      snapshot: null,
+      error: null,
+      noticeVisible: false,
       downloadedBytes: 0,
       contentLength: null,
     });
@@ -110,6 +182,7 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
     set({
       state: "installing",
       error: null,
+      noticeVisible: true,
       downloadedBytes: 0,
       contentLength: null,
     });
@@ -126,6 +199,7 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
       set({
         state: "available",
         error: message,
+        noticeVisible: true,
       });
     }
   },

@@ -9,6 +9,7 @@ import type {
   ReasoningEffort,
 } from "../../lib/types";
 import { ProjectSettingsTab } from "./ProjectSettingsTab";
+import { SettingsUpdateSection } from "./SettingsUpdateSection";
 import {
   selectConversationCapabilities,
   useConversationStore,
@@ -300,6 +301,7 @@ function SettingsContent({
         placeholder="auto-detect"
         onChange={(value) => onChange({ codexBinaryPath: value || null })}
       />
+      <SettingsUpdateSection disabled={disabled} />
     </div>
   );
 }
