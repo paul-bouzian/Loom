@@ -10,7 +10,7 @@ import {
 import { useTerminalStore } from "../../stores/terminal-store";
 import { EnvironmentKindBadge } from "../../shared/EnvironmentKindBadge";
 import { RuntimeIndicator } from "../../shared/RuntimeIndicator";
-import { PanelRightIcon, TerminalIcon } from "../../shared/Icons";
+import { PanelLeftIcon, PanelRightIcon, TerminalIcon } from "../../shared/Icons";
 import { ThreadTabs } from "./ThreadTabs";
 import { ThreadConversation } from "./ThreadConversation";
 import { StudioWelcome } from "./StudioWelcome";
@@ -21,11 +21,23 @@ import "./StudioMain.css";
 
 type Props = {
   theme: Theme;
+  projectsSidebarOpen: boolean;
   inspectorOpen: boolean;
+  composerFocusKey: number;
+  approveOrSubmitKey: number;
+  onToggleProjectsSidebar: () => void;
   onToggleInspector: () => void;
 };
 
-export function StudioMain({ theme, inspectorOpen, onToggleInspector }: Props) {
+export function StudioMain({
+  theme,
+  projectsSidebarOpen,
+  inspectorOpen,
+  composerFocusKey,
+  approveOrSubmitKey,
+  onToggleProjectsSidebar,
+  onToggleInspector,
+}: Props) {
   const projects = useWorkspaceStore(selectProjects);
   const selectedProject = useWorkspaceStore(selectSelectedProject);
   const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
@@ -49,7 +61,12 @@ export function StudioMain({ theme, inspectorOpen, onToggleInspector }: Props) {
     content = <StudioWelcome />;
   } else if (selectedThread && selectedEnvironment) {
     content = (
-      <ThreadConversation environment={selectedEnvironment} thread={selectedThread} />
+      <ThreadConversation
+        environment={selectedEnvironment}
+        thread={selectedThread}
+        composerFocusKey={composerFocusKey}
+        approveOrSubmitKey={approveOrSubmitKey}
+      />
     );
   } else if (selectedEnvironment) {
     content = <EnvironmentView environment={selectedEnvironment} />;
@@ -63,6 +80,14 @@ export function StudioMain({ theme, inspectorOpen, onToggleInspector }: Props) {
     <main className="studio-main">
       <div className="studio-main__toolbar">
         <div className="studio-main__toolbar-primary">
+          <button
+            type="button"
+            className={`studio-main__toggle-sidebar ${projectsSidebarOpen ? "studio-main__toggle-sidebar--active" : ""}`}
+            title={projectsSidebarOpen ? "Hide Projects sidebar" : "Show Projects sidebar"}
+            onClick={onToggleProjectsSidebar}
+          >
+            <PanelLeftIcon size={14} />
+          </button>
           <ThreadTabs />
         </div>
         <div className="studio-main__toolbar-actions">

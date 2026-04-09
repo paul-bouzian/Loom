@@ -4,17 +4,18 @@ import {
   selectOwnerPendingVoiceOutcome,
   useVoiceSessionStore,
 } from "../../stores/voice-session-store";
-import { confirm } from "@tauri-apps/plugin-dialog";
-import * as bridge from "../../lib/bridge";
 import { CloseIcon, PlusIcon } from "../../shared/Icons";
 import type { ThreadConversationSnapshot, ThreadRecord } from "../../lib/types";
+import {
+  archiveThreadWithConfirmation,
+  createThreadForSelection,
+} from "./studioActions";
 import "./ThreadTabs.css";
 
 export function ThreadTabs() {
   const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
   const selectedThreadId = useWorkspaceStore((s) => s.selectedThreadId);
   const selectThread = useWorkspaceStore((s) => s.selectThread);
-  const refreshSnapshot = useWorkspaceStore((s) => s.refreshSnapshot);
   const snapshotsByThreadId = useConversationStore((state) => state.snapshotsByThreadId);
   const voicePhase = useVoiceSessionStore((state) => state.phase);
   const voiceOwnerThreadId = useVoiceSessionStore((state) => state.ownerThreadId);
@@ -29,26 +30,11 @@ export function ThreadTabs() {
   );
 
   async function handleNewThread() {
-    if (!selectedEnvironment) return;
-    const thread = await bridge.createThread({ environmentId: selectedEnvironment.id });
-    await refreshSnapshot();
-    selectThread(thread.id);
+    await createThreadForSelection();
   }
 
   async function handleArchiveThread(thread: ThreadRecord) {
-    const confirmed = await confirm("Are you sure you want to archive this thread?", {
-      title: "Archive Thread",
-      kind: "warning",
-      okLabel: "Archive",
-      cancelLabel: "Cancel",
-    });
-    if (!confirmed) return;
-
-    await bridge.archiveThread({ threadId: thread.id });
-    if (selectedThreadId === thread.id) {
-      selectThread(null);
-    }
-    await refreshSnapshot();
+    await archiveThreadWithConfirmation(thread.id);
   }
 
   return (

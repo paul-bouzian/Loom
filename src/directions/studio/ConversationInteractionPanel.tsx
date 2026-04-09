@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   ApprovalResponseInput,
@@ -11,6 +11,7 @@ import { ConversationLinkedText } from "./ConversationLinkedText";
 type Props = {
   interaction: ConversationInteraction | null;
   queueCount: number;
+  submitShortcutKey: number;
   onRespondApproval: (response: ApprovalResponseInput) => Promise<void>;
   onSubmitAnswers: (answers: Record<string, string[]>) => Promise<void>;
 };
@@ -18,6 +19,7 @@ type Props = {
 export function ConversationInteractionPanel({
   interaction,
   queueCount,
+  submitShortcutKey,
   onRespondApproval,
   onSubmitAnswers,
 }: Props) {
@@ -25,12 +27,14 @@ export function ConversationInteractionPanel({
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({});
   const [freeText, setFreeText] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  const lastSubmitShortcutKeyRef = useRef(0);
 
   useEffect(() => {
     setQuestionIndex(0);
     setSelectedOptions({});
     setFreeText({});
     setSubmitting(false);
+    lastSubmitShortcutKeyRef.current = 0;
   }, [interaction?.id]);
 
   const currentQuestion =
@@ -46,6 +50,34 @@ export function ConversationInteractionPanel({
           questionHasAnswer(question, selectedOptions, freeText),
         )
       : false;
+
+  useEffect(() => {
+    if (submitShortcutKey === lastSubmitShortcutKeyRef.current) {
+      return;
+    }
+    lastSubmitShortcutKeyRef.current = submitShortcutKey;
+    if (
+      submitShortcutKey === 0 ||
+      interaction?.kind !== "userInput" ||
+      !allQuestionsAnswered ||
+      submitting
+    ) {
+      return;
+    }
+    void submitAnswers({
+      answers: buildUserInputAnswers(interaction.questions, selectedOptions, freeText),
+      onSubmitAnswers,
+      setSubmitting,
+    });
+  }, [
+    allQuestionsAnswered,
+    freeText,
+    interaction,
+    onSubmitAnswers,
+    selectedOptions,
+    submitShortcutKey,
+    submitting,
+  ]);
 
   const queueLabel =
     queueCount > 1 ? `Request 1 of ${queueCount}` : "Request requiring attention";

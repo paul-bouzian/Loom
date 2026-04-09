@@ -209,6 +209,9 @@ impl WorkspaceService {
         let transaction = connection.transaction()?;
         let mut settings = self.read_or_seed_settings(&transaction)?;
         settings.apply_patch(patch);
+        settings
+            .validate()
+            .map_err(AppError::Validation)?;
 
         let payload = serde_json::to_string(&settings)
             .map_err(|error| AppError::Validation(error.to_string()))?;
@@ -1636,8 +1639,11 @@ impl WorkspaceService {
             .optional()?;
 
         if let Some(payload) = payload {
-            let settings = serde_json::from_str(&payload)
+            let settings: GlobalSettings = serde_json::from_str(&payload)
                 .map_err(|error| AppError::Validation(error.to_string()))?;
+            settings
+                .validate()
+                .map_err(AppError::Validation)?;
             return Ok(settings);
         }
 

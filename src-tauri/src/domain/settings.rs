@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::shortcuts::{ShortcutSettings, ShortcutSettingsPatch};
+
 fn default_collapse_work_activity() -> bool {
     true
 }
@@ -38,6 +40,8 @@ pub struct GlobalSettings {
     pub default_approval_policy: ApprovalPolicy,
     #[serde(default = "default_collapse_work_activity")]
     pub collapse_work_activity: bool,
+    #[serde(default)]
+    pub shortcuts: ShortcutSettings,
     pub codex_binary_path: Option<String>,
 }
 
@@ -49,6 +53,7 @@ impl Default for GlobalSettings {
             default_collaboration_mode: CollaborationMode::Build,
             default_approval_policy: ApprovalPolicy::AskToEdit,
             collapse_work_activity: true,
+            shortcuts: ShortcutSettings::default(),
             codex_binary_path: None,
         }
     }
@@ -62,6 +67,7 @@ pub struct GlobalSettingsPatch {
     pub default_collaboration_mode: Option<CollaborationMode>,
     pub default_approval_policy: Option<ApprovalPolicy>,
     pub collapse_work_activity: Option<bool>,
+    pub shortcuts: Option<ShortcutSettingsPatch>,
     pub codex_binary_path: Option<Option<String>>,
 }
 
@@ -82,9 +88,16 @@ impl GlobalSettings {
         if let Some(collapse_work_activity) = patch.collapse_work_activity {
             self.collapse_work_activity = collapse_work_activity;
         }
+        if let Some(shortcuts) = patch.shortcuts {
+            self.shortcuts.apply_patch(shortcuts);
+        }
         if let Some(codex_binary_path) = patch.codex_binary_path {
             self.codex_binary_path = codex_binary_path;
         }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        self.shortcuts.validate().map_err(|error| error.to_string())
     }
 }
 
@@ -93,6 +106,7 @@ mod tests {
     use super::{
         ApprovalPolicy, CollaborationMode, GlobalSettings, GlobalSettingsPatch, ReasoningEffort,
     };
+    use crate::domain::shortcuts::ShortcutSettingsPatch;
 
     #[test]
     fn apply_patch_updates_only_provided_fields() {
@@ -104,6 +118,10 @@ mod tests {
             default_collaboration_mode: None,
             default_approval_policy: Some(ApprovalPolicy::FullAccess),
             collapse_work_activity: Some(true),
+            shortcuts: Some(ShortcutSettingsPatch {
+                toggle_terminal: Some(Some("mod+shift+j".to_string())),
+                ..ShortcutSettingsPatch::default()
+            }),
             codex_binary_path: Some(Some("/opt/homebrew/bin/codex".to_string())),
         });
 
@@ -121,6 +139,7 @@ mod tests {
             ApprovalPolicy::FullAccess
         ));
         assert!(settings.collapse_work_activity);
+        assert_eq!(settings.shortcuts.toggle_terminal.as_deref(), Some("mod+shift+j"));
         assert_eq!(
             settings.codex_binary_path.as_deref(),
             Some("/opt/homebrew/bin/codex")
@@ -143,14 +162,15 @@ mod tests {
     }
 
     #[test]
-    fn default_settings_enable_collapsed_work_activity() {
+    fn default_settings_enable_collapsed_work_activity_and_shortcuts() {
         let settings = GlobalSettings::default();
 
         assert!(settings.collapse_work_activity);
+        assert_eq!(settings.shortcuts.toggle_terminal.as_deref(), Some("mod+j"));
     }
 
     #[test]
-    fn deserialize_legacy_settings_defaults_collapse_work_activity_to_true() {
+    fn deserialize_legacy_settings_defaults_collapse_work_activity_and_shortcuts() {
         let settings: GlobalSettings = serde_json::from_str(
             r#"{
                 "defaultModel":"gpt-5.4",
@@ -163,5 +183,17 @@ mod tests {
         .expect("legacy settings should deserialize");
 
         assert!(settings.collapse_work_activity);
+        assert_eq!(settings.shortcuts.open_settings.as_deref(), Some("mod+comma"));
+    }
+
+    #[test]
+    fn validate_uses_shortcut_rules() {
+        let mut settings = GlobalSettings::default();
+        settings.shortcuts.toggle_terminal = Some("j".to_string());
+
+        assert_eq!(
+            settings.validate().expect_err("invalid shortcuts should fail"),
+            "Toggle terminal: Shortcut needs a primary modifier unless it is Shift+Tab."
+        );
     }
 }

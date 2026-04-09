@@ -24,6 +24,7 @@ import type {
 import { SidebarUsagePanel } from "./SidebarUsagePanel";
 import { SidebarUtilityActions } from "./SidebarUtilityActions";
 import type { Theme } from "./StudioShell";
+import { createManagedWorktreeForSelection } from "./studioActions";
 import { useProjectImport } from "./useProjectImport";
 import "./TreeSidebar.css";
 
@@ -63,7 +64,6 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
   const refreshSnapshot = useWorkspaceStore((s) => s.refreshSnapshot);
   const selectProject = useWorkspaceStore((s) => s.selectProject);
   const selectEnvironment = useWorkspaceStore((s) => s.selectEnvironment);
-  const selectThread = useWorkspaceStore((s) => s.selectThread);
   const latestScriptFailure = useWorktreeScriptStore(
     (state) => state.latestFailure,
   );
@@ -157,9 +157,8 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
     setCreatingWorktreeProjectId(projectId);
     try {
       resetMessages();
-      const result = await bridge.createManagedWorktree(projectId);
-      await refreshSnapshot();
-      selectThread(result.thread.id);
+      selectProject(projectId);
+      await createManagedWorktreeForSelection();
     } catch (cause: unknown) {
       setActionError(actionErrorMessage(cause, "Failed to create worktree"));
     } finally {

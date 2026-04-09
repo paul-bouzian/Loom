@@ -35,9 +35,16 @@ import "./ThreadConversation.css";
 type Props = {
   environment: EnvironmentRecord;
   thread: ThreadRecord;
+  composerFocusKey?: number;
+  approveOrSubmitKey?: number;
 };
 
-export function ThreadConversation({ environment, thread }: Props) {
+export function ThreadConversation({
+  environment,
+  thread,
+  composerFocusKey = 0,
+  approveOrSubmitKey = 0,
+}: Props) {
   const snapshot = useConversationStore(selectConversationSnapshot(thread.id));
   const composer = useConversationStore(selectConversationComposer(thread.id));
   const capabilities = useConversationStore(
@@ -313,6 +320,7 @@ export function ThreadConversation({ environment, thread }: Props) {
       </div>
       <ConversationInteractionPanel
         interaction={interaction}
+        submitShortcutKey={approveOrSubmitKey}
         queueCount={snapshot.pendingInteractions.length}
         onRespondApproval={(response) =>
           respondToApproval(thread.id, interaction?.id ?? "", response)
@@ -330,7 +338,7 @@ export function ThreadConversation({ environment, thread }: Props) {
         disabled={composerLocked && !isRefiningPlan}
         draft={draft}
         effortOptions={effortOptions}
-        focusKey={thread.id}
+        focusKey={`${thread.id}:${composerFocusKey}`}
         images={images}
         isBusy={isRunning || isPending}
         isSending={isSubmitting}

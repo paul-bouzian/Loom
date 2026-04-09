@@ -21,6 +21,7 @@
   min-width: 0;
   display: flex;
   align-items: stretch;
+  gap: var(--tx-space-sm);
 }
 
 .studio-main__toolbar-actions {
@@ -29,6 +30,7 @@
   gap: var(--tx-space-xs);
 }
 
+.studio-main__toggle-sidebar,
 .studio-main__toggle-terminal,
 .studio-main__toggle-inspector {
   width: 28px;
@@ -42,11 +44,13 @@
   transition: all var(--tx-transition-fast);
 }
 
+.studio-main__toggle-sidebar--active,
 .studio-main__toggle-terminal--active,
 .studio-main__toggle-inspector--active {
   color: var(--tx-accent);
 }
 
+.studio-main__toggle-sidebar:hover,
 .studio-main__toggle-terminal:hover,
 .studio-main__toggle-inspector:hover {
   color: var(--tx-text-primary);
