@@ -238,7 +238,7 @@ describe("studioActions", () => {
     expect(mockedBridge.archiveThread).toHaveBeenCalledWith({ threadId: "thread-1" });
   });
 
-  it("returns false and preserves the current selection when archive refresh fails", async () => {
+  it("reselects a remaining active thread when archive refresh fails", async () => {
     confirmMock.mockResolvedValue(true);
     mockedBridge.archiveThread.mockResolvedValue(makeThread({ id: "thread-1" }));
     const refreshSnapshot = vi.fn(async () => false);
@@ -248,10 +248,15 @@ describe("studioActions", () => {
       selectedThreadId: "thread-1",
     }));
 
-    await expect(archiveThreadWithConfirmation("thread-1")).resolves.toBe(false);
+    await expect(archiveThreadWithConfirmation("thread-1")).resolves.toBe(true);
 
     expect(refreshSnapshot).toHaveBeenCalledTimes(1);
-    expect(useWorkspaceStore.getState().selectedThreadId).toBe("thread-1");
+    expect(useWorkspaceStore.getState().selectedThreadId).toBe("thread-2");
+    expect(
+      useWorkspaceStore.getState().snapshot?.projects[0]?.environments[0]?.threads.map(
+        (thread) => thread.id,
+      ),
+    ).toEqual(["thread-2"]);
   });
 
   it("does not archive when voice work starts while the archive confirmation is open", async () => {

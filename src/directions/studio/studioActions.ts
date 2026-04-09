@@ -59,7 +59,8 @@ export async function archiveThreadWithConfirmation(threadId: string) {
   }
 
   await bridge.archiveThread({ threadId: latestTarget.thread.id });
-  return await useWorkspaceStore.getState().refreshSnapshot();
+  const refreshed = await useWorkspaceStore.getState().refreshSnapshot();
+  return refreshed || useWorkspaceStore.getState().removeThread(latestTarget.thread.id);
 }
 
 export function selectAdjacentThread(direction: "next" | "previous") {

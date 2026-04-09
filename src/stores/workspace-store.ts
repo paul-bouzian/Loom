@@ -27,6 +27,7 @@ type WorkspaceState = {
   initialize: () => Promise<void>;
   initializeListener: () => Promise<void>;
   refreshSnapshot: () => Promise<boolean>;
+  removeThread: (threadId: string) => boolean;
   selectProject: (id: string | null) => void;
   selectEnvironment: (id: string | null) => void;
   selectThread: (id: string | null) => void;
@@ -116,6 +117,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({ error: message });
       return false;
     }
+  },
+
+  removeThread: (threadId) => {
+    let removed = false;
+    set((state) => {
+      const nextSnapshot = removeThreadFromSnapshot(state.snapshot, threadId);
+      if (!nextSnapshot || nextSnapshot === state.snapshot) {
+        return state;
+      }
+
+      removed = true;
+      return {
+        snapshot: nextSnapshot,
+        ...reconcileSelection(nextSnapshot, state),
+      };
+    });
+    return removed;
   },
 
   selectProject: (id) =>
@@ -328,4 +346,47 @@ export function findThreadInWorkspace(
     }
   }
   return null;
+}
+
+function removeThreadFromSnapshot(
+  snapshot: WorkspaceSnapshot | null,
+  threadId: string,
+) {
+  if (!snapshot) {
+    return null;
+  }
+
+  let removed = false;
+  const nextProjects = snapshot.projects.map((project) => {
+    let projectChanged = false;
+    const nextEnvironments = project.environments.map((environment) => {
+      const nextThreads = environment.threads.filter((thread) => thread.id !== threadId);
+      if (nextThreads.length === environment.threads.length) {
+        return environment;
+      }
+
+      removed = true;
+      projectChanged = true;
+      return {
+        ...environment,
+        threads: nextThreads,
+      };
+    });
+
+    if (!projectChanged) {
+      return project;
+    }
+
+    return {
+      ...project,
+      environments: nextEnvironments,
+    };
+  });
+
+  return removed
+    ? {
+        ...snapshot,
+        projects: nextProjects,
+      }
+    : snapshot;
 }

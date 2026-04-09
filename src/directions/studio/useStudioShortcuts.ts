@@ -73,6 +73,8 @@ export function useStudioShortcuts({
       }
 
       const standardShortcutBlocked = shouldIgnoreStandardShortcut(event);
+      const composerShortcutAllowed =
+        !standardShortcutBlocked || isComposerTarget(event.target);
       const {
         onOpenSettings,
         onRequestApproveOrSubmit,
@@ -115,6 +117,49 @@ export function useStudioShortcuts({
         event.preventDefault();
         onRequestComposerFocus();
         return;
+      }
+
+      if (composer && selectedThreadId && composerShortcutAllowed) {
+        if (matchesShortcut(event, shortcuts.cycleCollaborationMode)) {
+          event.preventDefault();
+          const values = capabilities?.collaborationModes.map(
+            (option) => option.id as CollaborationMode,
+          ) ?? [composer.collaborationMode];
+          const next = cycleValue(values, composer.collaborationMode);
+          if (next) {
+            updateComposer(selectedThreadId, { collaborationMode: next });
+          }
+          return;
+        }
+
+        if (matchesShortcut(event, shortcuts.cycleModel)) {
+          event.preventDefault();
+          const values = capabilities?.models.map((option) => option.id) ?? [composer.model];
+          const next = cycleValue(values, composer.model);
+          if (next) {
+            updateComposer(selectedThreadId, { model: next });
+          }
+          return;
+        }
+
+        if (matchesShortcut(event, shortcuts.cycleReasoningEffort)) {
+          event.preventDefault();
+          const values = supportedEffortsForComposer(composer, capabilities?.models);
+          const next = cycleValue(values, composer.reasoningEffort);
+          if (next) {
+            updateComposer(selectedThreadId, { reasoningEffort: next });
+          }
+          return;
+        }
+
+        if (matchesShortcut(event, shortcuts.cycleApprovalPolicy)) {
+          event.preventDefault();
+          const next = cycleValue(APPROVAL_VALUES, composer.approvalPolicy);
+          if (next) {
+            updateComposer(selectedThreadId, { approvalPolicy: next });
+          }
+          return;
+        }
       }
 
       if (standardShortcutBlocked) {
@@ -179,50 +224,6 @@ export function useStudioShortcuts({
         event.preventDefault();
         selectAdjacentEnvironment("previous");
         return;
-      }
-
-      if (!composer || !selectedThreadId) {
-        return;
-      }
-
-      if (matchesShortcut(event, shortcuts.cycleCollaborationMode)) {
-        event.preventDefault();
-        const values = capabilities?.collaborationModes.map(
-          (option) => option.id as CollaborationMode,
-        ) ?? [composer.collaborationMode];
-        const next = cycleValue(values, composer.collaborationMode);
-        if (next) {
-          updateComposer(selectedThreadId, { collaborationMode: next });
-        }
-        return;
-      }
-
-      if (matchesShortcut(event, shortcuts.cycleModel)) {
-        const values = capabilities?.models.map((option) => option.id) ?? [composer.model];
-        const next = cycleValue(values, composer.model);
-        if (next) {
-          event.preventDefault();
-          updateComposer(selectedThreadId, { model: next });
-        }
-        return;
-      }
-
-      if (matchesShortcut(event, shortcuts.cycleReasoningEffort)) {
-        const values = supportedEffortsForComposer(composer, capabilities?.models);
-        const next = cycleValue(values, composer.reasoningEffort);
-        if (next) {
-          event.preventDefault();
-          updateComposer(selectedThreadId, { reasoningEffort: next });
-        }
-        return;
-      }
-
-      if (matchesShortcut(event, shortcuts.cycleApprovalPolicy)) {
-        const next = cycleValue(APPROVAL_VALUES, composer.approvalPolicy);
-        if (next) {
-          event.preventDefault();
-          updateComposer(selectedThreadId, { approvalPolicy: next });
-        }
       }
     }
 
@@ -300,6 +301,12 @@ function isEditableTarget(target: EventTarget | null) {
 function isTerminalTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
     ? Boolean(target.closest("[data-terminal-panel], [data-terminal-view]"))
+    : false;
+}
+
+function isComposerTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement
+    ? Boolean(target.closest(".tx-composer"))
     : false;
 }
 
