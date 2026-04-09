@@ -192,6 +192,7 @@ export function TerminalView({ ptyId, active, exited, theme }: Props) {
   return (
     <div
       ref={containerRef}
+      data-terminal-view="true"
       data-terminal-theme={theme}
       className={`terminal-view ${active ? "" : "terminal-view--hidden"}`}
     />

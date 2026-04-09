@@ -216,6 +216,15 @@ export function PanelRightIcon({ size = 16, className }: IconProps) {
   );
 }
 
+export function PanelLeftIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M6 3v10" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
 export function TerminalIcon({ size = 16, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>

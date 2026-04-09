@@ -13,7 +13,6 @@ import {
   selectSelectedEnvironment,
   useWorkspaceStore,
 } from "../../stores/workspace-store";
-import { useTerminalStore } from "../../stores/terminal-store";
 import { useVoiceSessionStore } from "../../stores/voice-session-store";
 import { SettingsDialog } from "./SettingsDialog";
 import { TreeSidebar } from "./TreeSidebar";
@@ -22,6 +21,7 @@ import { InspectorPanel } from "./InspectorPanel";
 import { GitDiffPanel } from "./GitDiffPanel";
 import { AppUpdateNotice } from "./AppUpdateNotice";
 import { StudioStatusBar } from "./StudioStatusBar";
+import { useStudioShortcuts } from "./useStudioShortcuts";
 import "./StudioShell.css";
 
 export type Theme = "dark" | "light";
@@ -43,9 +43,12 @@ function readTheme(): Theme {
 }
 
 export function StudioShell() {
+  const [projectsSidebarOpen, setProjectsSidebarOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(readTheme);
+  const [composerFocusNonce, setComposerFocusNonce] = useState(0);
+  const [approveOrSubmitNonce, setApproveOrSubmitNonce] = useState(0);
   const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot);
   const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
   const reconcileVoiceSessionSnapshot = useVoiceSessionStore(
@@ -59,24 +62,21 @@ export function StudioShell() {
   );
   const diffPanelOpen = Boolean(selectedFileKey);
 
+  useStudioShortcuts({
+    settingsOpen,
+    onOpenSettings: () => setSettingsOpen(true),
+    onRequestApproveOrSubmit: () =>
+      setApproveOrSubmitNonce((current) => current + 1),
+    onRequestComposerFocus: () => setComposerFocusNonce((current) => current + 1),
+    onToggleProjectsSidebar: () =>
+      setProjectsSidebarOpen((current) => !current),
+    onToggleReviewPanel: () => setInspectorOpen((current) => !current),
+  });
+
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
-
-  useEffect(() => {
-    function handleKeydown(event: KeyboardEvent) {
-      // Ctrl+` on all platforms (matches VS Code / Cursor). We intentionally
-      // do not bind Cmd+` on macOS: it's the native "cycle app windows"
-      // shortcut and stealing it globally is bad UX.
-      if (event.ctrlKey && event.code === "Backquote" && !event.repeat) {
-        event.preventDefault();
-        useTerminalStore.getState().toggleVisible();
-      }
-    }
-    window.addEventListener("keydown", handleKeydown);
-    return () => window.removeEventListener("keydown", handleKeydown);
-  }, []);
 
   useEffect(() => {
     void reconcileVoiceSessionSnapshot(workspaceSnapshot);
@@ -108,16 +108,30 @@ export function StudioShell() {
 
   return (
     <div
-      className={`studio-shell ${diffPanelOpen ? "studio-shell--with-diff" : ""}`}
+      className={[
+        "studio-shell",
+        !projectsSidebarOpen ? "studio-shell--without-sidebar" : null,
+        diffPanelOpen ? "studio-shell--with-diff" : null,
+      ]
+        .filter(Boolean)
+        .join(" ")}
     >
-      <TreeSidebar
-        theme={theme}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onToggleTheme={toggleTheme}
-      />
+      {projectsSidebarOpen ? (
+        <TreeSidebar
+          theme={theme}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onToggleTheme={toggleTheme}
+        />
+      ) : null}
       <StudioMain
         theme={theme}
+        projectsSidebarOpen={projectsSidebarOpen}
         inspectorOpen={inspectorOpen}
+        composerFocusKey={composerFocusNonce}
+        approveOrSubmitKey={approveOrSubmitNonce}
+        onToggleProjectsSidebar={() =>
+          setProjectsSidebarOpen((current) => !current)
+        }
         onToggleInspector={() => setInspectorOpen((v) => !v)}
       />
       {diffPanelOpen && <GitDiffPanel />}

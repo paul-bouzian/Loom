@@ -1,24 +1,28 @@
-import { useWorkspaceStore, selectSelectedEnvironment } from "../../stores/workspace-store";
-import { useConversationStore } from "../../stores/conversation-store";
 import {
   indicatorToneForConversationStatus,
 } from "../../lib/conversation-status";
+import type { ThreadConversationSnapshot } from "../../lib/types";
+import { CloseIcon, PlusIcon } from "../../shared/Icons";
+import { RuntimeIndicator } from "../../shared/RuntimeIndicator";
+import { useConversationStore } from "../../stores/conversation-store";
 import {
   selectOwnerPendingVoiceOutcome,
   useVoiceSessionStore,
 } from "../../stores/voice-session-store";
-import { confirm } from "@tauri-apps/plugin-dialog";
-import * as bridge from "../../lib/bridge";
-import { CloseIcon, PlusIcon } from "../../shared/Icons";
-import { RuntimeIndicator } from "../../shared/RuntimeIndicator";
-import type { ThreadConversationSnapshot, ThreadRecord } from "../../lib/types";
+import {
+  selectSelectedEnvironment,
+  useWorkspaceStore,
+} from "../../stores/workspace-store";
+import {
+  archiveThreadWithConfirmation,
+  createThreadForSelection,
+} from "./studioActions";
 import "./ThreadTabs.css";
 
 export function ThreadTabs() {
   const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
   const selectedThreadId = useWorkspaceStore((s) => s.selectedThreadId);
   const selectThread = useWorkspaceStore((s) => s.selectThread);
-  const refreshSnapshot = useWorkspaceStore((s) => s.refreshSnapshot);
   const snapshotsByThreadId = useConversationStore((state) => state.snapshotsByThreadId);
   const voicePhase = useVoiceSessionStore((state) => state.phase);
   const voiceOwnerThreadId = useVoiceSessionStore((state) => state.ownerThreadId);
@@ -31,29 +35,6 @@ export function ThreadTabs() {
   const activeThreads = selectedEnvironment.threads.filter(
     (t) => t.status === "active",
   );
-
-  async function handleNewThread() {
-    if (!selectedEnvironment) return;
-    const thread = await bridge.createThread({ environmentId: selectedEnvironment.id });
-    await refreshSnapshot();
-    selectThread(thread.id);
-  }
-
-  async function handleArchiveThread(thread: ThreadRecord) {
-    const confirmed = await confirm("Are you sure you want to archive this thread?", {
-      title: "Archive Thread",
-      kind: "warning",
-      okLabel: "Archive",
-      cancelLabel: "Cancel",
-    });
-    if (!confirmed) return;
-
-    await bridge.archiveThread({ threadId: thread.id });
-    if (selectedThreadId === thread.id) {
-      selectThread(null);
-    }
-    await refreshSnapshot();
-  }
 
   return (
     <div className="thread-tabs">
@@ -91,7 +72,11 @@ export function ThreadTabs() {
                 aria-label={`Archive ${thread.title}`}
                 disabled={voiceWorkOwnedByThread}
                 title={archiveTitle}
-                onClick={() => void handleArchiveThread(thread)}
+                onClick={() => {
+                  void archiveThreadWithConfirmation(thread.id).catch((error) => {
+                    reportThreadTabError(`archive ${thread.title}`, error);
+                  });
+                }}
               >
                 <CloseIcon size={10} />
               </button>
@@ -103,7 +88,11 @@ export function ThreadTabs() {
         type="button"
         className="thread-tabs__new"
         title="New thread"
-        onClick={() => void handleNewThread()}
+        onClick={() => {
+          void createThreadForSelection().catch((error) => {
+            reportThreadTabError("create a thread", error);
+          });
+        }}
       >
         <PlusIcon size={12} />
       </button>
@@ -115,4 +104,8 @@ function threadIndicatorTone(snapshot: ThreadConversationSnapshot | undefined) {
   return snapshot
     ? indicatorToneForConversationStatus(snapshot.status)
     : "neutral";
+}
+
+function reportThreadTabError(action: string, error: unknown) {
+  console.error(`Failed to ${action}:`, error);
 }

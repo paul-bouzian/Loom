@@ -9,6 +9,7 @@ import type {
   ReasoningEffort,
 } from "../../lib/types";
 import { ProjectSettingsTab } from "./ProjectSettingsTab";
+import { ShortcutsSettingsTab } from "./ShortcutsSettingsTab";
 import { SettingsUpdateSection } from "./SettingsUpdateSection";
 import {
   selectConversationCapabilities,
@@ -37,7 +38,7 @@ type Props = {
 const SETTINGS_PICKER_Z_INDEX = 1310;
 const SETTINGS_REFRESH_ERROR =
   "Settings were saved, but the workspace snapshot could not be refreshed.";
-type SettingsTab = "codex" | "project";
+type SettingsTab = "codex" | "shortcuts" | "project";
 
 export function SettingsDialog({ open, onClose }: Props) {
   const settings = useWorkspaceStore(selectSettings);
@@ -200,6 +201,16 @@ export function SettingsDialog({ open, onClose }: Props) {
             <button
               type="button"
               className={`settings-dialog__tab ${
+                activeTab === "shortcuts" ? "settings-dialog__tab--active" : ""
+              }`}
+              aria-current={activeTab === "shortcuts" ? "page" : undefined}
+              onClick={() => setActiveTab("shortcuts")}
+            >
+              Shortcuts
+            </button>
+            <button
+              type="button"
+              className={`settings-dialog__tab ${
                 activeTab === "project" ? "settings-dialog__tab--active" : ""
               }`}
               aria-current={activeTab === "project" ? "page" : undefined}
@@ -221,6 +232,16 @@ export function SettingsDialog({ open, onClose }: Props) {
               />
             ) : null}
             {activeTab === "codex" && !settings ? (
+              <p className="settings-dialog__empty">Loading...</p>
+            ) : null}
+            {activeTab === "shortcuts" && settings ? (
+              <ShortcutsSettingsTab
+                shortcuts={settings.shortcuts}
+                disabled={savingGlobalSettings}
+                onChange={(shortcuts) => handleGlobalChange({ shortcuts })}
+              />
+            ) : null}
+            {activeTab === "shortcuts" && !settings ? (
               <p className="settings-dialog__empty">Loading...</p>
             ) : null}
             {activeTab === "project" ? (

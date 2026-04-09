@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 
 import type {
   ComposerMentionBindingInput,
@@ -35,9 +42,16 @@ import "./ThreadConversation.css";
 type Props = {
   environment: EnvironmentRecord;
   thread: ThreadRecord;
+  composerFocusKey?: number;
+  approveOrSubmitKey?: number;
 };
 
-export function ThreadConversation({ environment, thread }: Props) {
+export function ThreadConversation({
+  environment,
+  thread,
+  composerFocusKey = 0,
+  approveOrSubmitKey = 0,
+}: Props) {
   const snapshot = useConversationStore(selectConversationSnapshot(thread.id));
   const composer = useConversationStore(selectConversationComposer(thread.id));
   const capabilities = useConversationStore(
@@ -68,6 +82,8 @@ export function ThreadConversation({ environment, thread }: Props) {
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const refreshInFlightRef = useRef(false);
   const submitInFlightRef = useRef(false);
+  const lastApproveOrSubmitKeyRef = useRef(approveOrSubmitKey);
+  const approveShortcutThreadIdRef = useRef(thread.id);
 
   useEffect(() => {
     void openThread(thread.id);
@@ -136,6 +152,62 @@ export function ThreadConversation({ environment, thread }: Props) {
       ? buildConversationTimeline(snapshot)
       : snapshot.items.map((item) => ({ kind: "item" as const, item }));
   }, [compactWorkActivity, snapshot]);
+  const interaction = snapshot?.pendingInteractions[0] ?? null;
+  const approveComposer = snapshot ? composer ?? snapshot.composer : null;
+
+  if (approveShortcutThreadIdRef.current !== thread.id) {
+    approveShortcutThreadIdRef.current = thread.id;
+    lastApproveOrSubmitKeyRef.current = approveOrSubmitKey;
+  }
+
+  function resetComposerState() {
+    startTransition(() => {
+      setDraft("");
+      setImages([]);
+      setMentionBindings([]);
+    });
+  }
+
+  const approvePlan = useEffectEvent(async (nextComposer: typeof approveComposer) => {
+    if (!nextComposer || submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
+    setIsSubmitting(true);
+    try {
+      const sent = await submitPlanDecision({
+        threadId: thread.id,
+        action: "approve",
+        composer: { ...nextComposer, collaborationMode: "build" },
+      });
+      if (sent) {
+        setIsRefiningPlan(false);
+        resetComposerState();
+      }
+    } finally {
+      submitInFlightRef.current = false;
+      setIsSubmitting(false);
+    }
+  });
+
+  useEffect(() => {
+    if (approveOrSubmitKey === lastApproveOrSubmitKeyRef.current) {
+      return;
+    }
+    lastApproveOrSubmitKeyRef.current = approveOrSubmitKey;
+    if (
+      approveOrSubmitKey === 0 ||
+      interaction != null ||
+      !snapshot?.proposedPlan?.isAwaitingDecision
+    ) {
+      return;
+    }
+    void approvePlan(approveComposer);
+  }, [
+    approvePlan,
+    approveComposer,
+    approveOrSubmitKey,
+    interaction,
+    snapshot?.proposedPlan?.isAwaitingDecision,
+  ]);
 
   if (!snapshot && loading) {
     return <ConversationLoading />;
@@ -159,7 +231,6 @@ export function ThreadConversation({ environment, thread }: Props) {
   const effortOptions = selectedModel?.supportedReasoningEfforts ?? [
     resolvedComposer.reasoningEffort,
   ];
-  const interaction = snapshot.pendingInteractions[0] ?? null;
   const composerLocked =
     Boolean(interaction) || Boolean(activePlan?.isAwaitingDecision && !isRefiningPlan);
   const isRunning = snapshot.status === "running";
@@ -175,14 +246,6 @@ export function ThreadConversation({ environment, thread }: Props) {
       isRunning ||
       isMutating ||
       (composerLocked && !isRefiningPlan));
-
-  function resetComposerState() {
-    startTransition(() => {
-      setDraft("");
-      setImages([]);
-      setMentionBindings([]);
-    });
-  }
 
   function restoreComposerState(
     nextDraft: string,
@@ -250,26 +313,6 @@ export function ThreadConversation({ environment, thread }: Props) {
     }
   }
 
-  async function handleApprovePlan() {
-    if (submitInFlightRef.current) return;
-    submitInFlightRef.current = true;
-    setIsSubmitting(true);
-    try {
-      const sent = await submitPlanDecision({
-        threadId: thread.id,
-        action: "approve",
-        composer: { ...resolvedComposer, collaborationMode: "build" },
-      });
-      if (sent) {
-        setIsRefiningPlan(false);
-        resetComposerState();
-      }
-    } finally {
-      submitInFlightRef.current = false;
-      setIsSubmitting(false);
-    }
-  }
-
   return (
     <div className="tx-conversation">
       <ConversationMeta
@@ -293,7 +336,7 @@ export function ThreadConversation({ environment, thread }: Props) {
           <ConversationPlanCard
             plan={activePlan}
             disabled={isRunning || isMutating}
-            onApprove={() => void handleApprovePlan()}
+            onApprove={() => void approvePlan(resolvedComposer)}
             onRefine={() => setIsRefiningPlan(true)}
           />
         ) : null}
@@ -313,6 +356,7 @@ export function ThreadConversation({ environment, thread }: Props) {
       </div>
       <ConversationInteractionPanel
         interaction={interaction}
+        submitShortcutKey={approveOrSubmitKey}
         queueCount={snapshot.pendingInteractions.length}
         onRespondApproval={(response) =>
           respondToApproval(thread.id, interaction?.id ?? "", response)
@@ -330,7 +374,7 @@ export function ThreadConversation({ environment, thread }: Props) {
         disabled={composerLocked && !isRefiningPlan}
         draft={draft}
         effortOptions={effortOptions}
-        focusKey={thread.id}
+        focusKey={`${thread.id}:${composerFocusKey}`}
         images={images}
         isBusy={isRunning || isPending}
         isSending={isSubmitting}

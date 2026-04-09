@@ -1768,6 +1768,96 @@ describe("ThreadConversation", () => {
     });
   });
 
+  it("does not replay approve-or-submit shortcuts while a plan approval is already in flight", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "waitingForExternalAction",
+        composer: { ...baseComposer, collaborationMode: "plan" },
+        proposedPlan: makeProposedPlan(),
+      }),
+      capabilities: capabilitiesFixture,
+    });
+    const approval = createDeferred<ReturnType<typeof makeConversationSnapshot>>();
+    mockedBridge.submitPlanDecision.mockImplementation(() => approval.promise);
+
+    const { rerender } = render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+        approveOrSubmitKey={0}
+      />,
+    );
+
+    await screen.findByRole("button", { name: "Approve plan" });
+
+    rerender(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+        approveOrSubmitKey={1}
+      />,
+    );
+    rerender(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+        approveOrSubmitKey={2}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockedBridge.submitPlanDecision).toHaveBeenCalledTimes(1);
+    });
+
+    approval.resolve(
+      makeConversationSnapshot({
+        status: "running",
+        composer: { ...baseComposer, collaborationMode: "build" },
+        proposedPlan: makeProposedPlan({
+          status: "approved",
+          isAwaitingDecision: false,
+        }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Approve plan" })).toBeNull();
+    });
+  });
+
+  it("does not auto-approve a plan while another interaction is pending", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "waitingForExternalAction",
+        composer: { ...baseComposer, collaborationMode: "plan" },
+        proposedPlan: makeProposedPlan(),
+        pendingInteractions: [makeApprovalRequest()],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    const { rerender } = render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+        approveOrSubmitKey={0}
+      />,
+    );
+
+    await screen.findByRole("button", { name: "Approve plan" });
+
+    rerender(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+        approveOrSubmitKey={1}
+      />,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockedBridge.submitPlanDecision).not.toHaveBeenCalled();
+  });
+
   it("sends plan-refinement feedback through the composer", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({

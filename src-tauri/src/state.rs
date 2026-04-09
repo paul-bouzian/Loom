@@ -13,6 +13,7 @@ use crate::services::workspace::WorkspaceService;
 use crate::services::worktree_scripts::WorktreeScriptService;
 
 pub struct AppState {
+    pub handle: AppHandle,
     pub workspace: WorkspaceService,
     pub pull_requests: PullRequestMonitorService,
     pub runtime: RuntimeSupervisor,
@@ -33,6 +34,7 @@ impl AppState {
         );
 
         Ok(Self {
+            handle: app.clone(),
             pull_requests: PullRequestMonitorService::new(app.clone(), workspace.clone()),
             workspace,
             runtime: RuntimeSupervisor::new(app.clone(), env!("CARGO_PKG_VERSION").to_string()),

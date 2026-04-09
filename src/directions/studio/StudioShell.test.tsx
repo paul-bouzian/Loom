@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as bridge from "../../lib/bridge";
+import { isMacPlatform } from "../../lib/shortcuts";
 import {
+  baseComposer,
+  capabilitiesFixture,
+  makeConversationSnapshot,
   makeGlobalSettings,
   makeProject,
   makeWorkspaceSnapshot,
@@ -11,6 +15,7 @@ import {
 import { useCodexUsageStore } from "../../stores/codex-usage-store";
 import { useConversationStore } from "../../stores/conversation-store";
 import { useGitReviewStore } from "../../stores/git-review-store";
+import { useTerminalStore } from "../../stores/terminal-store";
 import {
   resetVoiceSessionStore,
   useVoiceSessionStore,
@@ -60,6 +65,7 @@ vi.mock("../../shared/ProjectIcon", () => ({
 }));
 
 vi.mock("../../lib/bridge", () => ({
+  getShortcutDefaults: vi.fn(),
   updateGlobalSettings: vi.fn(),
   updateProjectSettings: vi.fn(),
   listenToMenuOpenSettings: vi.fn(async () => () => undefined),
@@ -83,6 +89,8 @@ beforeEach(async () => {
   mockedBridge.updateGlobalSettings.mockReset();
   mockedBridge.updateProjectSettings.mockReset();
   mockedBridge.listenToMenuOpenSettings.mockReset();
+  mockedBridge.getShortcutDefaults?.mockReset();
+  mockedBridge.getShortcutDefaults?.mockResolvedValue(makeGlobalSettings().shortcuts);
   mockedBridge.updateGlobalSettings.mockResolvedValue(makeGlobalSettings());
   mockedBridge.updateProjectSettings.mockResolvedValue(makeWorkspaceSnapshot().projects[0]);
   mockedBridge.listenToMenuOpenSettings.mockResolvedValue(() => undefined);
@@ -148,9 +156,17 @@ beforeEach(async () => {
     generatingCommitMessageByEnvironmentId: {},
     errorByContext: {},
   }));
+  useTerminalStore.setState({
+    visible: false,
+    height: 280,
+    byEnv: {},
+    knownEnvironmentIds: [],
+  });
 });
 
 describe("StudioShell", () => {
+  const primaryModifier = () => (isMacPlatform() ? { metaKey: true } : { ctrlKey: true });
+
   it("opens the settings dialog from the sidebar and closes it with all supported interactions", async () => {
     render(<StudioShell />);
 
@@ -204,6 +220,79 @@ describe("StudioShell", () => {
     });
 
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+  });
+
+  it("opens settings from the global keyboard shortcut", async () => {
+    render(<StudioShell />);
+
+    fireEvent.keyDown(window, {
+      key: ",",
+      ...primaryModifier(),
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+  });
+
+  it("toggles the terminal with the global shortcut and disables app shortcuts while settings are open", async () => {
+    render(<StudioShell />);
+
+    fireEvent.keyDown(window, {
+      key: "j",
+      ...primaryModifier(),
+    });
+
+    await waitFor(() => {
+      expect(useTerminalStore.getState().visible).toBe(true);
+    });
+
+    fireEvent.keyDown(window, {
+      key: "j",
+      ...primaryModifier(),
+    });
+
+    await waitFor(() => {
+      expect(useTerminalStore.getState().visible).toBe(false);
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    fireEvent.keyDown(window, {
+      key: "j",
+      ...primaryModifier(),
+    });
+
+    expect(useTerminalStore.getState().visible).toBe(false);
+  });
+
+  it("prevents native Shift+Tab navigation even when mode cycling has no next value", () => {
+    useConversationStore.setState((state) => ({
+      ...state,
+      snapshotsByThreadId: {
+        "thread-1": makeConversationSnapshot(),
+      },
+      composerByThreadId: {
+        "thread-1": baseComposer,
+      },
+      capabilitiesByEnvironmentId: {
+        "env-1": {
+          ...capabilitiesFixture,
+          collaborationModes: [{ id: "build", label: "Build", mode: "build" }],
+        },
+      },
+    }));
+
+    render(<StudioShell />);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("toggles theme from the sidebar footer and persists the selected theme", async () => {

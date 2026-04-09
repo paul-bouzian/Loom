@@ -187,7 +187,11 @@ export function TerminalPanel({ theme }: Props) {
   }
 
   return (
-    <div className="terminal-panel" data-terminal-theme={theme}>
+    <div
+      className="terminal-panel"
+      data-terminal-panel="true"
+      data-terminal-theme={theme}
+    >
       <div className="terminal-panel__header">
         <div
           className="terminal-panel__tabs"

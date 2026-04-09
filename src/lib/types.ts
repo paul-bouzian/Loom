@@ -116,6 +116,48 @@ export type ProjectSettings = {
   worktreeTeardownScript?: string;
 };
 
+export type ShortcutSettings = {
+  openSettings?: string | null;
+  focusComposer?: string | null;
+  toggleProjectsSidebar?: string | null;
+  toggleReviewPanel?: string | null;
+  toggleTerminal?: string | null;
+  newThread?: string | null;
+  archiveCurrentThread?: string | null;
+  nextThread?: string | null;
+  previousThread?: string | null;
+  newWorktree?: string | null;
+  nextEnvironment?: string | null;
+  previousEnvironment?: string | null;
+  cycleCollaborationMode?: string | null;
+  cycleModel?: string | null;
+  cycleReasoningEffort?: string | null;
+  cycleApprovalPolicy?: string | null;
+  interruptThread?: string | null;
+  approveOrSubmit?: string | null;
+};
+
+export type ShortcutSettingsPatch = {
+  openSettings?: string | null;
+  focusComposer?: string | null;
+  toggleProjectsSidebar?: string | null;
+  toggleReviewPanel?: string | null;
+  toggleTerminal?: string | null;
+  newThread?: string | null;
+  archiveCurrentThread?: string | null;
+  nextThread?: string | null;
+  previousThread?: string | null;
+  newWorktree?: string | null;
+  nextEnvironment?: string | null;
+  previousEnvironment?: string | null;
+  cycleCollaborationMode?: string | null;
+  cycleModel?: string | null;
+  cycleReasoningEffort?: string | null;
+  cycleApprovalPolicy?: string | null;
+  interruptThread?: string | null;
+  approveOrSubmit?: string | null;
+};
+
 export type ProjectRecord = {
   id: string;
   name: string;
@@ -132,6 +174,7 @@ export type GlobalSettings = {
   defaultCollaborationMode: CollaborationMode;
   defaultApprovalPolicy: ApprovalPolicy;
   collapseWorkActivity: boolean;
+  shortcuts: ShortcutSettings;
   codexBinaryPath?: string;
 };
 
@@ -752,5 +795,6 @@ export type GlobalSettingsPatch = {
   defaultCollaborationMode?: CollaborationMode;
   defaultApprovalPolicy?: ApprovalPolicy;
   collapseWorkActivity?: boolean;
+  shortcuts?: ShortcutSettingsPatch;
   codexBinaryPath?: string | null;
 };

@@ -10,6 +10,8 @@ mod services;
 mod state;
 
 use tauri::{Manager, RunEvent};
+#[cfg(target_os = "macos")]
+use tracing::warn;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -37,6 +39,13 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
             let app_state = state::AppState::new(app.handle())?;
+            #[cfg(target_os = "macos")]
+            if let Err(error) = menu::sync_settings_menu_shortcut(
+                app.handle(),
+                &app_state.workspace.current_settings()?,
+            ) {
+                warn!("failed to sync settings menu shortcut during startup: {error}");
+            }
             app.manage(app_state);
             Ok(())
         })
@@ -74,6 +83,7 @@ pub fn run() {
             commands::voice::get_environment_voice_status,
             commands::voice::transcribe_environment_voice,
             commands::workspace::get_workspace_snapshot,
+            commands::workspace::get_shortcut_defaults,
             commands::workspace::update_global_settings,
             commands::workspace::add_project,
             commands::workspace::rename_project,

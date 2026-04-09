@@ -32,6 +32,7 @@ import type {
   ManagedWorktreeCreateResult,
   EnvironmentVoiceStatusSnapshot,
   ProjectRecord,
+  ShortcutSettings,
   UpdateProjectSettingsRequest,
   RespondToApprovalRequestInput,
   RespondToUserInputRequestInput,
@@ -57,6 +58,10 @@ export function getBootstrapStatus(): Promise<BootstrapStatus> {
 
 export function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
   return invoke<WorkspaceSnapshot>("get_workspace_snapshot");
+}
+
+export function getShortcutDefaults(): Promise<ShortcutSettings> {
+  return invoke<ShortcutSettings>("get_shortcut_defaults");
 }
 
 export function getGitReviewSnapshot(

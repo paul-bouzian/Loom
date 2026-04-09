@@ -1,6 +1,8 @@
 use tauri::State;
+use tracing::warn;
 
 use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch};
+use crate::domain::shortcuts::ShortcutSettings;
 use crate::domain::workspace::{
     CodexRateLimitSnapshot, ManagedWorktreeCreateResult, ProjectRecord, RuntimeStatusSnapshot,
     ThreadRecord, WorkspaceSnapshot,
@@ -28,7 +30,17 @@ pub fn update_global_settings(
     patch: GlobalSettingsPatch,
     state: State<'_, AppState>,
 ) -> Result<GlobalSettings, CommandError> {
-    Ok(state.workspace.update_settings(patch)?)
+    let settings = state.workspace.update_settings(patch)?;
+    #[cfg(target_os = "macos")]
+    if let Err(error) = crate::menu::sync_settings_menu_shortcut(&state.handle, &settings) {
+        warn!("failed to sync settings menu shortcut after saving settings: {error}");
+    }
+    Ok(settings)
+}
+
+#[tauri::command]
+pub fn get_shortcut_defaults() -> ShortcutSettings {
+    ShortcutSettings::default()
 }
 
 #[tauri::command]
