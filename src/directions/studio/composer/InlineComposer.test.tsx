@@ -99,7 +99,7 @@ describe("InlineComposer voice dictation", () => {
       text: "Transcribed words",
     });
 
-    renderComposer("");
+    const { container } = renderComposer("");
 
     const startButton = await screen.findByRole("button", {
       name: "Start voice dictation",
@@ -116,8 +116,8 @@ describe("InlineComposer voice dictation", () => {
     const voiceControl = recordingButton.closest(".tx-composer__voice-control");
     expect(voiceControl).toHaveTextContent(/\d{2}:\d{2}/);
     expect(recordingButton).toHaveClass("tx-composer__voice-button--recording");
-    expect(document.querySelector(".tx-voice-capsule")).toBeNull();
-    expect(document.querySelector("canvas")).toBeNull();
+    expect(container.querySelector(".tx-voice-capsule")).toBeNull();
+    expect(container.querySelector("canvas")).toBeNull();
 
     await userEvent.click(recordingButton);
 
