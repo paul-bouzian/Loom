@@ -1,6 +1,10 @@
 import { useAppUpdateStore } from "../../stores/app-update-store";
 
-export function SettingsUpdateSection() {
+type Props = {
+  disabled?: boolean;
+};
+
+export function SettingsUpdateSection({ disabled = false }: Props) {
   const state = useAppUpdateStore((store) => store.state);
   const snapshot = useAppUpdateStore((store) => store.snapshot);
   const error = useAppUpdateStore((store) => store.error);
@@ -10,11 +14,14 @@ export function SettingsUpdateSection() {
   const viewChanges = useAppUpdateStore((store) => store.viewChanges);
   const install = useAppUpdateStore((store) => store.install);
 
-  const isBusy = state === "checking" || state === "installing";
+  const isBusy = disabled || state === "checking" || state === "installing";
   const showInstallAction = state === "available" && snapshot;
   const progressLabel =
     contentLength && contentLength > 0
-      ? `${Math.round((downloadedBytes / contentLength) * 100)}% downloaded`
+      ? `${Math.min(
+          100,
+          Math.round((downloadedBytes / contentLength) * 100),
+        )}% downloaded`
       : downloadedBytes > 0
         ? `${formatBytes(downloadedBytes)} downloaded`
         : null;

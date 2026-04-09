@@ -398,6 +398,35 @@ describe("StudioShell", () => {
     });
   });
 
+  it("disables update controls while a global settings save is in flight", async () => {
+    const saveRequest =
+      createDeferred<ReturnType<typeof makeWorkspaceSnapshot>["settings"]>();
+    mockedBridge.updateGlobalSettings.mockImplementation(() => saveRequest.promise);
+
+    render(<StudioShell />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const toggle = screen.getByRole("switch", { name: "Collapse work activity" });
+    const checkForUpdates = screen.getByRole("button", {
+      name: "Check for updates",
+    });
+
+    expect(checkForUpdates).not.toBeDisabled();
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(toggle).toBeDisabled();
+      expect(checkForUpdates).toBeDisabled();
+    });
+
+    saveRequest.resolve(makeWorkspaceSnapshot().settings);
+
+    await waitFor(() => {
+      expect(checkForUpdates).not.toBeDisabled();
+    });
+  });
+
   it("reuses Codex model ids in settings when runtime capabilities are available", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,

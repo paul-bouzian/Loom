@@ -34,6 +34,17 @@ function makeUpdate(overrides?: Partial<Record<string, unknown>>) {
   };
 }
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
+}
+
 beforeEach(async () => {
   useAppUpdateStore.getState().dismiss();
   vi.clearAllMocks();
@@ -65,6 +76,26 @@ describe("app-update-store", () => {
 
     await useAppUpdateStore.getState().checkNow();
 
+    expect(useAppUpdateStore.getState().state).toBe("latest");
+    expect(useAppUpdateStore.getState().noticeVisible).toBe(true);
+  });
+
+  it("replays a manual check after the silent startup check finishes", async () => {
+    const silentCheck = createDeferred<ReturnType<typeof makeUpdate> | null>();
+    checkMock
+      .mockImplementationOnce(() => silentCheck.promise)
+      .mockResolvedValueOnce(null);
+
+    const initializePromise = useAppUpdateStore.getState().initialize();
+    const manualCheckPromise = useAppUpdateStore.getState().checkNow();
+
+    expect(checkMock).toHaveBeenCalledTimes(1);
+
+    silentCheck.resolve(null);
+    await initializePromise;
+    await manualCheckPromise;
+
+    expect(checkMock).toHaveBeenCalledTimes(2);
     expect(useAppUpdateStore.getState().state).toBe("latest");
     expect(useAppUpdateStore.getState().noticeVisible).toBe(true);
   });

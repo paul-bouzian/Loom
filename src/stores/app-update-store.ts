@@ -29,6 +29,7 @@ type UpdateSetter = (
 
 let pendingUpdate: Update | null = null;
 let initialization: Promise<void> | null = null;
+let queuedManualCheck: Promise<void> | null = null;
 
 export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
   state: "idle",
@@ -56,12 +57,39 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
   },
 
   checkNow: async (options) => {
-    if (get().state === "checking" || get().state === "installing") {
+    if (get().state === "installing") {
       return;
     }
 
     const announceNoUpdate = options?.announceNoUpdate ?? true;
     const silent = !announceNoUpdate;
+
+    if (get().state === "checking") {
+      if (!initialization || !announceNoUpdate) {
+        return;
+      }
+      if (queuedManualCheck) {
+        await queuedManualCheck;
+        return;
+      }
+
+      const followUpCheck = (async () => {
+        await initialization;
+        if (get().state === "idle" && !get().snapshot) {
+          await get().checkNow(options);
+        }
+      })();
+
+      queuedManualCheck = followUpCheck;
+      try {
+        await followUpCheck;
+      } finally {
+        if (queuedManualCheck === followUpCheck) {
+          queuedManualCheck = null;
+        }
+      }
+      return;
+    }
 
     set({
       state: "checking",

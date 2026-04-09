@@ -301,7 +301,7 @@ function SettingsContent({
         placeholder="auto-detect"
         onChange={(value) => onChange({ codexBinaryPath: value || null })}
       />
-      <SettingsUpdateSection />
+      <SettingsUpdateSection disabled={disabled} />
     </div>
   );
 }
