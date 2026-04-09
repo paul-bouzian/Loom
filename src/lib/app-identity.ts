@@ -9,6 +9,8 @@ export const WORKTREE_SCRIPT_FAILURE_EVENT_NAME = "loom://worktree-script-failur
 export const WORKSPACE_EVENT_NAME = "loom://workspace-event";
 export const TERMINAL_OUTPUT_EVENT_NAME = "loom://terminal-output";
 export const TERMINAL_EXIT_EVENT_NAME = "loom://terminal-exit";
+export const MENU_OPEN_SETTINGS_EVENT_NAME = "loom://menu-open-settings";
+export const MENU_CHECK_FOR_UPDATES_EVENT_NAME = "loom://menu-check-for-updates";
 
 export const THEME_STORAGE_KEY = "loom-theme";
 export const LEGACY_THEME_STORAGE_KEY = "threadex-theme";

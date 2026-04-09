@@ -387,3 +387,74 @@
   border-color: color-mix(in srgb, var(--tx-accent) 60%, transparent);
   background: color-mix(in srgb, var(--tx-accent) 22%, transparent);
 }
+
+.settings-update-card {
+  display: grid;
+  gap: var(--tx-space-md);
+  padding: var(--tx-space-md);
+  border: 1px solid var(--tx-border-subtle);
+  border-radius: var(--tx-radius-lg);
+  background: color-mix(in srgb, var(--tx-bg-raised) 88%, transparent);
+}
+
+.settings-update-card__header,
+.settings-update-card__status {
+  display: grid;
+  gap: var(--tx-space-xs);
+}
+
+.settings-update-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--tx-space-sm);
+}
+
+.settings-update-card__secondary,
+.settings-update-card__primary {
+  padding: 8px 12px;
+  border-radius: var(--tx-radius-md);
+  font-size: var(--tx-text-sm);
+  font-weight: var(--tx-weight-medium);
+  transition:
+    background var(--tx-transition-fast),
+    border-color var(--tx-transition-fast),
+    color var(--tx-transition-fast),
+    opacity var(--tx-transition-fast);
+}
+
+.settings-update-card__secondary:disabled,
+.settings-update-card__primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-update-card__secondary {
+  border: 1px solid var(--tx-border-subtle);
+  background: transparent;
+  color: var(--tx-text-secondary);
+}
+
+.settings-update-card__secondary:hover:not(:disabled) {
+  border-color: var(--tx-border-muted);
+  background: var(--tx-bg-hover);
+  color: var(--tx-text-primary);
+}
+
+.settings-update-card__primary {
+  border: 1px solid color-mix(in srgb, var(--tx-accent) 42%, transparent);
+  background: color-mix(in srgb, var(--tx-accent) 16%, transparent);
+  color: var(--tx-text-primary);
+}
+
+.settings-update-card__primary:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--tx-accent) 60%, transparent);
+  background: color-mix(in srgb, var(--tx-accent) 22%, transparent);
+}
+
+.settings-update-card__error {
+  margin: 0;
+  color: var(--tx-danger);
+  font-size: var(--tx-text-xs);
+  line-height: var(--tx-leading-normal);
+}

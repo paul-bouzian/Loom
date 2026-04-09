@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import * as bridge from "./lib/bridge";
 import { useConversationStore } from "./stores/conversation-store";
 import { useCodexUsageStore } from "./stores/codex-usage-store";
 import { useAppUpdateStore } from "./stores/app-update-store";
@@ -35,6 +36,7 @@ function App() {
     (s) => s.initializeListener,
   );
   const initializeUpdates = useAppUpdateStore((s) => s.initialize);
+  const checkForUpdates = useAppUpdateStore((s) => s.checkNow);
   const initializeWorktreeScriptListener = useWorktreeScriptStore(
     (s) => s.initializeListener,
   );
@@ -69,6 +71,26 @@ function App() {
   useEffect(() => {
     void initializeUpdates();
   }, [initializeUpdates]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    void bridge.listenToMenuCheckForUpdates(() => {
+      void checkForUpdates();
+    }).then((nextUnlisten) => {
+      if (disposed) {
+        nextUnlisten();
+        return;
+      }
+      unlisten = nextUnlisten;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [checkForUpdates]);
 
   useEffect(() => {
     void initializeWorktreeScriptListener();

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import * as bridge from "../../lib/bridge";
 import {
   LEGACY_THEME_STORAGE_KEY,
   THEME_STORAGE_KEY,
@@ -80,6 +81,26 @@ export function StudioShell() {
   useEffect(() => {
     void reconcileVoiceSessionSnapshot(workspaceSnapshot);
   }, [reconcileVoiceSessionSnapshot, workspaceSnapshot]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    void bridge.listenToMenuOpenSettings(() => {
+      setSettingsOpen(true);
+    }).then((nextUnlisten) => {
+      if (disposed) {
+        nextUnlisten();
+        return;
+      }
+      unlisten = nextUnlisten;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   function toggleTheme() {
     setTheme((t) => (t === "dark" ? "light" : "dark"));

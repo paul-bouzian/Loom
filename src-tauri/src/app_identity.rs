@@ -20,6 +20,8 @@ pub const WORKSPACE_EVENT_NAME: &str = "loom://workspace-event";
 pub const WORKTREE_SCRIPT_FAILURE_EVENT_NAME: &str = "loom://worktree-script-failure";
 pub const TERMINAL_OUTPUT_EVENT_NAME: &str = "loom://terminal-output";
 pub const TERMINAL_EXIT_EVENT_NAME: &str = "loom://terminal-exit";
+pub const MENU_OPEN_SETTINGS_EVENT_NAME: &str = "loom://menu-open-settings";
+pub const MENU_CHECK_FOR_UPDATES_EVENT_NAME: &str = "loom://menu-check-for-updates";
 
 #[derive(Debug, Clone)]
 pub struct AppStoragePaths {

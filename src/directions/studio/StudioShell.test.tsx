@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -62,6 +62,7 @@ vi.mock("../../shared/ProjectIcon", () => ({
 vi.mock("../../lib/bridge", () => ({
   updateGlobalSettings: vi.fn(),
   updateProjectSettings: vi.fn(),
+  listenToMenuOpenSettings: vi.fn(async () => () => undefined),
 }));
 
 const mockedBridge = vi.mocked(bridge);
@@ -81,8 +82,10 @@ beforeEach(async () => {
   await resetVoiceSessionStore();
   mockedBridge.updateGlobalSettings.mockReset();
   mockedBridge.updateProjectSettings.mockReset();
+  mockedBridge.listenToMenuOpenSettings.mockReset();
   mockedBridge.updateGlobalSettings.mockResolvedValue(makeGlobalSettings());
   mockedBridge.updateProjectSettings.mockResolvedValue(makeWorkspaceSnapshot().projects[0]);
+  mockedBridge.listenToMenuOpenSettings.mockResolvedValue(() => undefined);
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
     value: {
@@ -176,6 +179,31 @@ describe("StudioShell", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
+  });
+
+  it("opens the settings dialog from the macOS menu event", async () => {
+    let callback: (() => void) | null = null;
+    mockedBridge.listenToMenuOpenSettings.mockImplementation(async (next) => {
+      callback = next;
+      return () => undefined;
+    });
+
+    render(<StudioShell />);
+
+    await waitFor(() => {
+      expect(mockedBridge.listenToMenuOpenSettings).toHaveBeenCalledTimes(1);
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await act(async () => {
+      callback?.();
+    });
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
   });
 
   it("toggles theme from the sidebar footer and persists the selected theme", async () => {

@@ -12,7 +12,9 @@ type UpdateStore = {
   error: string | null;
   downloadedBytes: number;
   contentLength: number | null;
+  noticeVisible: boolean;
   initialize: () => Promise<void>;
+  checkNow: (options?: { announceNoUpdate?: boolean }) => Promise<void>;
   dismiss: () => void;
   viewChanges: () => Promise<void>;
   install: () => Promise<void>;
@@ -34,49 +36,15 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
   error: null,
   downloadedBytes: 0,
   contentLength: null,
+  noticeVisible: false,
 
   initialize: async () => {
-    if (get().state !== "idle") return;
     if (initialization) {
       await initialization;
       return;
     }
 
-    const task = (async () => {
-      set({ state: "checking", error: null });
-      try {
-        const update = await check();
-        await replacePendingUpdate(update);
-        if (!update) {
-          set({
-            state: "idle",
-            snapshot: null,
-            error: null,
-            downloadedBytes: 0,
-            contentLength: null,
-          });
-          return;
-        }
-
-        set({
-          state: "available",
-          snapshot: toUpdateSnapshot(update),
-          error: null,
-          downloadedBytes: 0,
-          contentLength: null,
-        });
-      } catch {
-        await replacePendingUpdate(null);
-        set({
-          state: "idle",
-          snapshot: null,
-          error: null,
-          downloadedBytes: 0,
-          contentLength: null,
-        });
-      }
-    })();
-
+    const task = get().checkNow({ announceNoUpdate: false });
     initialization = task;
     try {
       await task;
@@ -87,12 +55,81 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
     }
   },
 
-  dismiss: () => {
-    void replacePendingUpdate(null);
+  checkNow: async (options) => {
+    if (get().state === "checking" || get().state === "installing") {
+      return;
+    }
+
+    const announceNoUpdate = options?.announceNoUpdate ?? true;
+    const silent = !announceNoUpdate;
+
     set({
-      state: "dismissed",
+      state: "checking",
       snapshot: null,
       error: null,
+      noticeVisible: !silent,
+      downloadedBytes: 0,
+      contentLength: null,
+    });
+
+    try {
+      const update = await check();
+      await replacePendingUpdate(update);
+      if (!update) {
+        set({
+          state: announceNoUpdate ? "latest" : "idle",
+          snapshot: null,
+          error: null,
+          noticeVisible: announceNoUpdate,
+          downloadedBytes: 0,
+          contentLength: null,
+        });
+        return;
+      }
+
+      set({
+        state: "available",
+        snapshot: toUpdateSnapshot(update),
+        error: null,
+        noticeVisible: true,
+        downloadedBytes: 0,
+        contentLength: null,
+      });
+    } catch (cause: unknown) {
+      await replacePendingUpdate(null);
+      const message =
+        cause instanceof Error ? cause.message : "Failed to check for updates";
+      set({
+        state: silent ? "idle" : "error",
+        snapshot: null,
+        error: silent ? null : message,
+        noticeVisible: !silent,
+        downloadedBytes: 0,
+        contentLength: null,
+      });
+    }
+  },
+
+  dismiss: () => {
+    const state = get().state;
+    if (state === "installing") {
+      return;
+    }
+
+    if (state === "available") {
+      set({
+        noticeVisible: false,
+        error: null,
+      });
+      return;
+    }
+
+    void replacePendingUpdate(null);
+    set({
+      state: "idle",
+      snapshot: null,
+      error: null,
+      noticeVisible: false,
       downloadedBytes: 0,
       contentLength: null,
     });
@@ -110,6 +147,7 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
     set({
       state: "installing",
       error: null,
+      noticeVisible: true,
       downloadedBytes: 0,
       contentLength: null,
     });
@@ -126,6 +164,7 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
       set({
         state: "available",
         error: message,
+        noticeVisible: true,
       });
     }
   },

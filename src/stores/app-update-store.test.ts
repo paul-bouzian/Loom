@@ -43,6 +43,7 @@ beforeEach(async () => {
     error: null,
     downloadedBytes: 0,
     contentLength: null,
+    noticeVisible: false,
   });
 });
 
@@ -53,9 +54,19 @@ describe("app-update-store", () => {
     await useAppUpdateStore.getState().initialize();
 
     expect(useAppUpdateStore.getState().state).toBe("available");
+    expect(useAppUpdateStore.getState().noticeVisible).toBe(true);
     expect(useAppUpdateStore.getState().snapshot?.releaseUrl).toBe(
       "https://github.com/paul-bouzian/Loom/releases/tag/v0.2.0",
     );
+  });
+
+  it("announces when no update is available after a manual check", async () => {
+    checkMock.mockResolvedValue(null);
+
+    await useAppUpdateStore.getState().checkNow();
+
+    expect(useAppUpdateStore.getState().state).toBe("latest");
+    expect(useAppUpdateStore.getState().noticeVisible).toBe(true);
   });
 
   it("downloads, installs, and restarts the app", async () => {
@@ -99,5 +110,16 @@ describe("app-update-store", () => {
     expect(openUrlMock).toHaveBeenCalledWith(
       "https://github.com/paul-bouzian/Loom/releases/tag/v0.2.0",
     );
+  });
+
+  it("hides the toast without dropping the pending update", async () => {
+    checkMock.mockResolvedValue(makeUpdate());
+
+    await useAppUpdateStore.getState().initialize();
+    useAppUpdateStore.getState().dismiss();
+
+    expect(useAppUpdateStore.getState().state).toBe("available");
+    expect(useAppUpdateStore.getState().snapshot?.availableVersion).toBe("0.2.0");
+    expect(useAppUpdateStore.getState().noticeVisible).toBe(false);
   });
 });

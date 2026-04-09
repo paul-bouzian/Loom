@@ -2,6 +2,7 @@ import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
+import * as bridge from "./lib/bridge";
 import { makeWorkspaceSnapshot } from "./test/fixtures/conversation";
 import { useAppUpdateStore } from "./stores/app-update-store";
 import { useCodexUsageStore } from "./stores/codex-usage-store";
@@ -17,9 +18,17 @@ vi.mock("./shared/LoadingState", () => ({
   LoadingState: () => <div data-testid="loading-state" />,
 }));
 
+vi.mock("./lib/bridge", () => ({
+  listenToMenuCheckForUpdates: vi.fn(async () => () => undefined),
+}));
+
+const mockedBridge = vi.mocked(bridge);
+
 describe("App", () => {
   beforeEach(() => {
     const preloadActiveThreads = vi.fn(async () => undefined);
+    mockedBridge.listenToMenuCheckForUpdates.mockReset();
+    mockedBridge.listenToMenuCheckForUpdates.mockResolvedValue(() => undefined);
 
     useWorkspaceStore.setState((state) => ({
       ...state,
@@ -42,6 +51,7 @@ describe("App", () => {
     useAppUpdateStore.setState((state) => ({
       ...state,
       initialize: vi.fn(async () => undefined),
+      checkNow: vi.fn(async () => undefined),
     }));
     useWorktreeScriptStore.setState((state) => ({
       ...state,
@@ -68,5 +78,25 @@ describe("App", () => {
     expect(
       vi.mocked(useConversationStore.getState().preloadActiveThreads),
     ).toHaveBeenCalledTimes(1);
+  });
+
+  it("listens for app menu update checks", async () => {
+    let callback: (() => void) | null = null;
+    mockedBridge.listenToMenuCheckForUpdates.mockImplementation(async (next) => {
+      callback = next;
+      return () => undefined;
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(mockedBridge.listenToMenuCheckForUpdates).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      callback?.();
+    });
+
+    expect(vi.mocked(useAppUpdateStore.getState().checkNow)).toHaveBeenCalledTimes(1);
   });
 });
