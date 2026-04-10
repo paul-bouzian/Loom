@@ -14,6 +14,7 @@ import {
 } from "../../test/fixtures/conversation";
 import { useCodexUsageStore } from "../../stores/codex-usage-store";
 import { useConversationStore } from "../../stores/conversation-store";
+import { useFirstPromptRenameStore } from "../../stores/first-prompt-rename-store";
 import { useGitReviewStore } from "../../stores/git-review-store";
 import { useTerminalStore } from "../../stores/terminal-store";
 import {
@@ -155,6 +156,11 @@ beforeEach(async () => {
     actionByEnvironmentId: {},
     generatingCommitMessageByEnvironmentId: {},
     errorByContext: {},
+  }));
+  useFirstPromptRenameStore.setState((state) => ({
+    ...state,
+    latestFailure: null,
+    listenerReady: false,
   }));
   useTerminalStore.setState({
     visible: false,

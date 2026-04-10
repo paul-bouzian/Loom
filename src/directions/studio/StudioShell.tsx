@@ -20,6 +20,7 @@ import { StudioMain } from "./StudioMain";
 import { InspectorPanel } from "./InspectorPanel";
 import { GitDiffPanel } from "./GitDiffPanel";
 import { AppUpdateNotice } from "./AppUpdateNotice";
+import { FirstPromptRenameFailureNotice } from "./FirstPromptRenameFailureNotice";
 import { StudioStatusBar } from "./StudioStatusBar";
 import { useStudioShortcuts } from "./useStudioShortcuts";
 import "./StudioShell.css";
@@ -140,7 +141,10 @@ export function StudioShell() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
       />
-      <AppUpdateNotice />
+      <div className="studio-notice-stack">
+        <FirstPromptRenameFailureNotice />
+        <AppUpdateNotice />
+      </div>
       <StudioStatusBar />
     </div>
   );

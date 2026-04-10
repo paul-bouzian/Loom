@@ -1,11 +1,7 @@
 .tx-update-notice {
-  position: absolute;
-  right: var(--tx-space-lg);
-  bottom: calc(var(--tx-statusbar-height) + var(--tx-space-lg));
-  z-index: 40;
   display: grid;
   gap: var(--tx-space-md);
-  width: min(360px, calc(100vw - (var(--tx-space-lg) * 2)));
+  width: 100%;
   padding: var(--tx-space-lg);
   border: 1px solid var(--tx-border-muted);
   border-radius: var(--tx-radius-xl);

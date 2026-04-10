@@ -269,6 +269,15 @@ export type WorktreeScriptFailureEventPayload = {
   exitCode?: number | null;
 };
 
+export type FirstPromptRenameFailureEventPayload = {
+  projectId: string;
+  environmentId: string;
+  threadId: string;
+  environmentName: string;
+  branchName: string;
+  message: string;
+};
+
 export type WorkspaceEventPayload = {
   kind: WorkspaceEventKind;
   projectId?: string | null;

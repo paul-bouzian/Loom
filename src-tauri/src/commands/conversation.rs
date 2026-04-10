@@ -2,7 +2,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, Emitter, State};
 use tracing::warn;
 
-use crate::app_identity::WORKSPACE_EVENT_NAME;
+use crate::app_identity::{FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME, WORKSPACE_EVENT_NAME};
 use crate::domain::conversation::{
     ComposerFileSearchResult, ComposerMentionBindingInput, ConversationComposerSettings,
     ConversationImageAttachment, RespondToApprovalRequestInput, RespondToUserInputRequestInput,
@@ -11,7 +11,7 @@ use crate::domain::conversation::{
 };
 use crate::domain::workspace::{WorkspaceEvent, WorkspaceEventKind};
 use crate::error::CommandError;
-use crate::services::workspace::AutoRenameFirstPromptRequest;
+use crate::services::workspace::{AutoRenameFirstPromptRequest, WorkspaceService};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -90,7 +90,6 @@ pub async fn send_thread_message(
         let rename_request = AutoRenameFirstPromptRequest {
             thread_id: input.thread_id.clone(),
             message: message_text.clone(),
-            model: context.composer.model.clone(),
             codex_binary_path: context.codex_binary_path.clone(),
         };
         match spawn_blocking(move || {
@@ -100,10 +99,13 @@ pub async fn send_thread_message(
         {
             Ok(result) => result,
             Err(error) => {
+                let message = error.message.clone();
+                let thread_id = input.thread_id.clone();
                 warn!(
-                    thread_id = input.thread_id,
-                    "failed to auto-rename first prompt environment: {}", error.message
+                    thread_id,
+                    "failed to auto-rename first prompt environment: {message}"
                 );
+                emit_first_prompt_rename_failure_event(&app, &state.workspace, &thread_id, message);
                 None
             }
         }
@@ -249,6 +251,27 @@ pub async fn submit_plan_decision(
 fn emit_workspace_event(app: &AppHandle, payload: WorkspaceEvent) {
     if let Err(error) = app.emit(WORKSPACE_EVENT_NAME, payload) {
         warn!("failed to emit workspace event: {error}");
+    }
+}
+
+fn emit_first_prompt_rename_failure_event(
+    app: &AppHandle,
+    workspace: &WorkspaceService,
+    thread_id: &str,
+    message: String,
+) {
+    match workspace.first_prompt_rename_failure_event(thread_id, message) {
+        Ok(payload) => {
+            if let Err(error) = app.emit(FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME, payload) {
+                warn!("failed to emit first prompt rename failure event: {error}");
+            }
+        }
+        Err(error) => {
+            warn!(
+                thread_id,
+                "failed to build first prompt rename failure event: {error}"
+            );
+        }
     }
 }
 

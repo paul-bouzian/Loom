@@ -12,9 +12,9 @@ use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch};
 use crate::domain::shortcuts::ShortcutSettings;
 use crate::domain::workspace::{
     EnvironmentKind, EnvironmentPullRequestSnapshot, EnvironmentRecord,
-    ManagedWorktreeCreateResult, ProjectRecord, ProjectSettings, ProjectSettingsPatch,
-    RuntimeState, RuntimeStatusSnapshot, ThreadOverrides, ThreadRecord, ThreadStatus,
-    WorkspaceSnapshot, WorktreeScriptTrigger,
+    FirstPromptRenameFailureEvent, ManagedWorktreeCreateResult, ProjectRecord, ProjectSettings,
+    ProjectSettingsPatch, RuntimeState, RuntimeStatusSnapshot, ThreadOverrides, ThreadRecord,
+    ThreadStatus, WorkspaceSnapshot, WorktreeScriptTrigger,
 };
 use crate::error::{AppError, AppResult};
 use crate::infrastructure::database::AppDatabase;
@@ -99,7 +99,6 @@ pub struct PullRequestWatchTarget {
 pub struct AutoRenameFirstPromptRequest {
     pub thread_id: String,
     pub message: String,
-    pub model: String,
     pub codex_binary_path: Option<String>,
 }
 
@@ -695,24 +694,13 @@ impl WorkspaceService {
             return Ok(None);
         }
 
-        let suggestion = match prompt_naming::generate_first_prompt_naming(
+        let suggestion = prompt_naming::generate_first_prompt_naming(
             prompt_naming::GenerateFirstPromptNamingInput {
                 binary_path: input.codex_binary_path.as_deref(),
                 cwd: &metadata.environment_path,
-                model: &input.model,
                 message: &input.message,
             },
-        ) {
-            Ok(suggestion) => suggestion,
-            Err(error) => {
-                warn!(
-                    thread_id = metadata.thread_id,
-                    environment_id = metadata.environment_id,
-                    "failed to auto-name first prompt worktree: {error}"
-                );
-                return Ok(None);
-            }
-        };
+        )?;
 
         let environment_parent = metadata.environment_path.parent().ok_or_else(|| {
             AppError::Runtime("Managed worktree path is missing its parent directory.".to_string())
@@ -839,6 +827,46 @@ impl WorkspaceService {
             environment_renamed,
             thread_renamed,
         }))
+    }
+
+    pub fn first_prompt_rename_failure_event(
+        &self,
+        thread_id: &str,
+        message: String,
+    ) -> AppResult<FirstPromptRenameFailureEvent> {
+        let connection = self.database.open()?;
+        connection
+            .query_row(
+                "
+                SELECT
+                  environments.project_id,
+                  environments.id,
+                  threads.id,
+                  environments.name,
+                  environments.git_branch
+                FROM threads
+                JOIN environments ON environments.id = threads.environment_id
+                JOIN projects ON projects.id = environments.project_id
+                WHERE threads.id = ?1 AND projects.archived_at IS NULL
+                ",
+                params![thread_id],
+                |row| {
+                    let environment_name = row.get::<_, String>(3)?;
+                    let branch_name = row
+                        .get::<_, Option<String>>(4)?
+                        .unwrap_or_else(|| environment_name.clone());
+                    Ok(FirstPromptRenameFailureEvent {
+                        project_id: row.get(0)?,
+                        environment_id: row.get(1)?,
+                        thread_id: row.get(2)?,
+                        environment_name,
+                        branch_name,
+                        message: message.clone(),
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::NotFound("Thread not found.".to_string()))
     }
 
     pub fn archive_thread(&self, input: ArchiveThreadRequest) -> AppResult<ArchiveThreadResult> {
@@ -2233,7 +2261,6 @@ mod tests {
             .maybe_auto_rename_first_prompt_environment(AutoRenameFirstPromptRequest {
                 thread_id: result.thread.id.clone(),
                 message: "Ajouter un systeme de themes".to_string(),
-                model: "gpt-5.4".to_string(),
                 codex_binary_path: Some(fake_codex.to_string_lossy().to_string()),
             })
             .expect("rename should succeed")
@@ -2266,6 +2293,167 @@ mod tests {
                 .as_deref()
                 == Some("add-themes")
         );
+    }
+
+    #[test]
+    fn first_prompt_auto_rename_surfaces_naming_failures_without_mutating() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("rename-fail-repo"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let result = harness
+            .service
+            .create_managed_worktree(&project.id)
+            .expect("worktree should be created");
+        let original_environment = result.environment.clone();
+        let fake_codex = harness.create_failing_fake_codex("naming auth failed", 42);
+
+        let error = harness
+            .service
+            .maybe_auto_rename_first_prompt_environment(AutoRenameFirstPromptRequest {
+                thread_id: result.thread.id.clone(),
+                message: "Ajouter un systeme de themes".to_string(),
+                codex_binary_path: Some(fake_codex.to_string_lossy().to_string()),
+            })
+            .expect_err("naming failure should surface");
+
+        assert!(
+            error.to_string().contains("naming auth failed"),
+            "unexpected error: {error}"
+        );
+
+        let snapshot = harness.service.snapshot(Vec::new()).expect("snapshot");
+        let environment = snapshot
+            .projects
+            .into_iter()
+            .flat_map(|project| project.environments.into_iter())
+            .find(|environment| environment.id == original_environment.id)
+            .expect("environment should remain");
+
+        assert_eq!(environment.name, original_environment.name);
+        assert_eq!(environment.git_branch, original_environment.git_branch);
+        assert_eq!(environment.path, original_environment.path);
+    }
+
+    #[test]
+    fn first_prompt_auto_rename_explains_empty_stderr_failures() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(
+                &harness
+                    .temp_root
+                    .join("repos")
+                    .join("rename-empty-stderr-repo"),
+            )
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let result = harness
+            .service
+            .create_managed_worktree(&project.id)
+            .expect("worktree should be created");
+        let fake_codex = harness.create_failing_fake_codex("", 43);
+
+        let error = harness
+            .service
+            .maybe_auto_rename_first_prompt_environment(AutoRenameFirstPromptRequest {
+                thread_id: result.thread.id.clone(),
+                message: "Diagnose empty naming stderr".to_string(),
+                codex_binary_path: Some(fake_codex.to_string_lossy().to_string()),
+            })
+            .expect_err("naming failure should surface");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("Codex exited with"),
+            "unexpected error: {error}"
+        );
+        assert!(message.contains("43"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn first_prompt_rename_failure_event_uses_current_workspace_metadata() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("failure-event-repo"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let result = harness
+            .service
+            .create_managed_worktree(&project.id)
+            .expect("worktree should be created");
+
+        let event = harness
+            .service
+            .first_prompt_rename_failure_event(&result.thread.id, "naming failed".to_string())
+            .expect("event should be built");
+
+        assert_eq!(event.project_id, project.id);
+        assert_eq!(event.environment_id, result.environment.id);
+        assert_eq!(event.thread_id, result.thread.id);
+        assert_eq!(event.environment_name, result.environment.name);
+        assert_eq!(
+            event.branch_name,
+            result.environment.git_branch.expect("branch should exist")
+        );
+        assert_eq!(event.message, "naming failed");
+    }
+
+    #[test]
+    fn first_prompt_rename_failure_event_falls_back_to_environment_name_without_branch() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(
+                &harness
+                    .temp_root
+                    .join("repos")
+                    .join("failure-event-no-branch-repo"),
+            )
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let result = harness
+            .service
+            .create_managed_worktree(&project.id)
+            .expect("worktree should be created");
+        harness
+            .open_connection()
+            .execute(
+                "UPDATE environments SET git_branch = NULL WHERE id = ?1",
+                params![&result.environment.id],
+            )
+            .expect("environment branch should be cleared");
+
+        let event = harness
+            .service
+            .first_prompt_rename_failure_event(&result.thread.id, "naming failed".to_string())
+            .expect("event should be built");
+
+        assert_eq!(event.environment_name, result.environment.name);
+        assert_eq!(event.branch_name, result.environment.name);
     }
 
     #[test]
@@ -2404,14 +2592,37 @@ mod tests {
         }
 
         fn create_fake_codex(&self, json: &str) -> PathBuf {
+            let expected_model = crate::services::prompt_naming::FIRST_PROMPT_NAMING_MODEL;
             let script_path = self
                 .temp_root
                 .join(format!("fake-codex-{}.sh", Uuid::now_v7()));
             fs::write(
                 &script_path,
                 format!(
-                    "#!/bin/sh\nset -eu\noutput=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--output-last-message\" ]; then\n    output=\"$2\"\n    shift 2\n    continue\n  fi\n  shift\n done\ncat >/dev/null\ncat <<'EOF' > \"$output\"\n{json}\nEOF\n"
+                    "#!/bin/sh\nset -eu\noutput=\"\"\nmodel=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--output-last-message\" ]; then\n    output=\"$2\"\n    shift 2\n    continue\n  fi\n  if [ \"$1\" = \"--model\" ]; then\n    model=\"$2\"\n    shift 2\n    continue\n  fi\n  shift\ndone\nif [ \"$model\" != \"{expected_model}\" ]; then\n  printf 'expected naming model {expected_model}, got %s\\n' \"$model\" >&2\n  exit 88\nfi\ncat >/dev/null\ncat <<'EOF' > \"$output\"\n{json}\nEOF\n"
                 ),
+            )
+            .expect("script should be written");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                let mut permissions = fs::metadata(&script_path)
+                    .expect("script metadata")
+                    .permissions();
+                permissions.set_mode(0o755);
+                fs::set_permissions(&script_path, permissions).expect("permissions");
+            }
+            script_path
+        }
+
+        fn create_failing_fake_codex(&self, message: &str, exit_code: i32) -> PathBuf {
+            let script_path = self
+                .temp_root
+                .join(format!("failing-fake-codex-{}.sh", Uuid::now_v7()));
+            fs::write(
+                &script_path,
+                format!("#!/bin/sh\nprintf '%s\\n' '{message}' >&2\nexit {exit_code}\n"),
             )
             .expect("script should be written");
             #[cfg(unix)]

@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   CODEX_USAGE_EVENT_NAME,
   CONVERSATION_EVENT_NAME,
+  FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME,
   MENU_CHECK_FOR_UPDATES_EVENT_NAME,
   MENU_OPEN_SETTINGS_EVENT_NAME,
   TERMINAL_EXIT_EVENT_NAME,
@@ -31,6 +32,7 @@ import type {
   GlobalSettingsPatch,
   ManagedWorktreeCreateResult,
   EnvironmentVoiceStatusSnapshot,
+  FirstPromptRenameFailureEventPayload,
   ProjectRecord,
   ShortcutSettings,
   UpdateProjectSettingsRequest,
@@ -253,6 +255,15 @@ export function listenToWorktreeScriptFailures(
 ): Promise<UnlistenFn> {
   return listen<WorktreeScriptFailureEventPayload>(
     WORKTREE_SCRIPT_FAILURE_EVENT_NAME,
+    (event) => callback(event.payload),
+  );
+}
+
+export function listenToFirstPromptRenameFailures(
+  callback: (payload: FirstPromptRenameFailureEventPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<FirstPromptRenameFailureEventPayload>(
+    FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME,
     (event) => callback(event.payload),
   );
 }

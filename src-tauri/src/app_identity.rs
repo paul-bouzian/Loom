@@ -18,6 +18,7 @@ pub const CONVERSATION_EVENT_NAME: &str = "loom://conversation-event";
 pub const CODEX_USAGE_EVENT_NAME: &str = "loom://codex-usage-event";
 pub const WORKSPACE_EVENT_NAME: &str = "loom://workspace-event";
 pub const WORKTREE_SCRIPT_FAILURE_EVENT_NAME: &str = "loom://worktree-script-failure";
+pub const FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME: &str = "loom://first-prompt-rename-failure";
 pub const TERMINAL_OUTPUT_EVENT_NAME: &str = "loom://terminal-output";
 pub const TERMINAL_EXIT_EVENT_NAME: &str = "loom://terminal-exit";
 pub const MENU_OPEN_SETTINGS_EVENT_NAME: &str = "loom://menu-open-settings";
