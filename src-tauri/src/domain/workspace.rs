@@ -168,6 +168,17 @@ pub struct WorktreeScriptFailureEvent {
     pub exit_code: Option<i32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstPromptRenameFailureEvent {
+    pub project_id: String,
+    pub environment_id: String,
+    pub thread_id: String,
+    pub environment_name: String,
+    pub branch_name: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkspaceEventKind {

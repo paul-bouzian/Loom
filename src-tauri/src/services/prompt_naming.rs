@@ -8,15 +8,17 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use crate::error::{AppError, AppResult};
+use crate::runtime::codex_paths::{build_codex_process_path, resolve_codex_binary_path};
 
 const AUTO_THREAD_TITLE_PREFIX: &str = "Thread ";
-const FIRST_PROMPT_NAMING_TIMEOUT: Duration = Duration::from_secs(15);
+const FIRST_PROMPT_NAMING_TIMEOUT: Duration = Duration::from_secs(45);
 const MAX_THREAD_TITLE_CHARS: usize = 42;
 const MAX_WORKTREE_LABEL_CHARS: usize = 48;
 const MAX_BRANCH_SLUG_CHARS: usize = 48;
 const MAX_NAMING_MESSAGE_LINES: usize = 4;
 const MAX_NAMING_MESSAGE_CHARS: usize = 360;
-const NAMING_REASONING_EFFORT: &str = "medium";
+pub(crate) const FIRST_PROMPT_NAMING_MODEL: &str = "gpt-5.4-mini";
+const NAMING_REASONING_EFFORT: &str = "low";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirstPromptNamingSuggestion {
@@ -36,7 +38,6 @@ struct FirstPromptNamingSuggestionWire {
 pub struct GenerateFirstPromptNamingInput<'a> {
     pub binary_path: Option<&'a str>,
     pub cwd: &'a Path,
-    pub model: &'a str,
     pub message: &'a str,
 }
 
@@ -80,7 +81,7 @@ pub fn generate_first_prompt_naming(
     input: GenerateFirstPromptNamingInput<'_>,
 ) -> AppResult<FirstPromptNamingSuggestion> {
     let prompt = build_first_prompt_naming_prompt(input.message);
-    let binary = input.binary_path.unwrap_or("codex");
+    let binary = resolve_codex_binary_path(input.binary_path)?;
     let reasoning_config = format!("model_reasoning_effort=\"{NAMING_REASONING_EFFORT}\"");
     let output_path = std::env::temp_dir().join(format!(
         "loom-first-prompt-naming-{}.json",
@@ -88,16 +89,17 @@ pub fn generate_first_prompt_naming(
     ));
     let output_guard = TempFileGuard::new(output_path.clone());
 
-    let mut command = Command::new(binary);
+    let mut command = Command::new(&binary);
     command
         .current_dir(input.cwd)
+        .env("PATH", build_codex_process_path(&binary))
         .args([
             "exec",
             "--ephemeral",
             "--sandbox",
             "read-only",
             "--model",
-            input.model,
+            FIRST_PROMPT_NAMING_MODEL,
             "-c",
             &reasoning_config,
             "--output-last-message",
@@ -124,7 +126,13 @@ pub fn generate_first_prompt_naming(
     loop {
         if let Some(status) = child.try_wait().map_err(AppError::from)? {
             if !status.success() {
-                return Err(AppError::Runtime(read_stderr(&mut child)));
+                let stderr = read_stderr(&mut child);
+                let message = if stderr.is_empty() {
+                    format!("Codex exited with {status} while generating a first prompt name.")
+                } else {
+                    stderr
+                };
+                return Err(AppError::Runtime(message));
             }
             break;
         }
@@ -132,9 +140,10 @@ pub fn generate_first_prompt_naming(
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(AppError::Runtime(
-                "Codex timed out while generating a first prompt name.".to_string(),
-            ));
+            return Err(AppError::Runtime(format!(
+                "Codex timed out after {}s while generating a first prompt name.",
+                FIRST_PROMPT_NAMING_TIMEOUT.as_secs()
+            )));
         }
 
         thread::sleep(Duration::from_millis(50));
@@ -600,6 +609,7 @@ mod tests {
         assert!(prompt.contains("threadTitle: concise, readable English title"));
         assert!(prompt.contains("worktreeLabel: short English sidebar label"));
         assert!(prompt.contains("branchSlug: lowercase ASCII kebab-case English slug"));
+        assert!(prompt.contains("Model reasoning effort for this task: low."));
         assert!(!prompt.contains("same language as the user"));
     }
 }

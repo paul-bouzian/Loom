@@ -7,6 +7,7 @@ import { makeWorkspaceSnapshot } from "./test/fixtures/conversation";
 import { useAppUpdateStore } from "./stores/app-update-store";
 import { useCodexUsageStore } from "./stores/codex-usage-store";
 import { useConversationStore } from "./stores/conversation-store";
+import { useFirstPromptRenameStore } from "./stores/first-prompt-rename-store";
 import { useWorkspaceStore } from "./stores/workspace-store";
 import { useWorktreeScriptStore } from "./stores/worktree-script-store";
 
@@ -19,6 +20,7 @@ vi.mock("./shared/LoadingState", () => ({
 }));
 
 vi.mock("./lib/bridge", () => ({
+  listenToFirstPromptRenameFailures: vi.fn(async () => () => undefined),
   listenToMenuCheckForUpdates: vi.fn(async () => () => undefined),
 }));
 
@@ -54,6 +56,10 @@ describe("App", () => {
       checkNow: vi.fn(async () => undefined),
     }));
     useWorktreeScriptStore.setState((state) => ({
+      ...state,
+      initializeListener: vi.fn(async () => undefined),
+    }));
+    useFirstPromptRenameStore.setState((state) => ({
       ...state,
       initializeListener: vi.fn(async () => undefined),
     }));

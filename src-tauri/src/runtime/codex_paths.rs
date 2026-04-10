@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::error::{AppError, AppResult};
+
 pub fn resolve_auto_binary_path() -> Option<PathBuf> {
     which::which("codex").ok().or_else(|| {
         let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -10,6 +12,23 @@ pub fn resolve_auto_binary_path() -> Option<PathBuf> {
             .into_iter()
             .find_map(|candidate| which::which(&candidate).ok())
     })
+}
+
+pub fn resolve_codex_binary_path(codex_binary_path: Option<&str>) -> AppResult<String> {
+    match codex_binary_path {
+        Some(path) => {
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                return Err(AppError::Validation(
+                    "Codex binary path cannot be empty.".to_string(),
+                ));
+            }
+            Ok(trimmed.to_string())
+        }
+        None => resolve_auto_binary_path()
+            .ok_or_else(|| AppError::Runtime(missing_codex_binary_message()))
+            .map(|path| path.to_string_lossy().to_string()),
+    }
 }
 
 pub fn build_codex_process_path(binary_path: &str) -> OsString {

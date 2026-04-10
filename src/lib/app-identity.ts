@@ -6,6 +6,8 @@ export const LEGACY_APP_SLUG = "threadex";
 export const CONVERSATION_EVENT_NAME = "loom://conversation-event";
 export const CODEX_USAGE_EVENT_NAME = "loom://codex-usage-event";
 export const WORKTREE_SCRIPT_FAILURE_EVENT_NAME = "loom://worktree-script-failure";
+export const FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME =
+  "loom://first-prompt-rename-failure";
 export const WORKSPACE_EVENT_NAME = "loom://workspace-event";
 export const TERMINAL_OUTPUT_EVENT_NAME = "loom://terminal-output";
 export const TERMINAL_EXIT_EVENT_NAME = "loom://terminal-exit";

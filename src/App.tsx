@@ -2,6 +2,10 @@ import { useEffect } from "react";
 import * as bridge from "./lib/bridge";
 import { useConversationStore } from "./stores/conversation-store";
 import { useCodexUsageStore } from "./stores/codex-usage-store";
+import {
+  teardownFirstPromptRenameListener,
+  useFirstPromptRenameStore,
+} from "./stores/first-prompt-rename-store";
 import { useAppUpdateStore } from "./stores/app-update-store";
 import {
   teardownWorktreeScriptListener,
@@ -38,6 +42,9 @@ function App() {
   const initializeUpdates = useAppUpdateStore((s) => s.initialize);
   const checkForUpdates = useAppUpdateStore((s) => s.checkNow);
   const initializeWorktreeScriptListener = useWorktreeScriptStore(
+    (s) => s.initializeListener,
+  );
+  const initializeFirstPromptRenameListener = useFirstPromptRenameStore(
     (s) => s.initializeListener,
   );
 
@@ -98,6 +105,13 @@ function App() {
       teardownWorktreeScriptListener();
     };
   }, [initializeWorktreeScriptListener]);
+
+  useEffect(() => {
+    void initializeFirstPromptRenameListener();
+    return () => {
+      teardownFirstPromptRenameListener();
+    };
+  }, [initializeFirstPromptRenameListener]);
 
   if (loadingState === "idle" || loadingState === "loading") {
     return (

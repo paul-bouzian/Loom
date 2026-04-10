@@ -1,0 +1,3 @@
+.tx-rename-failure-notice .tx-update-notice__eyebrow {
+  color: var(--tx-danger);
+}

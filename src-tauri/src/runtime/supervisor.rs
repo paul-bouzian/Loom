@@ -13,7 +13,7 @@ use crate::domain::conversation::{
 };
 use crate::domain::workspace::{CodexRateLimitSnapshot, RuntimeState, RuntimeStatusSnapshot};
 use crate::error::{AppError, AppResult};
-use crate::runtime::codex_paths::{missing_codex_binary_message, resolve_auto_binary_path};
+use crate::runtime::codex_paths::resolve_codex_binary_path;
 use crate::runtime::protocol::AccountReadResponse;
 use crate::runtime::session::{AppServerAuthStatus, RuntimeSession, SendMessageResult};
 use crate::services::workspace::ThreadRuntimeContext;
@@ -463,20 +463,7 @@ fn finish_headless_read<T>(result: AppResult<T>, stop_result: AppResult<()>) -> 
 }
 
 fn resolve_binary_path(codex_binary_path: Option<String>) -> AppResult<String> {
-    match codex_binary_path {
-        Some(path) => {
-            let trimmed = path.trim();
-            if trimmed.is_empty() {
-                return Err(AppError::Validation(
-                    "Codex binary path cannot be empty.".to_string(),
-                ));
-            }
-            Ok(trimmed.to_string())
-        }
-        None => resolve_auto_binary_path()
-            .ok_or_else(|| AppError::Runtime(missing_codex_binary_message()))
-            .map(|path| path.to_string_lossy().to_string()),
-    }
+    resolve_codex_binary_path(codex_binary_path.as_deref())
 }
 
 #[cfg(test)]
