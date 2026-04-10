@@ -6,12 +6,7 @@ use std::process::Command;
 use crate::error::{AppError, AppResult};
 
 pub fn resolve_auto_binary_path() -> Option<PathBuf> {
-    which::which("codex").ok().or_else(|| {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        codex_binary_candidates(home.as_deref())
-            .into_iter()
-            .find_map(|candidate| which::which(&candidate).ok())
-    })
+    resolve_bare_executable_path("codex")
 }
 
 pub fn resolve_codex_binary_path(codex_binary_path: Option<&str>) -> AppResult<String> {
@@ -28,11 +23,11 @@ pub fn resolve_codex_binary_path(codex_binary_path: Option<&str>) -> AppResult<S
                 return Ok(trimmed.to_string());
             }
             if is_bare_executable_name(path) {
-                return which::which(trimmed)
+                return resolve_bare_executable_path(trimmed)
                     .map(|path| path.to_string_lossy().to_string())
-                    .map_err(|_| {
+                    .ok_or_else(|| {
                         AppError::Validation(format!(
-                            "Unable to resolve Codex binary `{trimmed}` from PATH. Set Settings -> Codex binary to its absolute path."
+                            "Unable to resolve Codex binary `{trimmed}` from PATH or known Codex install locations. Set Settings -> Codex binary to its absolute path."
                         ))
                     });
             }
@@ -89,14 +84,27 @@ pub fn sync_process_path_from_login_shell() {
     }
 }
 
-fn codex_binary_candidates(home: Option<&Path>) -> Vec<PathBuf> {
-    let mut candidates = vec![
-        PathBuf::from("/opt/homebrew/bin/codex"),
-        PathBuf::from("/usr/local/bin/codex"),
-    ];
+fn resolve_bare_executable_path(executable_name: &str) -> Option<PathBuf> {
+    which::which(executable_name).ok().or_else(|| {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        binary_candidates(executable_name, home.as_deref())
+            .into_iter()
+            .find_map(|candidate| which::which(&candidate).ok())
+    })
+}
 
+fn binary_candidates(executable_name: &str, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    push_unique(
+        &mut candidates,
+        PathBuf::from("/opt/homebrew/bin").join(executable_name),
+    );
+    push_unique(
+        &mut candidates,
+        PathBuf::from("/usr/local/bin").join(executable_name),
+    );
     for path in shell_path_candidates(home) {
-        candidates.push(path.join("codex"));
+        push_unique(&mut candidates, path.join(executable_name));
     }
 
     candidates
@@ -215,7 +223,7 @@ fn read_path_from_login_shell(shell: &Path) -> Option<OsString> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_codex_process_path, codex_binary_candidates, missing_codex_binary_message,
+        binary_candidates, build_codex_process_path, missing_codex_binary_message,
         resolve_codex_binary_path, versioned_node_bin_paths,
     };
     use std::ffi::OsString;
@@ -255,16 +263,43 @@ mod tests {
         let _guard = environment_lock()
             .lock()
             .expect("environment lock should not be poisoned");
+        let executable_name = format!("codex-test-{}", Uuid::now_v7().simple());
         let root = std::env::temp_dir().join(format!("loom-codex-binary-{}", Uuid::now_v7()));
-        let binary_path = root.join("codex");
+        let binary_path = root.join(&executable_name);
         fs::create_dir_all(&root).expect("binary dir should exist");
         fs::write(&binary_path, "#!/bin/sh\n").expect("binary should be written");
         make_executable(&binary_path);
-        let _path_restore = PathRestore::capture();
+        let _path_restore = EnvVarRestore::capture("PATH");
         std::env::set_var("PATH", &root);
 
-        let resolved = resolve_codex_binary_path(Some("codex"))
+        let resolved = resolve_codex_binary_path(Some(&executable_name))
             .expect("bare binary name should resolve from PATH");
+
+        let _ = fs::remove_dir_all(root);
+        assert_eq!(resolved, binary_path.to_string_lossy());
+    }
+
+    #[test]
+    fn resolve_explicit_binary_path_resolves_bare_names_from_known_install_candidates() {
+        let _guard = environment_lock()
+            .lock()
+            .expect("environment lock should not be poisoned");
+        let executable_name = format!("codex-test-{}", Uuid::now_v7().simple());
+        let root = std::env::temp_dir().join(format!("loom-codex-home-{}", Uuid::now_v7()));
+        let empty_path = root.join("empty-path");
+        let binary_dir = root.join(".local/bin");
+        let binary_path = binary_dir.join(&executable_name);
+        fs::create_dir_all(&empty_path).expect("empty PATH dir should exist");
+        fs::create_dir_all(&binary_dir).expect("binary dir should exist");
+        fs::write(&binary_path, "#!/bin/sh\n").expect("binary should be written");
+        make_executable(&binary_path);
+        let _path_restore = EnvVarRestore::capture("PATH");
+        let _home_restore = EnvVarRestore::capture("HOME");
+        std::env::set_var("PATH", &empty_path);
+        std::env::set_var("HOME", &root);
+
+        let resolved = resolve_codex_binary_path(Some(&executable_name))
+            .expect("bare binary name should resolve from known install candidates");
 
         let _ = fs::remove_dir_all(root);
         assert_eq!(resolved, binary_path.to_string_lossy());
@@ -285,7 +320,7 @@ mod tests {
 
     #[test]
     fn binary_candidates_cover_common_npm_and_tooling_locations() {
-        let candidates = codex_binary_candidates(Some(Path::new("/Users/tester")));
+        let candidates = binary_candidates("codex", Some(Path::new("/Users/tester")));
 
         assert!(candidates.contains(&PathBuf::from("/Users/tester/.npm-global/bin/codex")));
         assert!(candidates.contains(&PathBuf::from("/Users/tester/.volta/bin/codex")));
@@ -324,20 +359,26 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    struct PathRestore(Option<OsString>);
+    struct EnvVarRestore {
+        name: &'static str,
+        value: Option<OsString>,
+    }
 
-    impl PathRestore {
-        fn capture() -> Self {
-            Self(std::env::var_os("PATH"))
+    impl EnvVarRestore {
+        fn capture(name: &'static str) -> Self {
+            Self {
+                name,
+                value: std::env::var_os(name),
+            }
         }
     }
 
-    impl Drop for PathRestore {
+    impl Drop for EnvVarRestore {
         fn drop(&mut self) {
-            if let Some(previous_path) = self.0.take() {
-                std::env::set_var("PATH", previous_path);
+            if let Some(value) = self.value.take() {
+                std::env::set_var(self.name, value);
             } else {
-                std::env::remove_var("PATH");
+                std::env::remove_var(self.name);
             }
         }
     }

@@ -11,12 +11,13 @@ use crate::error::{AppError, AppResult};
 use crate::runtime::codex_paths::{build_codex_process_path, resolve_codex_binary_path};
 
 const AUTO_THREAD_TITLE_PREFIX: &str = "Thread ";
-const FIRST_PROMPT_NAMING_TIMEOUT: Duration = Duration::from_secs(45);
+const FIRST_PROMPT_NAMING_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_THREAD_TITLE_CHARS: usize = 42;
 const MAX_WORKTREE_LABEL_CHARS: usize = 48;
 const MAX_BRANCH_SLUG_CHARS: usize = 48;
 const MAX_NAMING_MESSAGE_LINES: usize = 4;
 const MAX_NAMING_MESSAGE_CHARS: usize = 360;
+// Keep naming on a dedicated lightweight model so thread model settings remain untouched.
 pub(crate) const FIRST_PROMPT_NAMING_MODEL: &str = "gpt-5.4-mini";
 const NAMING_REASONING_EFFORT: &str = "low";
 
@@ -611,5 +612,10 @@ mod tests {
         assert!(prompt.contains("branchSlug: lowercase ASCII kebab-case English slug"));
         assert!(prompt.contains("Model reasoning effort for this task: low."));
         assert!(!prompt.contains("same language as the user"));
+    }
+
+    #[test]
+    fn first_prompt_naming_timeout_stays_short_for_best_effort_send_path() {
+        assert!(super::FIRST_PROMPT_NAMING_TIMEOUT <= std::time::Duration::from_secs(20));
     }
 }
