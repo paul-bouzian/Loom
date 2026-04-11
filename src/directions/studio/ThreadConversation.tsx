@@ -82,6 +82,7 @@ export function ThreadConversation({
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const refreshInFlightRef = useRef(false);
   const submitInFlightRef = useRef(false);
+  const submitGenerationRef = useRef(0);
   const lastApproveOrSubmitKeyRef = useRef(approveOrSubmitKey);
   const approveShortcutThreadIdRef = useRef(thread.id);
 
@@ -94,7 +95,10 @@ export function ThreadConversation({
   }, [thread.id]);
 
   useEffect(() => {
+    submitGenerationRef.current += 1;
+    submitInFlightRef.current = false;
     setIsPreparingWorktreeName(false);
+    setIsSubmitting(false);
   }, [thread.id]);
 
   useEffect(() => {
@@ -168,10 +172,26 @@ export function ThreadConversation({
     });
   }
 
-  const approvePlan = useEffectEvent(async (nextComposer: typeof approveComposer) => {
-    if (!nextComposer || submitInFlightRef.current) return;
+  function beginSubmitCycle() {
+    submitGenerationRef.current += 1;
+    const generation = submitGenerationRef.current;
     submitInFlightRef.current = true;
     setIsSubmitting(true);
+    return generation;
+  }
+
+  function finishSubmitCycle(generation: number) {
+    if (submitGenerationRef.current !== generation) {
+      return;
+    }
+    submitInFlightRef.current = false;
+    setIsPreparingWorktreeName(false);
+    setIsSubmitting(false);
+  }
+
+  const approvePlan = useEffectEvent(async (nextComposer: typeof approveComposer) => {
+    if (!nextComposer || submitInFlightRef.current) return;
+    const submitGeneration = beginSubmitCycle();
     try {
       const sent = await submitPlanDecision({
         threadId: thread.id,
@@ -183,8 +203,7 @@ export function ThreadConversation({
         resetComposerState();
       }
     } finally {
-      submitInFlightRef.current = false;
-      setIsSubmitting(false);
+      finishSubmitCycle(submitGeneration);
     }
   });
 
@@ -266,8 +285,7 @@ export function ThreadConversation({
   ) {
     if (sendDisabled || submitInFlightRef.current) return;
     const message = text.trim();
-    submitInFlightRef.current = true;
-    setIsSubmitting(true);
+    const submitGeneration = beginSubmitCycle();
     try {
       if (isRefiningPlan) {
         const sent = await submitPlanDecision({
@@ -307,9 +325,7 @@ export function ThreadConversation({
       }
       restoreComposerState(text, nextImages, nextMentionBindings);
     } finally {
-      setIsPreparingWorktreeName(false);
-      submitInFlightRef.current = false;
-      setIsSubmitting(false);
+      finishSubmitCycle(submitGeneration);
     }
   }
 
