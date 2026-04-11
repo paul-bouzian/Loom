@@ -1,5 +1,6 @@
 import { EmptyState } from "../../shared/EmptyState";
 import { useProjectImport } from "./useProjectImport";
+import loomAppIcon from "../../../src-tauri/icons/icon.png";
 import "./StudioWelcome.css";
 
 export function StudioWelcome() {
@@ -8,7 +9,7 @@ export function StudioWelcome() {
   return (
     <div className="studio-welcome">
       <EmptyState
-        icon={<span className="studio-welcome__icon">TX</span>}
+        icon={<img src={loomAppIcon} alt="" className="studio-welcome__logo" />}
         heading="Welcome to Loom"
         body={
           error ??
