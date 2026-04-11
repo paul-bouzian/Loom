@@ -315,6 +315,10 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
                   onPointerDown={(event) =>
                     handleProjectPointerDown(event, project.id)
                   }
+                  onClick={(event) => {
+                    if (event.detail > 0 && shouldSuppressClick()) return;
+                    handleProjectSelect(project.id);
+                  }}
                   onContextMenu={(event) => {
                     event.preventDefault();
                     handleProjectSelect(project.id);
@@ -353,10 +357,6 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
                   <button
                     type="button"
                     className="project-group__header"
-                    onClick={() => {
-                      if (shouldSuppressClick()) return;
-                      handleProjectSelect(project.id);
-                    }}
                     onKeyDown={(event) =>
                       void handleProjectKeyboardReorder(event, project.id)
                     }
@@ -413,8 +413,8 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
                             environment.id,
                           )
                         }
-                        onClick={() => {
-                          if (shouldSuppressClick()) return;
+                        onClick={(event) => {
+                          if (event.detail > 0 && shouldSuppressClick()) return;
                           handleEnvironmentSelect(environment.id);
                         }}
                         onContextMenu={(event) => {
