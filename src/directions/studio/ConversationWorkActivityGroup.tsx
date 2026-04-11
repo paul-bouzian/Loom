@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { type UIEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { SubagentThreadSnapshot } from "../../lib/types";
 import { ChevronRightIcon } from "../../shared/Icons";
@@ -13,9 +13,40 @@ type Props = {
   group: ConversationWorkActivityGroupData;
 };
 
+const WORK_ACTIVITY_BOTTOM_THRESHOLD_PX = 24;
+
 export function ConversationWorkActivityGroup({ group }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const shouldFollowBottomRef = useRef(true);
   const summary = useMemo(() => buildSummary(group), [group]);
+
+  useLayoutEffect(() => {
+    if (!expanded || !shouldFollowBottomRef.current) {
+      return;
+    }
+
+    const body = bodyRef.current;
+    if (!body) {
+      return;
+    }
+
+    scrollToBottom(body);
+  }, [expanded, group]);
+
+  function toggleExpanded() {
+    setExpanded((value) => {
+      const nextExpanded = !value;
+      if (nextExpanded) {
+        shouldFollowBottomRef.current = true;
+      }
+      return nextExpanded;
+    });
+  }
+
+  function handleBodyScroll(event: UIEvent<HTMLDivElement>) {
+    shouldFollowBottomRef.current = isNearBottom(event.currentTarget);
+  }
 
   return (
     <section className="tx-work-activity">
@@ -24,7 +55,7 @@ export function ConversationWorkActivityGroup({ group }: Props) {
         className="tx-work-activity__toggle"
         aria-expanded={expanded}
         aria-label={expanded ? "Hide work activity details" : "Show work activity details"}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={toggleExpanded}
       >
         <div className="tx-work-activity__header">
           <span className="tx-item__header-main">
@@ -41,7 +72,11 @@ export function ConversationWorkActivityGroup({ group }: Props) {
         {summary ? <p className="tx-work-activity__summary">{summary}</p> : null}
       </button>
       {expanded ? (
-        <div className="tx-work-activity__body">
+        <div
+          ref={bodyRef}
+          className="tx-work-activity__body"
+          onScroll={handleBodyScroll}
+        >
           {group.taskPlan ? <ConversationTaskCard taskPlan={group.taskPlan} compact /> : null}
           {group.subagents.length > 0 ? (
             <div className="tx-work-activity__subagents">
@@ -72,6 +107,17 @@ export function ConversationWorkActivityGroup({ group }: Props) {
       ) : null}
     </section>
   );
+}
+
+function isNearBottom(element: HTMLElement) {
+  return (
+    element.scrollHeight - element.scrollTop - element.clientHeight <=
+    WORK_ACTIVITY_BOTTOM_THRESHOLD_PX
+  );
+}
+
+function scrollToBottom(element: HTMLElement) {
+  element.scrollTop = element.scrollHeight;
 }
 
 function buildSummary(group: ConversationWorkActivityGroupData) {
