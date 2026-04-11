@@ -13,6 +13,19 @@ import { useTerminalStore } from "./terminal-store";
 
 type LoadingState = "idle" | "loading" | "ready" | "error";
 
+type WorkspaceMutationResult = {
+  ok: boolean;
+  refreshed: boolean;
+  warningMessage: string | null;
+};
+
+type WorkspaceStateUpdate =
+  | Partial<WorkspaceState>
+  | WorkspaceState
+  | ((state: WorkspaceState) => Partial<WorkspaceState> | WorkspaceState);
+
+type WorkspaceSetter = (partial: WorkspaceStateUpdate) => void;
+
 type WorkspaceState = {
   snapshot: WorkspaceSnapshot | null;
   bootstrapStatus: BootstrapStatus | null;
@@ -28,15 +41,15 @@ type WorkspaceState = {
   initializeListener: () => Promise<void>;
   refreshSnapshot: () => Promise<boolean>;
   removeThread: (threadId: string) => boolean;
-  reorderProjects: (projectIds: string[]) => Promise<boolean>;
+  reorderProjects: (projectIds: string[]) => Promise<WorkspaceMutationResult>;
   reorderWorktreeEnvironments: (
     projectId: string,
     environmentIds: string[],
-  ) => Promise<boolean>;
+  ) => Promise<WorkspaceMutationResult>;
   setProjectSidebarCollapsed: (
     projectId: string,
     collapsed: boolean,
-  ) => Promise<boolean>;
+  ) => Promise<WorkspaceMutationResult>;
   selectProject: (id: string | null) => void;
   selectEnvironment: (id: string | null) => void;
   selectThread: (id: string | null) => void;
@@ -149,8 +162,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     return runWorkspaceMutation(
       set,
       get,
-      () => bridge.reorderProjects({ projectIds }),
-      "Failed to reorder projects",
+      {
+        run: () => bridge.reorderProjects({ projectIds }),
+        applySnapshot: (snapshot) => reorderProjectsInSnapshot(snapshot, projectIds),
+        writeFailureMessage: "Failed to reorder projects",
+        refreshFailureMessage:
+          "Project order saved, but the workspace failed to refresh.",
+      },
     );
   },
 
@@ -158,8 +176,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     return runWorkspaceMutation(
       set,
       get,
-      () => bridge.reorderWorktreeEnvironments({ projectId, environmentIds }),
-      "Failed to reorder worktrees",
+      {
+        run: () => bridge.reorderWorktreeEnvironments({ projectId, environmentIds }),
+        applySnapshot: (snapshot) =>
+          reorderWorktreeEnvironmentsInSnapshot(
+            snapshot,
+            projectId,
+            environmentIds,
+          ),
+        writeFailureMessage: "Failed to reorder worktrees",
+        refreshFailureMessage:
+          "Worktree order saved, but the workspace failed to refresh.",
+      },
     );
   },
 
@@ -167,8 +195,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     return runWorkspaceMutation(
       set,
       get,
-      () => bridge.setProjectSidebarCollapsed({ projectId, collapsed }),
-      "Failed to update project collapse state",
+      {
+        run: () => bridge.setProjectSidebarCollapsed({ projectId, collapsed }),
+        applySnapshot: (snapshot) =>
+          setProjectSidebarCollapsedInSnapshot(snapshot, projectId, collapsed),
+        writeFailureMessage: "Failed to update project collapse state",
+        refreshFailureMessage:
+          "Project collapse state saved, but the workspace failed to refresh.",
+      },
     );
   },
 
@@ -212,24 +246,37 @@ export function selectProjects(s: WorkspaceState): ProjectRecord[] {
 }
 
 async function runWorkspaceMutation(
-  set: (partial: Partial<WorkspaceState>) => void,
+  set: WorkspaceSetter,
   get: () => WorkspaceState,
-  run: () => Promise<void>,
-  fallbackMessage: string,
-) {
+  options: {
+    run: () => Promise<void>;
+    applySnapshot: (snapshot: WorkspaceSnapshot) => WorkspaceSnapshot;
+    writeFailureMessage: string;
+    refreshFailureMessage: string;
+  },
+): Promise<WorkspaceMutationResult> {
   try {
-    await run();
-    const refreshed = await get().refreshSnapshot();
-    if (refreshed) {
-      set({ error: null });
-    }
-    return refreshed;
+    await options.run();
   } catch (cause: unknown) {
     const message =
-      cause instanceof Error ? cause.message : fallbackMessage;
+      cause instanceof Error ? cause.message : options.writeFailureMessage;
     set({ error: message });
-    return false;
+    return { ok: false, refreshed: false, warningMessage: null };
   }
+
+  applySnapshotMutation(set, options.applySnapshot);
+
+  if (await get().refreshSnapshot()) {
+    set({ error: null });
+    return { ok: true, refreshed: true, warningMessage: null };
+  }
+
+  set({ error: options.refreshFailureMessage });
+  return {
+    ok: true,
+    refreshed: false,
+    warningMessage: options.refreshFailureMessage,
+  };
 }
 
 export function selectSettings(s: WorkspaceState): GlobalSettings | null {
@@ -446,4 +493,127 @@ function removeThreadFromSnapshot(
         projects: nextProjects,
       }
     : snapshot;
+}
+
+function applySnapshotMutation(
+  set: WorkspaceSetter,
+  applySnapshot: (snapshot: WorkspaceSnapshot) => WorkspaceSnapshot,
+) {
+  set((state) => {
+    if (!state.snapshot) {
+      return { error: null };
+    }
+
+    const nextSnapshot = applySnapshot(state.snapshot);
+    if (nextSnapshot === state.snapshot) {
+      return { error: null };
+    }
+
+    return {
+      snapshot: nextSnapshot,
+      error: null,
+      ...reconcileSelection(nextSnapshot, state),
+    };
+  });
+}
+
+function reorderProjectsInSnapshot(
+  snapshot: WorkspaceSnapshot,
+  projectIds: string[],
+) {
+  const nextProjects = reorderRecordsById(snapshot.projects, projectIds);
+  if (!nextProjects) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    projects: nextProjects,
+  };
+}
+
+function reorderWorktreeEnvironmentsInSnapshot(
+  snapshot: WorkspaceSnapshot,
+  projectId: string,
+  environmentIds: string[],
+) {
+  let changed = false;
+  const nextProjects = snapshot.projects.map((project) => {
+    if (project.id !== projectId) {
+      return project;
+    }
+
+    const localEnvironments = project.environments.filter(
+      (environment) => environment.kind === "local",
+    );
+    const worktreeEnvironments = project.environments.filter(
+      (environment) => environment.kind !== "local",
+    );
+    const reorderedWorktrees = reorderRecordsById(
+      worktreeEnvironments,
+      environmentIds,
+    );
+    if (!reorderedWorktrees) {
+      return project;
+    }
+
+    changed = true;
+    return {
+      ...project,
+      environments: [...localEnvironments, ...reorderedWorktrees],
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        projects: nextProjects,
+      }
+    : snapshot;
+}
+
+function setProjectSidebarCollapsedInSnapshot(
+  snapshot: WorkspaceSnapshot,
+  projectId: string,
+  collapsed: boolean,
+) {
+  let changed = false;
+  const nextProjects = snapshot.projects.map((project) => {
+    if (project.id !== projectId || project.sidebarCollapsed === collapsed) {
+      return project;
+    }
+
+    changed = true;
+    return {
+      ...project,
+      sidebarCollapsed: collapsed,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        projects: nextProjects,
+      }
+    : snapshot;
+}
+
+function reorderRecordsById<RecordType extends { id: string }>(
+  records: RecordType[],
+  ids: string[],
+) {
+  if (records.length !== ids.length) {
+    return null;
+  }
+
+  const recordsById = new Map(records.map((record) => [record.id, record]));
+  const orderedRecords = ids
+    .map((id) => recordsById.get(id))
+    .filter((record): record is RecordType => record != null);
+
+  if (orderedRecords.length !== records.length) {
+    return null;
+  }
+
+  return orderedRecords;
 }

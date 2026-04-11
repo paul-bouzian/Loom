@@ -125,15 +125,13 @@ impl AppDatabase {
                     CREATE UNIQUE INDEX idx_projects_managed_worktree_dir_active
                     ON projects(managed_worktree_dir)
                     WHERE archived_at IS NULL AND managed_worktree_dir IS NOT NULL;
-                    WITH ranked_projects AS (
-                      SELECT
-                        id,
-                        ROW_NUMBER() OVER (
-                          ORDER BY updated_at DESC, created_at DESC, id ASC
-                        ) - 1 AS next_sort_order
-                      FROM projects
-                      WHERE archived_at IS NULL
-                    )
+	                    WITH ranked_projects AS (
+	                      SELECT
+	                        id,
+	                        ROW_NUMBER() OVER (ORDER BY rowid ASC) - 1 AS next_sort_order
+	                      FROM projects
+	                      WHERE archived_at IS NULL
+	                    )
                     UPDATE projects
                     SET sort_order = (
                       SELECT next_sort_order
@@ -176,15 +174,13 @@ impl AppDatabase {
                     CREATE UNIQUE INDEX idx_projects_managed_worktree_dir_active
                     ON projects(managed_worktree_dir)
                     WHERE archived_at IS NULL AND managed_worktree_dir IS NOT NULL;
-                    WITH ranked_projects AS (
-                      SELECT
-                        id,
-                        ROW_NUMBER() OVER (
-                          ORDER BY updated_at DESC, created_at DESC, id ASC
-                        ) - 1 AS next_sort_order
-                      FROM projects
-                      WHERE archived_at IS NULL
-                    )
+	                    WITH ranked_projects AS (
+	                      SELECT
+	                        id,
+	                        ROW_NUMBER() OVER (ORDER BY rowid ASC) - 1 AS next_sort_order
+	                      FROM projects
+	                      WHERE archived_at IS NULL
+	                    )
                     UPDATE projects
                     SET sort_order = (
                       SELECT next_sort_order
@@ -222,15 +218,13 @@ impl AppDatabase {
                     ADD COLUMN sidebar_collapsed INTEGER NOT NULL DEFAULT 0;
                     ALTER TABLE environments
                     ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
-                    WITH ranked_projects AS (
-                      SELECT
-                        id,
-                        ROW_NUMBER() OVER (
-                          ORDER BY updated_at DESC, created_at DESC, id ASC
-                        ) - 1 AS next_sort_order
-                      FROM projects
-                      WHERE archived_at IS NULL
-                    )
+	                    WITH ranked_projects AS (
+	                      SELECT
+	                        id,
+	                        ROW_NUMBER() OVER (ORDER BY rowid ASC) - 1 AS next_sort_order
+	                      FROM projects
+	                      WHERE archived_at IS NULL
+	                    )
                     UPDATE projects
                     SET sort_order = (
                       SELECT next_sort_order
@@ -531,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_v3_backfills_sidebar_order_deterministically() {
+    fn migrate_v3_preserves_legacy_project_order_when_timestamps_differ() {
         let root = std::env::temp_dir().join(format!("loom-db-test-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).expect("test directory should exist");
         let db_path = root.join("loom.sqlite3");
@@ -586,14 +580,14 @@ mod tests {
                 INSERT INTO projects (
                   id, name, root_path, managed_worktree_dir, settings_json, created_at, updated_at, archived_at
                 ) VALUES
-                  ('project-old', 'Old', '/tmp/old', 'old', '{}', '2026-04-01T08:00:00Z', '2026-04-01T08:00:00Z', NULL),
-                  ('project-new', 'New', '/tmp/new', 'new', '{}', '2026-04-02T08:00:00Z', '2026-04-02T08:00:00Z', NULL);
+                  ('project-first', 'First', '/tmp/first', 'first', '{}', '2026-04-01T08:00:00Z', '2026-04-03T08:00:00Z', NULL),
+                  ('project-second', 'Second', '/tmp/second', 'second', '{}', '2026-04-02T08:00:00Z', '2026-04-01T08:00:00Z', NULL);
                 INSERT INTO environments (
                   id, project_id, name, kind, path, git_branch, base_branch, is_default, created_at, updated_at
                 ) VALUES
-                  ('env-worktree-late', 'project-new', 'Late', 'managedWorktree', '/tmp/new-late', 'late', 'main', 0, '2026-04-02T10:00:00Z', '2026-04-02T10:00:00Z'),
-                  ('env-local', 'project-new', 'Local', 'local', '/tmp/new', 'main', 'main', 1, '2026-04-02T08:00:00Z', '2026-04-02T08:00:00Z'),
-                  ('env-worktree-early', 'project-new', 'Early', 'managedWorktree', '/tmp/new-early', 'early', 'main', 0, '2026-04-02T09:00:00Z', '2026-04-02T09:00:00Z');
+                  ('env-worktree-late', 'project-second', 'Late', 'managedWorktree', '/tmp/second-late', 'late', 'main', 0, '2026-04-02T10:00:00Z', '2026-04-02T10:00:00Z'),
+                  ('env-local', 'project-second', 'Local', 'local', '/tmp/second', 'main', 'main', 1, '2026-04-02T08:00:00Z', '2026-04-02T08:00:00Z'),
+                  ('env-worktree-early', 'project-second', 'Early', 'managedWorktree', '/tmp/second-early', 'early', 'main', 0, '2026-04-02T09:00:00Z', '2026-04-02T09:00:00Z');
                 PRAGMA user_version = 3;
                 COMMIT;
                 ",
@@ -618,7 +612,7 @@ mod tests {
                 "
                 SELECT id
                 FROM environments
-                WHERE project_id = 'project-new'
+                WHERE project_id = 'project-second'
                 ORDER BY sort_order ASC
                 ",
             )
@@ -629,7 +623,7 @@ mod tests {
             .expect("environment order should collect");
 
         assert_eq!(version, 4);
-        assert_eq!(project_order, vec!["project-new", "project-old"]);
+        assert_eq!(project_order, vec!["project-first", "project-second"]);
         assert_eq!(
             environment_order,
             vec!["env-local", "env-worktree-early", "env-worktree-late"]

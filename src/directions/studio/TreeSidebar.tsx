@@ -201,12 +201,14 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
 
   async function handleProjectCollapseToggle(project: ProjectRecord) {
     resetMessages();
-    const saved = await setProjectSidebarCollapsed(
+    const result = await setProjectSidebarCollapsed(
       project.id,
       !project.sidebarCollapsed,
     );
-    if (!saved) {
+    if (!result.ok) {
       setActionError("Failed to update project collapse state");
+    } else if (result.warningMessage) {
+      setActionError(result.warningMessage);
     }
   }
 

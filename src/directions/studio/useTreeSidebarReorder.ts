@@ -17,13 +17,18 @@ import {
 
 const DRAG_ACTIVATION_DISTANCE = 4;
 
+type ReorderMutationResult = {
+  ok: boolean;
+  warningMessage: string | null;
+};
+
 type UseTreeSidebarReorderOptions = {
   projects: ProjectRecord[];
-  reorderProjects: (projectIds: string[]) => Promise<boolean>;
+  reorderProjects: (projectIds: string[]) => Promise<ReorderMutationResult>;
   reorderWorktreeEnvironments: (
     projectId: string,
     environmentIds: string[],
-  ) => Promise<boolean>;
+  ) => Promise<ReorderMutationResult>;
   resetMessages: () => void;
   setActionError: (message: string) => void;
 };
@@ -184,11 +189,12 @@ export function useTreeSidebarReorder({
       const nextIds = previewProjectIdsRef.current ?? projectIds;
 
       try {
-        if (
-          !listsMatch(nextIds, projectIds) &&
-          !(await reorderProjectsRef.current(nextIds))
-        ) {
-          setActionErrorRef.current("Failed to reorder projects");
+        if (!listsMatch(nextIds, projectIds)) {
+          setMutationActionError(
+            await reorderProjectsRef.current(nextIds),
+            "Failed to reorder projects",
+            setActionErrorRef.current,
+          );
         }
       } finally {
         clearPreviewStateIfOwned(sessionId);
@@ -207,11 +213,12 @@ export function useTreeSidebarReorder({
         previewEnvironmentIdsByProjectRef.current?.[project.id] ?? currentIds;
 
       try {
-        if (
-          !listsMatch(nextIds, currentIds) &&
-          !(await reorderWorktreeEnvironmentsRef.current(project.id, nextIds))
-        ) {
-          setActionErrorRef.current("Failed to reorder worktrees");
+        if (!listsMatch(nextIds, currentIds)) {
+          setMutationActionError(
+            await reorderWorktreeEnvironmentsRef.current(project.id, nextIds),
+            "Failed to reorder worktrees",
+            setActionErrorRef.current,
+          );
         }
       } finally {
         clearPreviewStateIfOwned(sessionId);
@@ -485,9 +492,11 @@ export function useTreeSidebarReorder({
 
     event.preventDefault();
     resetMessagesRef.current();
-    if (!(await reorderProjectsRef.current(nextIds))) {
-      setActionErrorRef.current("Failed to reorder projects");
-    }
+    setMutationActionError(
+      await reorderProjectsRef.current(nextIds),
+      "Failed to reorder projects",
+      setActionErrorRef.current,
+    );
   }
 
   async function handleWorktreeKeyboardReorder(
@@ -501,11 +510,11 @@ export function useTreeSidebarReorder({
 
     event.preventDefault();
     resetMessagesRef.current();
-    if (
-      !(await reorderWorktreeEnvironmentsRef.current(project.id, nextIds))
-    ) {
-      setActionErrorRef.current("Failed to reorder worktrees");
-    }
+    setMutationActionError(
+      await reorderWorktreeEnvironmentsRef.current(project.id, nextIds),
+      "Failed to reorder worktrees",
+      setActionErrorRef.current,
+    );
   }
 
   function projectDragStyle(projectId: string) {
@@ -757,6 +766,21 @@ function dragVisualStatesMatch(
   return (
     right.kind === "environment" && left.environmentId === right.environmentId
   );
+}
+
+function setMutationActionError(
+  result: ReorderMutationResult,
+  fallbackMessage: string,
+  setActionError: (message: string) => void,
+) {
+  if (!result.ok) {
+    setActionError(fallbackMessage);
+    return;
+  }
+
+  if (result.warningMessage) {
+    setActionError(result.warningMessage);
+  }
 }
 
 function reorderByPointerPosition(

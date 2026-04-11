@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as bridge from "../../lib/bridge";
 import {
   makeEnvironment,
+  makeProject,
   makeThread,
   makeWorkspaceSnapshot,
 } from "../../test/fixtures/conversation";
@@ -195,6 +196,73 @@ describe("studioActions", () => {
 
     expect(selectAdjacentEnvironment("previous")).toBe(true);
     expect(useWorkspaceStore.getState().selectedEnvironmentId).toBe("env-3");
+  });
+
+  it("skips collapsed worktrees when navigating environments", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            id: "project-1",
+            environments: [
+              makeEnvironment({
+                id: "env-local-1",
+                projectId: "project-1",
+                kind: "local",
+                isDefault: true,
+              }),
+            ],
+          }),
+          makeProject({
+            id: "project-2",
+            sidebarCollapsed: true,
+            environments: [
+              makeEnvironment({
+                id: "env-local-2",
+                projectId: "project-2",
+                kind: "local",
+                isDefault: true,
+              }),
+              makeEnvironment({
+                id: "env-hidden-2",
+                projectId: "project-2",
+                kind: "managedWorktree",
+                isDefault: false,
+              }),
+            ],
+          }),
+          makeProject({
+            id: "project-3",
+            environments: [
+              makeEnvironment({
+                id: "env-local-3",
+                projectId: "project-3",
+                kind: "local",
+                isDefault: true,
+              }),
+              makeEnvironment({
+                id: "env-visible-3",
+                projectId: "project-3",
+                kind: "managedWorktree",
+                isDefault: false,
+              }),
+            ],
+          }),
+        ],
+      }),
+      selectedProjectId: "project-2",
+      selectedEnvironmentId: "env-hidden-2",
+      selectEnvironment: vi.fn((environmentId: string | null) =>
+        useWorkspaceStore.setState((current) => ({
+          ...current,
+          selectedEnvironmentId: environmentId,
+        })),
+      ),
+    }));
+
+    expect(selectAdjacentEnvironment("next")).toBe(true);
+    expect(useWorkspaceStore.getState().selectedEnvironmentId).toBe("env-local-3");
   });
 
   it("preserves a newer thread selection made while the archive confirmation is open", async () => {
