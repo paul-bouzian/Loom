@@ -33,8 +33,8 @@ use crate::runtime::protocol::{
     build_history_snapshot, clear_streaming_flags, collaboration_mode_from_plan_item_heading,
     collaboration_mode_options_from_response, collaboration_mode_payload, complete_proposed_plan,
     complete_task_plan, conversation_status_from_turn_status, error_snapshot, initialize_params,
-    initialized_notification, loaded_subagents_for_primary, mark_plan_approved,
-    mark_plan_superseded, model_options_from_response, normalize_item,
+    initialized_notification, is_hidden_assistant_control_item, loaded_subagents_for_primary,
+    mark_plan_approved, mark_plan_superseded, model_options_from_response, normalize_item,
     normalize_server_interaction, parse_incoming_message, plan_approval_message,
     proposed_plan_from_item, proposed_plan_from_turn_update, sandbox_policy_value,
     subagents_from_collab_item, task_plan_from_item, task_plan_from_turn_update,
@@ -1742,6 +1742,15 @@ async fn handle_notification(
                             reconcile_snapshot_status(snapshot);
                             return;
                         }
+                        if is_hidden_assistant_control_item(&event.item) {
+                            let item_id = event.item["id"].as_str().unwrap_or_default();
+                            snapshot.items.retain(|item| match item {
+                                ConversationItem::Message(message) => message.id != item_id,
+                                _ => true,
+                            });
+                            reconcile_snapshot_status(snapshot);
+                            return;
+                        }
                         if let Some(item) = normalize_item(Some(&event.turn_id), &event.item).map(|item| {
                             if is_started {
                                 mark_item_streaming(item)
@@ -2712,12 +2721,10 @@ mod tests {
             .take_pending_plan_decision("thread-1")
             .await
             .expect("first consume should succeed");
-        assert!(
-            !consumed
-                .proposed_plan
-                .as_ref()
-                .is_some_and(|plan| plan.is_awaiting_decision)
-        );
+        assert!(!consumed
+            .proposed_plan
+            .as_ref()
+            .is_some_and(|plan| plan.is_awaiting_decision));
 
         let error = session
             .take_pending_plan_decision("thread-1")
@@ -2765,12 +2772,10 @@ mod tests {
             .snapshots_by_thread
             .get("thread-1")
             .expect("snapshot should exist");
-        assert!(
-            snapshot
-                .proposed_plan
-                .as_ref()
-                .is_some_and(|plan| plan.is_awaiting_decision)
-        );
+        assert!(snapshot
+            .proposed_plan
+            .as_ref()
+            .is_some_and(|plan| plan.is_awaiting_decision));
     }
 
     #[tokio::test]

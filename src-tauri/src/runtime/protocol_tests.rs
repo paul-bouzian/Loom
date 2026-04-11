@@ -26,6 +26,12 @@ fn composer() -> ConversationComposerSettings {
     }
 }
 
+fn inter_agent_control_message(agent_path: &str) -> String {
+    format!(
+        "{{\"author\":\"{agent_path}\",\"recipient\":\"/root\",\"other_recipients\":[],\"content\":\"<subagent_notification>\\n{{\\\"agent_path\\\":\\\"{agent_path}\\\",\\\"status\\\":{{\\\"completed\\\":\\\"Done\\\"}}}}\\n</subagent_notification>\",\"trigger_turn\":false}}"
+    )
+}
+
 #[test]
 fn parses_json_rpc_responses_and_notifications() {
     let response = parse_incoming_message(r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#)
@@ -169,6 +175,42 @@ fn builds_history_snapshot_from_thread_turns() {
         item,
         ConversationItem::Tool(tool) if tool.summary.as_deref() == Some("ls")
     )));
+}
+
+#[test]
+fn history_snapshot_skips_hidden_inter_agent_messages() {
+    let snapshot = build_history_snapshot(
+        "thread-1".to_string(),
+        "env-1".to_string(),
+        Some("thr-existing".to_string()),
+        composer(),
+        ThreadWire {
+            id: "thr-existing".to_string(),
+            turns: vec![super::protocol::TurnWire {
+                id: "turn-1".to_string(),
+                status: "completed".to_string(),
+                error: None,
+                items: vec![
+                    json!({
+                        "id": "assistant-control-1",
+                        "type": "agentMessage",
+                        "text": inter_agent_control_message("/root/review_swarm_security")
+                    }),
+                    json!({
+                        "id": "assistant-visible-1",
+                        "type": "agentMessage",
+                        "text": "Visible answer"
+                    }),
+                ],
+            }],
+        },
+    );
+
+    assert_eq!(snapshot.items.len(), 1);
+    assert!(matches!(
+        snapshot.items.first(),
+        Some(ConversationItem::Message(message)) if message.text == "Visible answer"
+    ));
 }
 
 #[test]
