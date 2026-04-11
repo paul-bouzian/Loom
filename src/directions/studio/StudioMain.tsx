@@ -4,6 +4,7 @@ import {
   useWorkspaceStore,
   selectSelectedProject,
   selectSelectedEnvironment,
+  selectSettings,
   selectSelectedThread,
   selectProjects,
 } from "../../stores/workspace-store";
@@ -11,6 +12,7 @@ import { useTerminalStore } from "../../stores/terminal-store";
 import { EnvironmentKindBadge } from "../../shared/EnvironmentKindBadge";
 import { RuntimeIndicator } from "../../shared/RuntimeIndicator";
 import { PanelLeftIcon, PanelRightIcon, TerminalIcon } from "../../shared/Icons";
+import { OpenEnvironmentControl } from "./OpenEnvironmentControl";
 import { ThreadTabs } from "./ThreadTabs";
 import { ThreadConversation } from "./ThreadConversation";
 import { StudioWelcome } from "./StudioWelcome";
@@ -42,6 +44,7 @@ export function StudioMain({
   const selectedProject = useWorkspaceStore(selectSelectedProject);
   const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
   const selectedThread = useWorkspaceStore(selectSelectedThread);
+  const settings = useWorkspaceStore(selectSettings);
   const isThreadView = Boolean(selectedThread && selectedEnvironment);
 
   const terminalVisible = useTerminalStore((s) => s.visible);
@@ -91,6 +94,10 @@ export function StudioMain({
           <ThreadTabs />
         </div>
         <div className="studio-main__toolbar-actions">
+          <OpenEnvironmentControl
+            environmentId={selectedEnvironment?.id ?? null}
+            settings={settings}
+          />
           <button
             type="button"
             className={`studio-main__toggle-terminal ${terminalVisible ? "studio-main__toggle-terminal--active" : ""}`}

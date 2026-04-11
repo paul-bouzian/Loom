@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use tauri::State;
 use tracing::warn;
 
@@ -14,6 +15,13 @@ use crate::services::workspace::{
     SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest,
 };
 use crate::state::AppState;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenEnvironmentInput {
+    pub environment_id: String,
+    pub target_id: Option<String>,
+}
 
 #[tauri::command]
 pub async fn get_workspace_snapshot(
@@ -211,4 +219,25 @@ pub async fn get_environment_codex_rate_limits(
         .runtime
         .read_account_rate_limits(&environment_id, &environment_path, codex_binary_path)
         .await?)
+}
+
+#[tauri::command]
+pub fn open_environment(
+    input: OpenEnvironmentInput,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let environment_id = input.environment_id.trim();
+    if environment_id.is_empty() {
+        return Err(crate::error::AppError::Validation(
+            "Environment id is required.".to_string(),
+        )
+        .into());
+    }
+    let context = state
+        .workspace
+        .environment_open_context(environment_id, input.target_id.as_deref())?;
+    Ok(crate::services::open::open_environment(
+        &context.environment_path,
+        &context.target,
+    )?)
 }

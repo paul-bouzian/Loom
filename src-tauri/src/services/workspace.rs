@@ -8,7 +8,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::domain::conversation::ConversationComposerSettings;
-use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch};
+use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch, OpenTarget};
 use crate::domain::shortcuts::ShortcutSettings;
 use crate::domain::workspace::{
     EnvironmentKind, EnvironmentPullRequestSnapshot, EnvironmentRecord,
@@ -49,6 +49,12 @@ pub struct RenameProjectRequest {
 pub struct UpdateProjectSettingsRequest {
     pub project_id: String,
     pub patch: ProjectSettingsPatch,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnvironmentOpenContext {
+    pub environment_path: PathBuf,
+    pub target: OpenTarget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,6 +240,7 @@ impl WorkspaceService {
         let transaction = connection.transaction()?;
         let mut settings = self.read_or_seed_settings(&transaction)?;
         settings.apply_patch(patch);
+        settings.normalize_for_update().map_err(AppError::Validation)?;
         settings
             .validate()
             .map_err(AppError::Validation)?;
@@ -1069,6 +1076,32 @@ impl WorkspaceService {
         Ok((environment_path, settings.codex_binary_path))
     }
 
+    pub fn environment_open_context(
+        &self,
+        environment_id: &str,
+        target_id: Option<&str>,
+    ) -> AppResult<EnvironmentOpenContext> {
+        let connection = self.database.open()?;
+        let environment_path = connection
+            .query_row(
+                "SELECT path FROM environments WHERE id = ?1",
+                params![environment_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::NotFound("Environment not found.".to_string()))?;
+        let settings = self.read_or_seed_settings(&connection)?;
+        let target = settings
+            .resolve_open_target(target_id)
+            .map_err(AppError::Validation)?
+            .clone();
+
+        Ok(EnvironmentOpenContext {
+            environment_path: PathBuf::from(environment_path),
+            target,
+        })
+    }
+
     pub fn environment_git_context(
         &self,
         environment_id: &str,
@@ -1834,9 +1867,25 @@ impl WorkspaceService {
                     return Ok(GlobalSettings::default());
                 }
             };
+            let mut repaired = settings.normalize_for_read();
             if let Err(error) = settings.validate() {
                 warn!("stored global settings had invalid shortcuts, restoring defaults: {error}");
                 settings.shortcuts = ShortcutSettings::default();
+                repaired = true;
+            }
+            if repaired {
+                let payload = serde_json::to_string(&settings)
+                    .map_err(|error| AppError::Validation(error.to_string()))?;
+                connection.execute(
+                    "
+                    INSERT INTO global_settings (singleton_key, payload_json, updated_at)
+                    VALUES ('global', ?1, ?2)
+                    ON CONFLICT(singleton_key) DO UPDATE SET
+                      payload_json = excluded.payload_json,
+                      updated_at = excluded.updated_at
+                    ",
+                    params![payload, Utc::now()],
+                )?;
             }
             return Ok(settings);
         }
@@ -3056,6 +3105,46 @@ mod tests {
 
         assert_eq!(snapshot.settings.default_model, "gpt-5.4-mini");
         assert_eq!(snapshot.settings.shortcuts, ShortcutSettings::default());
+    }
+
+    #[test]
+    fn snapshot_repairs_invalid_open_targets_without_losing_other_values() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let mut settings = GlobalSettings {
+            default_model: "gpt-5.4-mini".to_string(),
+            ..GlobalSettings::default()
+        };
+        settings.open_targets.clear();
+        settings.default_open_target_id = "missing".to_string();
+
+        harness
+            .open_connection()
+            .execute(
+                "
+                INSERT INTO global_settings (singleton_key, payload_json, updated_at)
+                VALUES ('global', ?1, ?2)
+                ON CONFLICT(singleton_key) DO UPDATE SET
+                  payload_json = excluded.payload_json,
+                  updated_at = excluded.updated_at
+                ",
+                params![
+                    serde_json::to_string(&settings).expect("settings payload"),
+                    Utc::now(),
+                ],
+            )
+            .expect("settings should be persisted");
+
+        let snapshot = harness.service.snapshot(Vec::new()).expect("snapshot");
+
+        assert_eq!(snapshot.settings.default_model, "gpt-5.4-mini");
+        assert!(!snapshot.settings.open_targets.is_empty());
+        assert!(
+            snapshot
+                .settings
+                .open_targets
+                .iter()
+                .any(|target| target.id == snapshot.settings.default_open_target_id)
+        );
     }
 
     struct WorkspaceHarness {

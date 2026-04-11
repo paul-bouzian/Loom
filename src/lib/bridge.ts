@@ -33,6 +33,7 @@ import type {
   ManagedWorktreeCreateResult,
   EnvironmentVoiceStatusSnapshot,
   FirstPromptRenameFailureEventPayload,
+  OpenEnvironmentInput,
   ProjectRecord,
   ReorderProjectsRequest,
   ReorderWorktreeEnvironmentsRequest,
@@ -295,6 +296,16 @@ export function updateGlobalSettings(
   patch: GlobalSettingsPatch,
 ): Promise<GlobalSettings> {
   return invoke<GlobalSettings>("update_global_settings", { patch });
+}
+
+export function openEnvironment(
+  input: OpenEnvironmentInput,
+): Promise<void> {
+  return invoke<void>("open_environment", { input });
+}
+
+export function getOpenAppIcon(appName: string): Promise<string | null> {
+  return invoke<string | null>("get_open_app_icon", { appName });
 }
 
 export function addProject(

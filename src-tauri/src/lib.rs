@@ -73,6 +73,7 @@ pub fn run() {
             commands::git_review::push_git,
             commands::git_review::generate_git_commit_message,
             commands::system::get_bootstrap_status,
+            commands::system::get_open_app_icon,
             commands::system::get_project_icon,
             commands::system::read_image_as_data_url,
             commands::system::restart_app,
@@ -101,6 +102,7 @@ pub fn run() {
             commands::workspace::start_environment_runtime,
             commands::workspace::stop_environment_runtime,
             commands::workspace::get_environment_codex_rate_limits,
+            commands::workspace::open_environment,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

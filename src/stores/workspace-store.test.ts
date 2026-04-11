@@ -4,6 +4,7 @@ import * as bridge from "../lib/bridge";
 import type { WorkspaceEventPayload } from "../lib/types";
 import {
   makeEnvironment,
+  makeGlobalSettings,
   makeProject,
   makeThread,
   makeWorkspaceSnapshot,
@@ -19,6 +20,7 @@ vi.mock("../lib/bridge", () => ({
   getWorkspaceSnapshot: vi.fn(),
   listenToWorkspaceEvents: vi.fn(),
   killTerminal: vi.fn().mockResolvedValue(undefined),
+  updateGlobalSettings: vi.fn(),
   reorderProjects: vi.fn(),
   reorderWorktreeEnvironments: vi.fn(),
   setProjectSidebarCollapsed: vi.fn(),
@@ -43,6 +45,7 @@ beforeEach(() => {
     byEnv: {},
     knownEnvironmentIds: [],
   });
+  mockedBridge.updateGlobalSettings.mockResolvedValue(makeGlobalSettings());
   useWorkspaceStore.setState(initialWorkspaceState, true);
   useWorkspaceStore.setState({ loadingState: "ready" });
 });
@@ -290,6 +293,7 @@ describe("workspace store", () => {
       ok: true,
       refreshed: true,
       warningMessage: null,
+      errorMessage: null,
     });
 
     assertBridgeCall();
@@ -348,6 +352,7 @@ describe("workspace store", () => {
       ok: false,
       refreshed: false,
       warningMessage: null,
+      errorMessage: expectedError,
     });
 
     expect(refreshSnapshot).not.toHaveBeenCalled();
@@ -445,6 +450,7 @@ describe("workspace store", () => {
         ok: true,
         refreshed: false,
         warningMessage: expectedWarning,
+        errorMessage: null,
       });
 
       expect(refreshSnapshot).toHaveBeenCalledTimes(1);
@@ -498,6 +504,67 @@ describe("workspace store", () => {
     const tab = useTerminalStore.getState().byEnv["env-worktree"]?.tabs[0];
     expect(tab?.cwd).toBe("/tmp/add-themes");
     expect(tab?.title).toBe("add-themes");
+  });
+
+  it("updates global settings through the shared mutation helper", async () => {
+    mockedBridge.updateGlobalSettings.mockResolvedValue(
+      makeGlobalSettings({
+        defaultOpenTargetId: "zed",
+      }),
+    );
+    mockedBridge.getWorkspaceSnapshot.mockResolvedValue(
+      makeWorkspaceSnapshot({
+        settings: makeGlobalSettings({
+          defaultOpenTargetId: "zed",
+        }),
+      }),
+    );
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot(),
+    }));
+
+    const result = await useWorkspaceStore
+      .getState()
+      .updateGlobalSettings({ defaultOpenTargetId: "zed" });
+
+    expect(mockedBridge.updateGlobalSettings).toHaveBeenCalledWith({
+      defaultOpenTargetId: "zed",
+    });
+    expect(result).toEqual({
+      ok: true,
+      refreshed: true,
+      warningMessage: null,
+      errorMessage: null,
+      settings: makeGlobalSettings({
+        defaultOpenTargetId: "zed",
+      }),
+    });
+    expect(
+      useWorkspaceStore.getState().snapshot?.settings.defaultOpenTargetId,
+    ).toBe("zed");
+  });
+
+  it("returns a warning when settings save succeeds but refresh fails", async () => {
+    mockedBridge.updateGlobalSettings.mockResolvedValue(makeGlobalSettings());
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot(),
+      refreshSnapshot: vi.fn(async () => false),
+    }));
+
+    const result = await useWorkspaceStore
+      .getState()
+      .updateGlobalSettings({ defaultOpenTargetId: "cursor" });
+
+    expect(result).toEqual({
+      ok: true,
+      refreshed: false,
+      warningMessage:
+        "Settings were saved, but the workspace snapshot could not be refreshed.",
+      errorMessage: null,
+      settings: makeGlobalSettings(),
+    });
   });
 
   it("refreshes the workspace when a workspace event arrives", async () => {

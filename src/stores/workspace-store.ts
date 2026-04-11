@@ -17,6 +17,11 @@ type WorkspaceMutationResult = {
   ok: boolean;
   refreshed: boolean;
   warningMessage: string | null;
+  errorMessage: string | null;
+};
+
+type WorkspaceSettingsMutationResult = WorkspaceMutationResult & {
+  settings: GlobalSettings | null;
 };
 
 type WorkspaceStateUpdate =
@@ -40,6 +45,9 @@ type WorkspaceState = {
   initialize: () => Promise<void>;
   initializeListener: () => Promise<void>;
   refreshSnapshot: () => Promise<boolean>;
+  updateGlobalSettings: (
+    patch: Parameters<typeof bridge.updateGlobalSettings>[0],
+  ) => Promise<WorkspaceSettingsMutationResult>;
   removeThread: (threadId: string) => boolean;
   reorderProjects: (projectIds: string[]) => Promise<WorkspaceMutationResult>;
   reorderWorktreeEnvironments: (
@@ -139,6 +147,51 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({ error: message });
       return false;
     }
+  },
+
+  updateGlobalSettings: async (patch) => {
+    let settings: GlobalSettings;
+    try {
+      settings = await bridge.updateGlobalSettings(patch);
+    } catch (cause: unknown) {
+      const message =
+        cause instanceof Error ? cause.message : "Failed to save settings";
+      set({ error: message });
+      return {
+        ok: false,
+        refreshed: false,
+        warningMessage: null,
+        errorMessage: message,
+        settings: null,
+      };
+    }
+
+    applySnapshotMutation(set, (snapshot) => ({
+      ...snapshot,
+      settings,
+    }));
+
+    if (await get().refreshSnapshot()) {
+      set({ error: null });
+      return {
+        ok: true,
+        refreshed: true,
+        warningMessage: null,
+        errorMessage: null,
+        settings,
+      };
+    }
+
+    const warningMessage =
+      "Settings were saved, but the workspace snapshot could not be refreshed.";
+    set({ error: warningMessage });
+    return {
+      ok: true,
+      refreshed: false,
+      warningMessage,
+      errorMessage: null,
+      settings,
+    };
   },
 
   removeThread: (threadId) => {
@@ -261,14 +314,24 @@ async function runWorkspaceMutation(
     const message =
       cause instanceof Error ? cause.message : options.writeFailureMessage;
     set({ error: message });
-    return { ok: false, refreshed: false, warningMessage: null };
+    return {
+      ok: false,
+      refreshed: false,
+      warningMessage: null,
+      errorMessage: message,
+    };
   }
 
   applySnapshotMutation(set, options.applySnapshot);
 
   if (await get().refreshSnapshot()) {
     set({ error: null });
-    return { ok: true, refreshed: true, warningMessage: null };
+    return {
+      ok: true,
+      refreshed: true,
+      warningMessage: null,
+      errorMessage: null,
+    };
   }
 
   set({ error: options.refreshFailureMessage });
@@ -276,6 +339,7 @@ async function runWorkspaceMutation(
     ok: true,
     refreshed: false,
     warningMessage: options.refreshFailureMessage,
+    errorMessage: null,
   };
 }
 

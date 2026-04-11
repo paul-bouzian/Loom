@@ -9,6 +9,7 @@ import type {
   ReasoningEffort,
 } from "../../lib/types";
 import { ProjectSettingsTab } from "./ProjectSettingsTab";
+import { OpenInSettingsTab } from "./OpenInSettingsTab";
 import { ShortcutsSettingsTab } from "./ShortcutsSettingsTab";
 import { SettingsUpdateSection } from "./SettingsUpdateSection";
 import {
@@ -38,7 +39,7 @@ type Props = {
 const SETTINGS_PICKER_Z_INDEX = 1310;
 const SETTINGS_REFRESH_ERROR =
   "Settings were saved, but the workspace snapshot could not be refreshed.";
-type SettingsTab = "codex" | "shortcuts" | "project";
+type SettingsTab = "codex" | "openIn" | "shortcuts" | "project";
 
 export function SettingsDialog({ open, onClose }: Props) {
   const settings = useWorkspaceStore(selectSettings);
@@ -51,6 +52,7 @@ export function SettingsDialog({ open, onClose }: Props) {
     selectConversationCapabilities(selectedEnvironmentId),
   );
   const refreshSnapshot = useWorkspaceStore((state) => state.refreshSnapshot);
+  const updateGlobalSettings = useWorkspaceStore((state) => state.updateGlobalSettings);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("codex");
   const [savingGlobalSettings, setSavingGlobalSettings] = useState(false);
@@ -115,8 +117,13 @@ export function SettingsDialog({ open, onClose }: Props) {
     setSavingGlobalSettings(true);
     try {
       setActionError(null);
-      await bridge.updateGlobalSettings(patch);
-      await refreshWorkspaceOrThrow();
+      const result = await updateGlobalSettings(patch);
+      if (!result.ok) {
+        throw new Error(result.errorMessage ?? "Failed to save settings");
+      }
+      if (result.warningMessage) {
+        setActionError(result.warningMessage);
+      }
     } catch (cause: unknown) {
       setActionError(
         cause instanceof Error ? cause.message : "Failed to save settings",
@@ -201,6 +208,16 @@ export function SettingsDialog({ open, onClose }: Props) {
             <button
               type="button"
               className={`settings-dialog__tab ${
+                activeTab === "openIn" ? "settings-dialog__tab--active" : ""
+              }`}
+              aria-current={activeTab === "openIn" ? "page" : undefined}
+              onClick={() => setActiveTab("openIn")}
+            >
+              Open In
+            </button>
+            <button
+              type="button"
+              className={`settings-dialog__tab ${
                 activeTab === "shortcuts" ? "settings-dialog__tab--active" : ""
               }`}
               aria-current={activeTab === "shortcuts" ? "page" : undefined}
@@ -242,6 +259,15 @@ export function SettingsDialog({ open, onClose }: Props) {
               />
             ) : null}
             {activeTab === "shortcuts" && !settings ? (
+              <p className="settings-dialog__empty">Loading...</p>
+            ) : null}
+            {activeTab === "openIn" && settings ? (
+              <OpenInSettingsTab
+                targets={settings.openTargets}
+                defaultTargetId={settings.defaultOpenTargetId}
+              />
+            ) : null}
+            {activeTab === "openIn" && !settings ? (
               <p className="settings-dialog__empty">Loading...</p>
             ) : null}
             {activeTab === "project" ? (
