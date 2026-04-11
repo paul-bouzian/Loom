@@ -219,7 +219,11 @@ async function runWorkspaceMutation(
 ) {
   try {
     await run();
-    return await get().refreshSnapshot();
+    const refreshed = await get().refreshSnapshot();
+    if (refreshed) {
+      set({ error: null });
+    }
+    return refreshed;
   } catch (cause: unknown) {
     const message =
       cause instanceof Error ? cause.message : fallbackMessage;

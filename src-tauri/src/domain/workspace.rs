@@ -255,7 +255,8 @@ mod tests {
 
     use super::{
         EnvironmentKind, EnvironmentRecord, FirstPromptRenameFailureEvent, ProjectSettings,
-        ProjectSettingsPatch, PullRequestState, RuntimeState, RuntimeStatusSnapshot,
+        ProjectRecord, ProjectSettingsPatch, PullRequestState, RuntimeState,
+        RuntimeStatusSnapshot,
     };
 
     #[test]
@@ -318,6 +319,27 @@ mod tests {
         let payload = serde_json::to_value(PullRequestState::Merged)
             .expect("pull request state should serialize");
         assert_eq!(payload, Value::String("merged".to_string()));
+    }
+
+    #[test]
+    fn project_record_serializes_sidebar_collapsed_with_camel_case_key() {
+        let payload = serde_json::to_value(ProjectRecord {
+            id: "project-1".to_string(),
+            name: "Loom".to_string(),
+            root_path: "/tmp/loom".to_string(),
+            settings: ProjectSettings::default(),
+            sidebar_collapsed: true,
+            created_at: parse_datetime("2026-04-08T12:00:00Z"),
+            updated_at: parse_datetime("2026-04-08T12:00:00Z"),
+            environments: Vec::new(),
+        })
+        .expect("project should serialize");
+        let object = payload
+            .as_object()
+            .expect("project payload should be a JSON object");
+
+        assert_eq!(object.get("sidebarCollapsed"), Some(&Value::Bool(true)));
+        assert!(!object.contains_key("sidebar_collapsed"));
     }
 
     #[test]

@@ -29,6 +29,7 @@ type UseTreeSidebarReorderOptions = {
 };
 
 type PointerDragSessionBase = {
+  sessionId: number;
   pointerId: number;
   startX: number;
   startY: number;
@@ -83,7 +84,9 @@ export function useTreeSidebarReorder({
   const [dragVisualState, setDragVisualState] =
     useState<DragVisualState | null>(null);
   const pointerSessionRef = useRef<PointerDragSession | null>(null);
+  const nextSessionIdRef = useRef(0);
   const dragVisualStateRef = useRef<DragVisualState | null>(null);
+  const previewOwnerSessionIdRef = useRef<number | null>(null);
   const previewProjectIdsRef = useRef<string[] | null>(null);
   const previewEnvironmentIdsByProjectRef = useRef<Record<string, string[]> | null>(
     null,
@@ -120,15 +123,34 @@ export function useTreeSidebarReorder({
     [],
   );
 
-  const clearDragState = useCallback(() => {
-    pointerSessionRef.current = null;
+  const clearPreviewState = useCallback(() => {
+    previewOwnerSessionIdRef.current = null;
     previewProjectIdsRef.current = null;
     previewEnvironmentIdsByProjectRef.current = null;
-    setDragState(null);
     setPreviewProjectIds(null);
     setPreviewEnvironmentIdsByProject(null);
+  }, []);
+
+  const clearDragVisualState = useCallback(() => {
+    setDragState(null);
     setNextDragVisualState(null);
   }, [setNextDragVisualState]);
+
+  const clearDragState = useCallback(() => {
+    pointerSessionRef.current = null;
+    clearPreviewState();
+    clearDragVisualState();
+  }, [clearDragVisualState, clearPreviewState]);
+
+  const clearPreviewStateIfOwned = useCallback(
+    (sessionId: number) => {
+      if (previewOwnerSessionIdRef.current !== sessionId) {
+        return;
+      }
+      clearPreviewState();
+    },
+    [clearPreviewState],
+  );
 
   const syncDragVisualState = useCallback(() => {
     const session = pointerSessionRef.current;
@@ -157,7 +179,7 @@ export function useTreeSidebarReorder({
   ]);
 
   useEffect(() => {
-    async function persistProjectReorder() {
+    async function persistProjectReorder(sessionId: number) {
       const projectIds = projectsRef.current.map((project) => project.id);
       const nextIds = previewProjectIdsRef.current ?? projectIds;
 
@@ -169,14 +191,14 @@ export function useTreeSidebarReorder({
           setActionErrorRef.current("Failed to reorder projects");
         }
       } finally {
-        clearDragState();
+        clearPreviewStateIfOwned(sessionId);
       }
     }
 
-    async function persistWorktreeReorder(projectId: string) {
+    async function persistWorktreeReorder(projectId: string, sessionId: number) {
       const project = findProject(projectsRef.current, projectId);
       if (!project) {
-        clearDragState();
+        clearPreviewStateIfOwned(sessionId);
         return;
       }
 
@@ -192,7 +214,7 @@ export function useTreeSidebarReorder({
           setActionErrorRef.current("Failed to reorder worktrees");
         }
       } finally {
-        clearDragState();
+        clearPreviewStateIfOwned(sessionId);
       }
     }
 
@@ -218,24 +240,34 @@ export function useTreeSidebarReorder({
         resetMessagesRef.current();
 
         if (session.kind === "project") {
+          const projectIds =
+            previewProjectIdsRef.current ??
+            projectsRef.current.map((project) => project.id);
           setDragState({ kind: "project", projectId: session.projectId });
-          setProjectPreview(projectsRef.current.map((project) => project.id));
           setEnvironmentPreviewMap(null);
+          setProjectPreview(projectIds, session.sessionId);
         } else {
           const project = findProject(projectsRef.current, session.projectId);
           if (!project) {
             clearDragState();
             return;
           }
+          const environmentIds =
+            previewEnvironmentIdsByProjectRef.current?.[project.id] ??
+            worktreeEnvironmentIds(project);
           setDragState({
             kind: "environment",
             projectId: session.projectId,
             environmentId: session.environmentId,
           });
           setProjectPreview(null);
-          setEnvironmentPreviewMap({
-            [project.id]: worktreeEnvironmentIds(project),
-          });
+          setEnvironmentPreviewMap(
+            {
+              ...(previewEnvironmentIdsByProjectRef.current ?? {}),
+              [project.id]: environmentIds,
+            },
+            session.sessionId,
+          );
         }
       }
 
@@ -252,7 +284,7 @@ export function useTreeSidebarReorder({
           event.clientY,
         );
         if (!listsMatch(nextIds, projectIds)) {
-          setProjectPreview(nextIds);
+          setProjectPreview(nextIds, session.sessionId);
         }
       } else {
         const project = findProject(projectsRef.current, session.projectId);
@@ -272,10 +304,13 @@ export function useTreeSidebarReorder({
         );
 
         if (!listsMatch(nextIds, environmentIds)) {
-          setEnvironmentPreviewMap({
-            ...(previewEnvironmentIdsByProjectRef.current ?? {}),
-            [project.id]: nextIds,
-          });
+          setEnvironmentPreviewMap(
+            {
+              ...(previewEnvironmentIdsByProjectRef.current ?? {}),
+              [project.id]: nextIds,
+            },
+            session.sessionId,
+          );
         }
       }
 
@@ -309,12 +344,13 @@ export function useTreeSidebarReorder({
         return;
       }
 
+      clearDragVisualState();
       suppressClickUntilRef.current = Date.now() + 250;
 
       if (session.kind === "project") {
-        void persistProjectReorder();
+        void persistProjectReorder(session.sessionId);
       } else {
-        void persistWorktreeReorder(session.projectId);
+        void persistWorktreeReorder(session.projectId, session.sessionId);
       }
     }
 
@@ -327,16 +363,31 @@ export function useTreeSidebarReorder({
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerCancel);
     };
-  }, [clearDragState, setNextDragVisualState]);
+  }, [
+    clearDragState,
+    clearDragVisualState,
+    clearPreviewStateIfOwned,
+    setNextDragVisualState,
+  ]);
 
-  function setProjectPreview(nextProjectIds: string[] | null) {
+  function setProjectPreview(
+    nextProjectIds: string[] | null,
+    sessionId?: number,
+  ) {
+    if (nextProjectIds && sessionId !== undefined) {
+      previewOwnerSessionIdRef.current = sessionId;
+    }
     previewProjectIdsRef.current = nextProjectIds;
     setPreviewProjectIds(nextProjectIds);
   }
 
   function setEnvironmentPreviewMap(
     nextEnvironmentIdsByProject: Record<string, string[]> | null,
+    sessionId?: number,
   ) {
+    if (nextEnvironmentIdsByProject && sessionId !== undefined) {
+      previewOwnerSessionIdRef.current = sessionId;
+    }
     previewEnvironmentIdsByProjectRef.current = nextEnvironmentIdsByProject;
     setPreviewEnvironmentIdsByProject(nextEnvironmentIdsByProject);
   }
@@ -386,10 +437,12 @@ export function useTreeSidebarReorder({
     }
 
     pointerSessionRef.current = createProjectPointerSession(
+      nextSessionIdRef.current + 1,
       projectId,
       event,
       projectItemRefs.current.get(projectId) ?? event.currentTarget,
     );
+    nextSessionIdRef.current = pointerSessionRef.current.sessionId;
     if ("setPointerCapture" in event.currentTarget) {
       event.currentTarget.setPointerCapture(event.pointerId);
     }
@@ -405,12 +458,14 @@ export function useTreeSidebarReorder({
     }
 
     pointerSessionRef.current = createEnvironmentPointerSession(
+      nextSessionIdRef.current + 1,
       project.id,
       environmentId,
       event,
       environmentItemRefs.current.get(project.id)?.get(environmentId) ??
         event.currentTarget,
     );
+    nextSessionIdRef.current = pointerSessionRef.current.sessionId;
     if ("setPointerCapture" in event.currentTarget) {
       event.currentTarget.setPointerCapture(event.pointerId);
     }
@@ -542,12 +597,14 @@ function shouldIgnorePointerDown(event: ReactPointerEvent<HTMLElement>) {
 }
 
 function createProjectPointerSession(
+  sessionId: number,
   projectId: string,
   event: ReactPointerEvent<HTMLElement>,
   item: HTMLElement,
 ): PointerDragSession {
   const rect = item.getBoundingClientRect();
   return {
+    sessionId,
     kind: "project",
     projectId,
     pointerId: event.pointerId,
@@ -562,6 +619,7 @@ function createProjectPointerSession(
 }
 
 function createEnvironmentPointerSession(
+  sessionId: number,
   projectId: string,
   environmentId: string,
   event: ReactPointerEvent<HTMLElement>,
@@ -569,6 +627,7 @@ function createEnvironmentPointerSession(
 ): PointerDragSession {
   const rect = item.getBoundingClientRect();
   return {
+    sessionId,
     kind: "environment",
     projectId,
     environmentId,

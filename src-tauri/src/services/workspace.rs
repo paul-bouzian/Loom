@@ -404,6 +404,7 @@ impl WorkspaceService {
         &self,
         input: ReorderWorktreeEnvironmentsRequest,
     ) -> AppResult<()> {
+        validate_non_blank_id(&input.project_id, "project")?;
         let mut connection = self.database.open()?;
         let transaction = connection.transaction()?;
         validate_unique_ids(&input.environment_ids, "environment")?;
@@ -444,6 +445,7 @@ impl WorkspaceService {
         &self,
         input: SetProjectSidebarCollapsedRequest,
     ) -> AppResult<()> {
+        validate_non_blank_id(&input.project_id, "project")?;
         let connection = self.database.open()?;
         let collapsed = if input.collapsed { 1_i64 } else { 0_i64 };
         let affected = connection.execute(
@@ -1945,12 +1947,18 @@ fn branch_ref_exists(branch_refs: &HashSet<String>, branch_name: &str) -> bool {
     })
 }
 
+fn validate_non_blank_id(id: &str, label: &str) -> AppResult<()> {
+    if id.trim().is_empty() {
+        return Err(AppError::Validation(format!("{label} id cannot be empty.")));
+    }
+
+    Ok(())
+}
+
 fn validate_unique_ids(ids: &[String], label: &str) -> AppResult<()> {
     let mut seen = HashSet::new();
     for id in ids {
-        if id.trim().is_empty() {
-            return Err(AppError::Validation(format!("{label} id cannot be empty.")));
-        }
+        validate_non_blank_id(id, label)?;
         if !seen.insert(id.as_str()) {
             return Err(AppError::Validation(format!(
                 "{label} reorder payload contains duplicate ids."
@@ -2988,6 +2996,32 @@ mod tests {
             local_environment_error
                 .to_string()
                 .contains("unknown worktree")
+        );
+
+        let blank_project_error = harness
+            .service
+            .reorder_worktree_environments(ReorderWorktreeEnvironmentsRequest {
+                project_id: "   ".to_string(),
+                environment_ids: Vec::new(),
+            })
+            .expect_err("blank project id should fail");
+        assert!(
+            blank_project_error
+                .to_string()
+                .contains("project id cannot be empty")
+        );
+
+        let blank_collapse_error = harness
+            .service
+            .set_project_sidebar_collapsed(SetProjectSidebarCollapsedRequest {
+                project_id: "   ".to_string(),
+                collapsed: true,
+            })
+            .expect_err("blank project id should fail");
+        assert!(
+            blank_collapse_error
+                .to_string()
+                .contains("project id cannot be empty")
         );
     }
 

@@ -127,6 +127,14 @@ function stubVerticalRects(
   });
 }
 
+function createDeferred() {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("TreeSidebar", () => {
   it("creates a managed worktree from the project-row plus button", async () => {
     const updatedSnapshot = makeWorkspaceSnapshot({
@@ -764,7 +772,9 @@ describe("TreeSidebar", () => {
       projectId: "project-1",
       collapsed: true,
     });
-    expect(refreshSnapshot).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(refreshSnapshot).toHaveBeenCalled();
+    });
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "fuzzy-tiger" })).toBeNull();
     });
@@ -918,6 +928,228 @@ describe("TreeSidebar", () => {
     await waitFor(() => {
       expect(mockedBridge.reorderProjects).toHaveBeenCalledWith({
         projectIds: ["project-b", "project-a"],
+      });
+    });
+  });
+
+  it("clears project drag visuals immediately on drop", async () => {
+    const persist = createDeferred();
+    mockedBridge.reorderProjects.mockImplementationOnce(() => persist.promise);
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            id: "project-a",
+            name: "First",
+            environments: [
+              makeEnvironment({
+                id: "env-a",
+                projectId: "project-a",
+                kind: "local",
+                isDefault: true,
+              }),
+            ],
+          }),
+          makeProject({
+            id: "project-b",
+            name: "Second",
+            environments: [
+              makeEnvironment({
+                id: "env-b",
+                projectId: "project-b",
+                kind: "local",
+                isDefault: true,
+              }),
+            ],
+          }),
+        ],
+      }),
+    }));
+
+    const { container } = renderSidebar();
+    const projectGroups =
+      container.querySelectorAll<HTMLElement>(".project-group");
+    const projectHeaders = container.querySelectorAll<HTMLElement>(
+      ".project-group__header-shell",
+    );
+    stubVerticalRects(Array.from(projectGroups), { height: 40, gap: 10 });
+
+    fireEvent.pointerDown(projectHeaders[1], {
+      button: 0,
+      buttons: 1,
+      clientX: 12,
+      clientY: 56,
+      isPrimary: true,
+      pointerId: 20,
+    });
+    fireEvent.pointerMove(window, {
+      buttons: 1,
+      clientX: 12,
+      clientY: 8,
+      isPrimary: true,
+      pointerId: 20,
+    });
+
+    await waitFor(() => {
+      expect(
+        textContentList(container.querySelectorAll(".project-group__name")),
+      ).toEqual(["Second", "First"]);
+    });
+
+    fireEvent.pointerUp(window, {
+      clientX: 12,
+      clientY: 8,
+      isPrimary: true,
+      pointerId: 20,
+    });
+
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLElement>(".project-group"),
+        (group) => group.style.transform,
+      ),
+    ).toEqual(["", ""]);
+
+    persist.resolve();
+    await waitFor(() => {
+      expect(mockedBridge.reorderProjects).toHaveBeenCalledWith({
+        projectIds: ["project-b", "project-a"],
+      });
+    });
+  });
+
+  it("keeps a newer project drag preview while an earlier reorder persists", async () => {
+    const firstPersist = createDeferred();
+    const secondPersist = createDeferred();
+    mockedBridge.reorderProjects
+      .mockImplementationOnce(() => firstPersist.promise)
+      .mockImplementationOnce(() => secondPersist.promise);
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            id: "project-a",
+            name: "First",
+            environments: [
+              makeEnvironment({
+                id: "env-a",
+                projectId: "project-a",
+                kind: "local",
+                isDefault: true,
+              }),
+            ],
+          }),
+          makeProject({
+            id: "project-b",
+            name: "Second",
+            environments: [
+              makeEnvironment({
+                id: "env-b",
+                projectId: "project-b",
+                kind: "local",
+                isDefault: true,
+              }),
+            ],
+          }),
+          makeProject({
+            id: "project-c",
+            name: "Third",
+            environments: [
+              makeEnvironment({
+                id: "env-c",
+                projectId: "project-c",
+                kind: "local",
+                isDefault: true,
+              }),
+            ],
+          }),
+        ],
+      }),
+    }));
+
+    const { container } = renderSidebar();
+    const projectGroups = () =>
+      Array.from(container.querySelectorAll<HTMLElement>(".project-group"));
+    const projectHeaders = () =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(".project-group__header-shell"),
+      );
+    stubVerticalRects(projectGroups(), { height: 40, gap: 10 });
+
+    fireEvent.pointerDown(projectHeaders()[2], {
+      button: 0,
+      buttons: 1,
+      clientX: 12,
+      clientY: 106,
+      isPrimary: true,
+      pointerId: 21,
+    });
+    fireEvent.pointerMove(window, {
+      buttons: 1,
+      clientX: 12,
+      clientY: 8,
+      isPrimary: true,
+      pointerId: 21,
+    });
+
+    await waitFor(() => {
+      expect(
+        textContentList(container.querySelectorAll(".project-group__name")),
+      ).toEqual(["Third", "First", "Second"]);
+    });
+
+    fireEvent.pointerUp(window, {
+      clientX: 12,
+      clientY: 8,
+      isPrimary: true,
+      pointerId: 21,
+    });
+
+    stubVerticalRects(projectGroups(), { height: 40, gap: 10 });
+    fireEvent.pointerDown(projectHeaders()[2], {
+      button: 0,
+      buttons: 1,
+      clientX: 12,
+      clientY: 106,
+      isPrimary: true,
+      pointerId: 22,
+    });
+    fireEvent.pointerMove(window, {
+      buttons: 1,
+      clientX: 12,
+      clientY: 8,
+      isPrimary: true,
+      pointerId: 22,
+    });
+
+    await waitFor(() => {
+      expect(
+        textContentList(container.querySelectorAll(".project-group__name")),
+      ).toEqual(["Second", "Third", "First"]);
+    });
+
+    firstPersist.resolve();
+
+    await waitFor(() => {
+      expect(
+        textContentList(container.querySelectorAll(".project-group__name")),
+      ).toEqual(["Second", "Third", "First"]);
+    });
+
+    fireEvent.pointerUp(window, {
+      clientX: 12,
+      clientY: 8,
+      isPrimary: true,
+      pointerId: 22,
+    });
+
+    secondPersist.resolve();
+
+    await waitFor(() => {
+      expect(mockedBridge.reorderProjects).toHaveBeenNthCalledWith(2, {
+        projectIds: ["project-b", "project-c", "project-a"],
       });
     });
   });

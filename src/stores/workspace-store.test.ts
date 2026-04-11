@@ -27,6 +27,7 @@ vi.mock("../lib/terminal-output-bus", () => ({
 }));
 
 const mockedBridge = vi.mocked(bridge);
+const initialWorkspaceState = useWorkspaceStore.getInitialState();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -37,17 +38,8 @@ beforeEach(() => {
     byEnv: {},
     knownEnvironmentIds: [],
   });
-  useWorkspaceStore.setState((state) => ({
-    ...state,
-    snapshot: null,
-    bootstrapStatus: null,
-    loadingState: "ready",
-    error: null,
-    listenerReady: false,
-    selectedProjectId: null,
-    selectedEnvironmentId: null,
-    selectedThreadId: null,
-  }));
+  useWorkspaceStore.setState(initialWorkspaceState, true);
+  useWorkspaceStore.setState({ loadingState: "ready" });
 });
 
 describe("workspace store", () => {
@@ -233,6 +225,120 @@ describe("workspace store", () => {
     );
 
     expect(useWorkspaceStore.getState().error).toBe("snapshot unavailable");
+  });
+
+  it.each([
+    {
+      label: "reorderProjects",
+      run: () =>
+        useWorkspaceStore.getState().reorderProjects(["project-2", "project-1"]),
+      assertBridgeCall: () =>
+        expect(mockedBridge.reorderProjects).toHaveBeenCalledWith({
+          projectIds: ["project-2", "project-1"],
+        }),
+      reject: () => mockedBridge.reorderProjects.mockRejectedValueOnce(new Error("project reorder failed")),
+    },
+    {
+      label: "reorderWorktreeEnvironments",
+      run: () =>
+        useWorkspaceStore
+          .getState()
+          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
+      assertBridgeCall: () =>
+        expect(mockedBridge.reorderWorktreeEnvironments).toHaveBeenCalledWith({
+          projectId: "project-1",
+          environmentIds: ["env-2", "env-1"],
+        }),
+      reject: () =>
+        mockedBridge.reorderWorktreeEnvironments.mockRejectedValueOnce(
+          new Error("worktree reorder failed"),
+        ),
+    },
+    {
+      label: "setProjectSidebarCollapsed",
+      run: () =>
+        useWorkspaceStore
+          .getState()
+          .setProjectSidebarCollapsed("project-1", true),
+      assertBridgeCall: () =>
+        expect(mockedBridge.setProjectSidebarCollapsed).toHaveBeenCalledWith({
+          projectId: "project-1",
+          collapsed: true,
+        }),
+      reject: () =>
+        mockedBridge.setProjectSidebarCollapsed.mockRejectedValueOnce(
+          new Error("collapse update failed"),
+        ),
+    },
+  ])("$label refreshes the workspace and clears stale errors on success", async ({
+    run,
+    assertBridgeCall,
+  }) => {
+    const refreshSnapshot = vi.fn(async () => true);
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      error: "stale error",
+      refreshSnapshot,
+    }));
+
+    await expect(run()).resolves.toBe(true);
+
+    assertBridgeCall();
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+    expect(useWorkspaceStore.getState().error).toBeNull();
+  });
+
+  it.each([
+    {
+      label: "reorderProjects",
+      run: () =>
+        useWorkspaceStore.getState().reorderProjects(["project-2", "project-1"]),
+      reject: () =>
+        mockedBridge.reorderProjects.mockRejectedValueOnce(
+          new Error("project reorder failed"),
+        ),
+      expectedError: "project reorder failed",
+    },
+    {
+      label: "reorderWorktreeEnvironments",
+      run: () =>
+        useWorkspaceStore
+          .getState()
+          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
+      reject: () =>
+        mockedBridge.reorderWorktreeEnvironments.mockRejectedValueOnce(
+          new Error("worktree reorder failed"),
+        ),
+      expectedError: "worktree reorder failed",
+    },
+    {
+      label: "setProjectSidebarCollapsed",
+      run: () =>
+        useWorkspaceStore
+          .getState()
+          .setProjectSidebarCollapsed("project-1", true),
+      reject: () =>
+        mockedBridge.setProjectSidebarCollapsed.mockRejectedValueOnce(
+          new Error("collapse update failed"),
+        ),
+      expectedError: "collapse update failed",
+    },
+  ])("$label stores bridge errors and skips refresh on failure", async ({
+    run,
+    reject,
+    expectedError,
+  }) => {
+    const refreshSnapshot = vi.fn(async () => true);
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      refreshSnapshot,
+    }));
+    reject();
+
+    await expect(run()).resolves.toBe(false);
+
+    expect(refreshSnapshot).not.toHaveBeenCalled();
+    expect(useWorkspaceStore.getState().error).toBe(expectedError);
   });
 
   it("refreshSnapshot updates terminal cwd metadata when an environment path changes", async () => {
