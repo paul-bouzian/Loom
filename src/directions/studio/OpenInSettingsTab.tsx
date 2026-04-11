@@ -36,16 +36,19 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
   const [saving, setSaving] = useState(false);
   const draftTargets = draftState.targets;
   const defaultDraftKey = draftState.defaultDraftKey;
-  const appIcons = useOpenAppIcons(
-    draftTargets.map((target) => ({
-      id: target.id,
-      label: target.label,
-      kind: target.kind,
-      appName: target.appName || null,
-      command: target.command || null,
-      args: parseArgs(target.argsText),
-    })),
+  const iconTargets = useMemo(
+    () =>
+      draftTargets.map((target) => ({
+        id: target.id,
+        label: target.label,
+        kind: target.kind,
+        appName: target.appName || null,
+        command: target.command || null,
+        args: parseArgs(target.argsText),
+      })),
+    [draftTargets],
   );
+  const appIcons = useOpenAppIcons(iconTargets);
 
   useEffect(() => {
     setDraftState(buildDraftState(targets, defaultTargetId));

@@ -124,12 +124,17 @@ export function persistDraftTargets(state: OpenInDraftState) {
 }
 
 export function toPersistedTarget(target: DraftOpenTarget): OpenTarget {
+  const appName =
+    target.kind === "app" ? target.appName.trim() || null : null;
+  const command =
+    target.kind === "command" ? target.command.trim() || null : null;
+
   return {
     id: target.id,
     label: target.label.trim(),
     kind: target.kind,
-    appName: target.appName.trim() || null,
-    command: target.command.trim() || null,
+    appName,
+    command,
     args: parseArgs(target.argsText),
   };
 }

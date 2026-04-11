@@ -4,6 +4,7 @@ import type { OpenTarget } from "../../lib/types";
 import {
   matchesPersistedTargets,
   persistDraftTargets,
+  toPersistedTarget,
   type OpenInDraftState,
 } from "./openInSettingsDraft";
 
@@ -86,5 +87,45 @@ describe("openInSettingsDraft", () => {
         "cursor",
       ),
     ).toBe(true);
+  });
+
+  it("drops inactive fields when serializing a toggled target", () => {
+    expect(
+      toPersistedTarget({
+        draftKey: "draft-1",
+        id: "cursor-cli",
+        label: "Cursor CLI",
+        kind: "command",
+        appName: "Cursor",
+        command: "cursor",
+        argsText: "--reuse-window",
+      }),
+    ).toEqual({
+      id: "cursor-cli",
+      label: "Cursor CLI",
+      kind: "command",
+      appName: null,
+      command: "cursor",
+      args: ["--reuse-window"],
+    });
+
+    expect(
+      toPersistedTarget({
+        draftKey: "draft-2",
+        id: "cursor",
+        label: "Cursor",
+        kind: "app",
+        appName: "Cursor",
+        command: "cursor",
+        argsText: "",
+      }),
+    ).toEqual({
+      id: "cursor",
+      label: "Cursor",
+      kind: "app",
+      appName: "Cursor",
+      command: null,
+      args: [],
+    });
   });
 });

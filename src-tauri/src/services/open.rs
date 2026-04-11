@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -57,11 +58,11 @@ pub fn get_open_app_icon(_app_name: &str) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LaunchSpec {
     program: String,
-    args: Vec<String>,
+    args: Vec<OsString>,
 }
 
 fn build_launch_spec(path: &Path, target: &OpenTarget) -> AppResult<LaunchSpec> {
-    let path_arg = path.to_string_lossy().to_string();
+    let path_arg = path.as_os_str().to_os_string();
 
     match target.kind {
         OpenTargetKind::App => build_app_launch_spec(path_arg, target),
@@ -69,7 +70,11 @@ fn build_launch_spec(path: &Path, target: &OpenTarget) -> AppResult<LaunchSpec> 
             let command = target.command.as_deref().ok_or_else(|| {
                 AppError::Validation("Command targets require a command.".to_string())
             })?;
-            let mut args = target.args.clone();
+            let mut args = target
+                .args
+                .iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>();
             args.push(path_arg);
             Ok(LaunchSpec {
                 program: command.to_string(),
@@ -81,14 +86,18 @@ fn build_launch_spec(path: &Path, target: &OpenTarget) -> AppResult<LaunchSpec> 
 }
 
 #[cfg(target_os = "macos")]
-fn build_app_launch_spec(path_arg: String, target: &OpenTarget) -> AppResult<LaunchSpec> {
+fn build_app_launch_spec(path_arg: OsString, target: &OpenTarget) -> AppResult<LaunchSpec> {
     let app_name = target.app_name.as_deref().ok_or_else(|| {
         AppError::Validation("App targets require an application name.".to_string())
     })?;
-    let mut args = vec!["-a".to_string(), app_name.to_string(), path_arg];
+    let mut args = vec![
+        OsString::from("-a"),
+        OsString::from(app_name),
+        path_arg,
+    ];
     if !target.args.is_empty() {
-        args.push("--args".to_string());
-        args.extend(target.args.clone());
+        args.push(OsString::from("--args"));
+        args.extend(target.args.iter().map(OsString::from));
     }
     Ok(LaunchSpec {
         program: "/usr/bin/open".to_string(),
@@ -97,14 +106,14 @@ fn build_app_launch_spec(path_arg: String, target: &OpenTarget) -> AppResult<Lau
 }
 
 #[cfg(not(target_os = "macos"))]
-fn build_app_launch_spec(_path_arg: String, _target: &OpenTarget) -> AppResult<LaunchSpec> {
+fn build_app_launch_spec(_path_arg: OsString, _target: &OpenTarget) -> AppResult<LaunchSpec> {
     Err(AppError::Validation(
         "App launch targets are only supported on macOS in this build.".to_string(),
     ))
 }
 
 #[cfg(target_os = "macos")]
-fn build_file_manager_launch_spec(path_arg: String) -> AppResult<LaunchSpec> {
+fn build_file_manager_launch_spec(path_arg: OsString) -> AppResult<LaunchSpec> {
     Ok(LaunchSpec {
         program: "/usr/bin/open".to_string(),
         args: vec![path_arg],
@@ -112,7 +121,7 @@ fn build_file_manager_launch_spec(path_arg: String) -> AppResult<LaunchSpec> {
 }
 
 #[cfg(target_os = "windows")]
-fn build_file_manager_launch_spec(path_arg: String) -> AppResult<LaunchSpec> {
+fn build_file_manager_launch_spec(path_arg: OsString) -> AppResult<LaunchSpec> {
     Ok(LaunchSpec {
         program: "explorer".to_string(),
         args: vec![path_arg],
@@ -120,7 +129,7 @@ fn build_file_manager_launch_spec(path_arg: String) -> AppResult<LaunchSpec> {
 }
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-fn build_file_manager_launch_spec(path_arg: String) -> AppResult<LaunchSpec> {
+fn build_file_manager_launch_spec(path_arg: OsString) -> AppResult<LaunchSpec> {
     Ok(LaunchSpec {
         program: "xdg-open".to_string(),
         args: vec![path_arg],
@@ -229,7 +238,11 @@ fn resolve_app_icon_path(bundle_path: &Path) -> Option<PathBuf> {
 mod tests {
     use super::{build_launch_spec, LaunchSpec};
     use crate::domain::settings::{OpenTarget, OpenTargetKind};
-    use std::path::Path;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     #[test]
     fn command_targets_append_the_environment_path() {
@@ -248,7 +261,7 @@ mod tests {
             spec,
             LaunchSpec {
                 program: "cursor".to_string(),
-                args: vec!["--reuse-window".to_string(), "/tmp/loom".to_string()],
+                args: vec![OsString::from("--reuse-window"), OsString::from("/tmp/loom")],
             }
         );
     }
@@ -272,11 +285,11 @@ mod tests {
             LaunchSpec {
                 program: "/usr/bin/open".to_string(),
                 args: vec![
-                    "-a".to_string(),
-                    "Cursor".to_string(),
-                    "/tmp/loom".to_string(),
-                    "--args".to_string(),
-                    "--reuse-window".to_string(),
+                    OsString::from("-a"),
+                    OsString::from("Cursor"),
+                    OsString::from("/tmp/loom"),
+                    OsString::from("--args"),
+                    OsString::from("--reuse-window"),
                 ],
             }
         );
@@ -300,7 +313,7 @@ mod tests {
             spec,
             LaunchSpec {
                 program: "/usr/bin/open".to_string(),
-                args: vec!["/tmp/loom".to_string()],
+                args: vec![OsString::from("/tmp/loom")],
             }
         );
 
@@ -309,7 +322,7 @@ mod tests {
             spec,
             LaunchSpec {
                 program: "explorer".to_string(),
-                args: vec!["/tmp/loom".to_string()],
+                args: vec![OsString::from("/tmp/loom")],
             }
         );
 
@@ -318,8 +331,68 @@ mod tests {
             spec,
             LaunchSpec {
                 program: "xdg-open".to_string(),
-                args: vec!["/tmp/loom".to_string()],
+                args: vec![OsString::from("/tmp/loom")],
             }
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_targets_preserve_non_utf8_environment_paths() {
+        let target = OpenTarget {
+            id: "cursor-cli".to_string(),
+            label: "Cursor CLI".to_string(),
+            kind: OpenTargetKind::Command,
+            app_name: None,
+            command: Some("cursor".to_string()),
+            args: vec!["--reuse-window".to_string()],
+        };
+        let path = PathBuf::from(OsString::from_vec(vec![
+            b'/',
+            b't',
+            b'm',
+            b'p',
+            b'/',
+            b'l',
+            b'o',
+            b'o',
+            b'm',
+            b'-',
+            0xFF,
+        ]));
+
+        let spec = build_launch_spec(&path, &target).expect("launch spec");
+
+        assert_eq!(spec.args.last().map(OsString::as_os_str), Some(path.as_os_str()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_manager_targets_preserve_non_utf8_environment_paths() {
+        let target = OpenTarget {
+            id: "file-manager".to_string(),
+            label: "Finder".to_string(),
+            kind: OpenTargetKind::FileManager,
+            app_name: None,
+            command: None,
+            args: Vec::new(),
+        };
+        let path = PathBuf::from(OsString::from_vec(vec![
+            b'/',
+            b't',
+            b'm',
+            b'p',
+            b'/',
+            b'l',
+            b'o',
+            b'o',
+            b'm',
+            b'-',
+            0xFE,
+        ]));
+
+        let spec = build_launch_spec(&path, &target).expect("launch spec");
+
+        assert_eq!(spec.args.last().map(OsString::as_os_str), Some(path.as_os_str()));
     }
 }
