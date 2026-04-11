@@ -189,6 +189,10 @@ export function ThreadConversation({
     setIsSubmitting(false);
   }
 
+  function isCurrentSubmitCycle(generation: number) {
+    return submitGenerationRef.current === generation;
+  }
+
   const approvePlan = useEffectEvent(async (nextComposer: typeof approveComposer) => {
     if (!nextComposer || submitInFlightRef.current) return;
     const submitGeneration = beginSubmitCycle();
@@ -198,7 +202,7 @@ export function ThreadConversation({
         action: "approve",
         composer: { ...nextComposer, collaborationMode: "build" },
       });
-      if (sent) {
+      if (sent && isCurrentSubmitCycle(submitGeneration)) {
         setIsRefiningPlan(false);
         resetComposerState();
       }
@@ -296,7 +300,7 @@ export function ThreadConversation({
           ...(images.length > 0 ? { images } : {}),
           ...(mentionBindings.length > 0 ? { mentionBindings } : {}),
         });
-        if (sent) {
+        if (sent && isCurrentSubmitCycle(submitGeneration)) {
           resetComposerState();
           setIsRefiningPlan(false);
         }
@@ -323,7 +327,9 @@ export function ThreadConversation({
       if (sent) {
         return;
       }
-      restoreComposerState(text, nextImages, nextMentionBindings);
+      if (isCurrentSubmitCycle(submitGeneration)) {
+        restoreComposerState(text, nextImages, nextMentionBindings);
+      }
     } finally {
       finishSubmitCycle(submitGeneration);
     }
