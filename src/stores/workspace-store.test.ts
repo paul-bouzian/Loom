@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as bridge from "../lib/bridge";
 import type { WorkspaceEventPayload } from "../lib/types";
-import { makeEnvironment, makeProject, makeThread, makeWorkspaceSnapshot } from "../test/fixtures/conversation";
+import {
+  makeEnvironment,
+  makeProject,
+  makeThread,
+  makeWorkspaceSnapshot,
+} from "../test/fixtures/conversation";
 import { useTerminalStore } from "./terminal-store";
 import {
   teardownWorkspaceListener,
@@ -14,6 +19,9 @@ vi.mock("../lib/bridge", () => ({
   getWorkspaceSnapshot: vi.fn(),
   listenToWorkspaceEvents: vi.fn(),
   killTerminal: vi.fn().mockResolvedValue(undefined),
+  reorderProjects: vi.fn(),
+  reorderWorktreeEnvironments: vi.fn(),
+  setProjectSidebarCollapsed: vi.fn(),
 }));
 
 vi.mock("../lib/terminal-output-bus", () => ({
@@ -24,6 +32,7 @@ vi.mock("../lib/terminal-output-bus", () => ({
 }));
 
 const mockedBridge = vi.mocked(bridge);
+const initialWorkspaceState = useWorkspaceStore.getInitialState();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -34,17 +43,8 @@ beforeEach(() => {
     byEnv: {},
     knownEnvironmentIds: [],
   });
-  useWorkspaceStore.setState((state) => ({
-    ...state,
-    snapshot: null,
-    bootstrapStatus: null,
-    loadingState: "ready",
-    error: null,
-    listenerReady: false,
-    selectedProjectId: null,
-    selectedEnvironmentId: null,
-    selectedThreadId: null,
-  }));
+  useWorkspaceStore.setState(initialWorkspaceState, true);
+  useWorkspaceStore.setState({ loadingState: "ready" });
 });
 
 describe("workspace store", () => {
@@ -231,6 +231,227 @@ describe("workspace store", () => {
 
     expect(useWorkspaceStore.getState().error).toBe("snapshot unavailable");
   });
+
+  it.each([
+    {
+      label: "reorderProjects",
+      run: () =>
+        useWorkspaceStore.getState().reorderProjects(["project-2", "project-1"]),
+      assertBridgeCall: () =>
+        expect(mockedBridge.reorderProjects).toHaveBeenCalledWith({
+          projectIds: ["project-2", "project-1"],
+        }),
+      reject: () => mockedBridge.reorderProjects.mockRejectedValueOnce(new Error("project reorder failed")),
+    },
+    {
+      label: "reorderWorktreeEnvironments",
+      run: () =>
+        useWorkspaceStore
+          .getState()
+          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
+      assertBridgeCall: () =>
+        expect(mockedBridge.reorderWorktreeEnvironments).toHaveBeenCalledWith({
+          projectId: "project-1",
+          environmentIds: ["env-2", "env-1"],
+        }),
+      reject: () =>
+        mockedBridge.reorderWorktreeEnvironments.mockRejectedValueOnce(
+          new Error("worktree reorder failed"),
+        ),
+    },
+    {
+      label: "setProjectSidebarCollapsed",
+      run: () =>
+        useWorkspaceStore
+          .getState()
+          .setProjectSidebarCollapsed("project-1", true),
+      assertBridgeCall: () =>
+        expect(mockedBridge.setProjectSidebarCollapsed).toHaveBeenCalledWith({
+          projectId: "project-1",
+          collapsed: true,
+        }),
+      reject: () =>
+        mockedBridge.setProjectSidebarCollapsed.mockRejectedValueOnce(
+          new Error("collapse update failed"),
+        ),
+    },
+  ])("$label refreshes the workspace and clears stale errors on success", async ({
+    run,
+    assertBridgeCall,
+  }) => {
+    const refreshSnapshot = vi.fn(async () => true);
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      error: "stale error",
+      refreshSnapshot,
+    }));
+
+    await expect(run()).resolves.toEqual({
+      ok: true,
+      refreshed: true,
+      warningMessage: null,
+    });
+
+    assertBridgeCall();
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+    expect(useWorkspaceStore.getState().error).toBeNull();
+  });
+
+  it.each([
+    {
+      label: "reorderProjects",
+      run: () =>
+        useWorkspaceStore.getState().reorderProjects(["project-2", "project-1"]),
+      reject: () =>
+        mockedBridge.reorderProjects.mockRejectedValueOnce(
+          new Error("project reorder failed"),
+        ),
+      expectedError: "project reorder failed",
+    },
+    {
+      label: "reorderWorktreeEnvironments",
+      run: () =>
+        useWorkspaceStore
+          .getState()
+          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
+      reject: () =>
+        mockedBridge.reorderWorktreeEnvironments.mockRejectedValueOnce(
+          new Error("worktree reorder failed"),
+        ),
+      expectedError: "worktree reorder failed",
+    },
+    {
+      label: "setProjectSidebarCollapsed",
+      run: () =>
+        useWorkspaceStore
+          .getState()
+          .setProjectSidebarCollapsed("project-1", true),
+      reject: () =>
+        mockedBridge.setProjectSidebarCollapsed.mockRejectedValueOnce(
+          new Error("collapse update failed"),
+        ),
+      expectedError: "collapse update failed",
+    },
+  ])("$label stores bridge errors and skips refresh on failure", async ({
+    run,
+    reject,
+    expectedError,
+  }) => {
+    const refreshSnapshot = vi.fn(async () => true);
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      refreshSnapshot,
+    }));
+    reject();
+
+    await expect(run()).resolves.toEqual({
+      ok: false,
+      refreshed: false,
+      warningMessage: null,
+    });
+
+    expect(refreshSnapshot).not.toHaveBeenCalled();
+    expect(useWorkspaceStore.getState().error).toBe(expectedError);
+  });
+
+  it.each([
+    {
+      label: "reorderProjects",
+      setupSnapshot: () =>
+        makeWorkspaceSnapshot({
+          projects: [
+            makeProject({ id: "project-1", name: "First" }),
+            makeProject({ id: "project-2", name: "Second" }),
+          ],
+        }),
+      run: () =>
+        useWorkspaceStore.getState().reorderProjects(["project-2", "project-1"]),
+      expectedWarning: "Project order saved, but the workspace failed to refresh.",
+      assertSnapshot: () =>
+        expect(
+          useWorkspaceStore.getState().snapshot?.projects.map((project) => project.id),
+        ).toEqual(["project-2", "project-1"]),
+    },
+    {
+      label: "reorderWorktreeEnvironments",
+      setupSnapshot: () =>
+        makeWorkspaceSnapshot({
+          projects: [
+            makeProject({
+              id: "project-1",
+              environments: [
+                makeEnvironment({
+                  id: "env-local",
+                  projectId: "project-1",
+                  kind: "local",
+                  isDefault: true,
+                }),
+                makeEnvironment({
+                  id: "env-1",
+                  projectId: "project-1",
+                  kind: "managedWorktree",
+                  isDefault: false,
+                }),
+                makeEnvironment({
+                  id: "env-2",
+                  projectId: "project-1",
+                  kind: "managedWorktree",
+                  isDefault: false,
+                }),
+              ],
+            }),
+          ],
+        }),
+      run: () =>
+        useWorkspaceStore
+          .getState()
+          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
+      expectedWarning: "Worktree order saved, but the workspace failed to refresh.",
+      assertSnapshot: () =>
+        expect(
+          useWorkspaceStore.getState().snapshot?.projects[0]?.environments.map(
+            (environment) => environment.id,
+          ),
+        ).toEqual(["env-local", "env-2", "env-1"]),
+    },
+    {
+      label: "setProjectSidebarCollapsed",
+      setupSnapshot: () =>
+        makeWorkspaceSnapshot({
+          projects: [makeProject({ id: "project-1", sidebarCollapsed: false })],
+        }),
+      run: () =>
+        useWorkspaceStore
+          .getState()
+          .setProjectSidebarCollapsed("project-1", true),
+      expectedWarning:
+        "Project collapse state saved, but the workspace failed to refresh.",
+      assertSnapshot: () =>
+        expect(useWorkspaceStore.getState().snapshot?.projects[0]?.sidebarCollapsed).toBe(
+          true,
+        ),
+    },
+  ])(
+    "$label keeps the local snapshot aligned when refresh fails after a successful write",
+    async ({ setupSnapshot, run, expectedWarning, assertSnapshot }) => {
+      const refreshSnapshot = vi.fn(async () => false);
+      useWorkspaceStore.setState((state) => ({
+        ...state,
+        snapshot: setupSnapshot(),
+        refreshSnapshot,
+      }));
+
+      await expect(run()).resolves.toEqual({
+        ok: true,
+        refreshed: false,
+        warningMessage: expectedWarning,
+      });
+
+      expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+      assertSnapshot();
+      expect(useWorkspaceStore.getState().error).toBe(expectedWarning);
+    },
+  );
 
   it("refreshSnapshot updates terminal cwd metadata when an environment path changes", async () => {
     useTerminalStore.setState({

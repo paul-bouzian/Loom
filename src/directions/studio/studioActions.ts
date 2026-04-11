@@ -91,16 +91,23 @@ export function selectAdjacentThread(direction: "next" | "previous") {
 }
 
 export function selectAdjacentEnvironment(direction: "next" | "previous") {
-  const snapshot = useWorkspaceStore.getState().snapshot;
-  const selectedEnvironmentId = useWorkspaceStore.getState().selectedEnvironmentId;
+  const state = useWorkspaceStore.getState();
+  const snapshot = state.snapshot;
   const orderedEnvironments = listOrderedEnvironments(snapshot);
   if (orderedEnvironments.length === 0) {
     return false;
   }
 
-  const currentIndex = orderedEnvironments.findIndex(
-    (environment) => environment.id === selectedEnvironmentId,
+  const selectedEnvironment = resolveSelectedEnvironment(
+    snapshot,
+    state.selectedProjectId,
+    state.selectedEnvironmentId,
   );
+  const currentIndex = selectedEnvironment
+    ? orderedEnvironments.findIndex(
+        (environment) => environment.id === selectedEnvironment.id,
+      )
+    : -1;
   const baseIndex =
     currentIndex === -1 ? (direction === "next" ? -1 : 0) : currentIndex;
   const offset = direction === "next" ? 1 : -1;
@@ -116,14 +123,12 @@ export function selectAdjacentEnvironment(direction: "next" | "previous") {
 }
 
 function selectedEnvironment() {
-  const snapshot = useWorkspaceStore.getState().snapshot;
-  const selectedEnvironmentId = useWorkspaceStore.getState().selectedEnvironmentId;
-  if (!snapshot || !selectedEnvironmentId) {
-    return null;
-  }
-  return listOrderedEnvironments(snapshot).find(
-    (environment) => environment.id === selectedEnvironmentId,
-  ) ?? null;
+  const state = useWorkspaceStore.getState();
+  return resolveSelectedEnvironment(
+    state.snapshot,
+    state.selectedProjectId,
+    state.selectedEnvironmentId,
+  );
 }
 
 function selectedProjectId() {
@@ -160,27 +165,36 @@ function listOrderedEnvironments(snapshot: WorkspaceSnapshot | null): Environmen
   if (!snapshot) {
     return [];
   }
-  return snapshot.projects.flatMap((project) => {
-    const environments = [...project.environments];
-    environments.sort(compareEnvironmentOrder);
-    return environments;
-  });
+  return snapshot.projects.flatMap(visibleProjectEnvironments);
 }
 
-function compareEnvironmentOrder(left: EnvironmentRecord, right: EnvironmentRecord) {
-  if (left.kind === "local" && right.kind !== "local") {
-    return -1;
+function resolveSelectedEnvironment(
+  snapshot: WorkspaceSnapshot | null,
+  selectedProjectId: string | null,
+  selectedEnvironmentId: string | null,
+) {
+  if (!snapshot || !selectedEnvironmentId) {
+    return null;
   }
-  if (left.kind !== "local" && right.kind === "local") {
-    return 1;
+
+  const orderedEnvironments = listOrderedEnvironments(snapshot);
+  const selectedEnvironment = orderedEnvironments.find(
+    (environment) => environment.id === selectedEnvironmentId,
+  );
+  if (selectedEnvironment) {
+    return selectedEnvironment;
   }
-  if (left.isDefault && !right.isDefault) {
-    return -1;
-  }
-  if (!left.isDefault && right.isDefault) {
-    return 1;
-  }
-  return left.createdAt.localeCompare(right.createdAt);
+
+  const project = snapshot.projects.find(
+    (candidate) => candidate.id === selectedProjectId,
+  );
+  return project ? visibleProjectEnvironments(project)[0] ?? null : null;
+}
+
+function visibleProjectEnvironments(project: WorkspaceSnapshot["projects"][number]) {
+  return project.environments.filter(
+    (environment) => environment.kind === "local" || !project.sidebarCollapsed,
+  );
 }
 
 function ownsPendingVoiceWork(threadId: string) {
