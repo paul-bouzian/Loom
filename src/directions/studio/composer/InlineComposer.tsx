@@ -23,12 +23,12 @@ import type {
   ThreadTokenUsageSnapshot,
 } from "../../../lib/types";
 import {
+  ArrowUpIcon,
   BoltIcon,
   CloseIcon,
   ImageIcon,
   MapIcon,
   MicIcon,
-  SendIcon,
   StopIcon,
 } from "../../../shared/Icons";
 import { ComposerPicker } from "../ComposerPicker";
@@ -758,7 +758,7 @@ export function InlineComposer({
               disabled={sendDisabled}
               onClick={sendDraft}
             >
-              <SendIcon size={12} />
+              <ArrowUpIcon size={14} />
             </button>
           )}
         </div>

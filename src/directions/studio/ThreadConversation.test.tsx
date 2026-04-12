@@ -2133,7 +2133,7 @@ describe("ThreadConversation", () => {
     );
 
     expect(
-      await screen.findByText("Ready for the first turn"),
+      await screen.findByText("Start a conversation"),
     ).toBeInTheDocument();
     expect(screen.queryByText("Tasks")).toBeNull();
   });
@@ -2160,7 +2160,7 @@ describe("ThreadConversation", () => {
     );
 
     expect(
-      await screen.findByText("Ready for the first turn"),
+      await screen.findByText("Start a conversation"),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve plan" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Refine" })).toBeNull();

@@ -253,7 +253,7 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
   return (
     <aside className="tree-sidebar">
       <div className="tree-sidebar__header">
-        <span className="tree-sidebar__title">Projects</span>
+        <span className="tree-sidebar__title tx-section-label">Projects</span>
         <button
           type="button"
           className="tree-sidebar__add"
@@ -482,7 +482,7 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
       {contextMenu &&
         createPortal(
           <div
-            className="tree-sidebar__context-menu"
+            className="tree-sidebar__context-menu tx-dropdown-menu"
             style={resolveContextMenuPosition(contextMenu)}
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}
@@ -490,7 +490,7 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
             {contextMenu.kind === "project" ? (
               <button
                 type="button"
-                className="tree-sidebar__context-item tree-sidebar__context-item--danger"
+                className="tree-sidebar__context-item tx-dropdown-option tree-sidebar__context-item--danger"
                 onClick={() =>
                   void handleRemoveProject(
                     contextMenu.projectId ?? "",
@@ -503,7 +503,7 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
             ) : (
               <button
                 type="button"
-                className="tree-sidebar__context-item tree-sidebar__context-item--danger"
+                className="tree-sidebar__context-item tx-dropdown-option tree-sidebar__context-item--danger"
                 onClick={() => void handleDeleteWorktree(contextMenu)}
               >
                 Delete worktree
