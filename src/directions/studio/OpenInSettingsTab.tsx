@@ -1,26 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { OpenTarget, OpenTargetKind } from "../../lib/types";
+import type { OpenTarget } from "../../lib/types";
 import { useWorkspaceStore } from "../../stores/workspace-store";
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  CloseIcon,
-  FolderIcon,
-} from "../../shared/Icons";
+import { ArrowDownIcon, ArrowUpIcon } from "../../shared/Icons";
 import { OpenTargetIcon } from "./OpenTargetIcon";
-import { useOpenAppIcons } from "./useOpenAppIcons";
 import {
   buildDraftState,
-  createDraftTarget,
   matchesPersistedTargets,
   moveDraftTarget,
-  parseArgs,
   persistedOpenInSettingsEqual,
   persistDraftTargets,
   validateDraftTargets,
   type OpenInDraftState,
-  type DraftOpenTarget,
 } from "./openInSettingsDraft";
 
 type Props = {
@@ -37,19 +28,6 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
   const [saving, setSaving] = useState(false);
   const lastPersistedTargetsRef = useRef(targets);
   const lastDefaultTargetIdRef = useRef(defaultTargetId);
-  const draftTargets = draftState.targets;
-  const defaultDraftKey = draftState.defaultDraftKey;
-  const iconTargets = useMemo(
-    () => draftTargets.map((target) => ({
-      id: target.id,
-      label: target.label,
-      kind: target.kind,
-      appName: target.appName || null,
-      args: parseArgs(target.argsText),
-    })),
-    [draftTargets],
-  );
-  const appIcons = useOpenAppIcons(iconTargets);
 
   useEffect(() => {
     if (
@@ -70,18 +48,24 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
   }, [defaultTargetId, targets]);
 
   const issues = useMemo(
-    () => validateDraftTargets(draftTargets, defaultDraftKey),
-    [defaultDraftKey, draftTargets],
+    () => validateDraftTargets(draftState.targets, draftState.defaultDraftKey),
+    [draftState.defaultDraftKey, draftState.targets],
   );
   const dirty = useMemo(
-    () => !matchesPersistedTargets(draftTargets, defaultDraftKey, targets, defaultTargetId),
-    [defaultDraftKey, defaultTargetId, draftTargets, targets],
+    () =>
+      !matchesPersistedTargets(
+        draftState.targets,
+        draftState.defaultDraftKey,
+        targets,
+        defaultTargetId,
+      ),
+    [defaultTargetId, draftState.defaultDraftKey, draftState.targets, targets],
   );
   const noticeMessage = saveError ?? issues.global;
 
   async function handleSave() {
-    if (issues.global || Object.keys(issues.byKey).length > 0) {
-      setSaveError(issues.global ?? "Complete the invalid targets before saving.");
+    if (issues.global) {
+      setSaveError(issues.global);
       return;
     }
 
@@ -121,8 +105,8 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
     <div className="settings-open-targets">
       <div className="settings-open-targets__intro">
         <p className="settings-field__help">
-          Pick the apps and file manager entries shown in the toolbar. The main
-          button opens the current environment with the saved default target.
+          Reorder the curated Open In targets shown in the toolbar menu and pick
+          the default action for the primary button.
         </p>
       </div>
       {noticeMessage ? (
@@ -132,78 +116,36 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
         <legend className="settings-open-targets__legend">
           Default Open In target
         </legend>
-        {draftTargets.map((target, index) => (
+        {draftState.targets.map(({ draftKey, target }, index) => (
           <OpenInTargetRow
-            key={target.draftKey}
+            key={draftKey}
             target={target}
-            iconUrl={appIcons[target.id] ?? null}
-            issue={issues.byKey[target.draftKey] ?? null}
-            isDefault={target.draftKey === defaultDraftKey}
+            isDefault={draftKey === draftState.defaultDraftKey}
             canMoveUp={index > 0}
-            canMoveDown={index < draftTargets.length - 1}
+            canMoveDown={index < draftState.targets.length - 1}
             disabled={saving}
-            onChange={(patch) =>
-              updateDraftState((current) => ({
-                ...current,
-                targets: current.targets.map((candidate) =>
-                  candidate.draftKey === target.draftKey
-                    ? { ...candidate, ...patch }
-                    : candidate,
-                ),
-              }))
-            }
             onSetDefault={() =>
               updateDraftState((current) => ({
                 ...current,
-                defaultDraftKey: target.draftKey,
+                defaultDraftKey: draftKey,
               }))
             }
             onMoveUp={() =>
               updateDraftState((current) => ({
                 ...current,
-                targets: moveDraftTarget(current.targets, target.draftKey, -1),
+                targets: moveDraftTarget(current.targets, draftKey, -1),
               }))
             }
             onMoveDown={() =>
               updateDraftState((current) => ({
                 ...current,
-                targets: moveDraftTarget(current.targets, target.draftKey, 1),
+                targets: moveDraftTarget(current.targets, draftKey, 1),
               }))
-            }
-            onDelete={() =>
-              updateDraftState((current) => {
-                const nextTargets = current.targets.filter(
-                  (candidate) => candidate.draftKey !== target.draftKey,
-                );
-                return {
-                  targets: nextTargets,
-                  defaultDraftKey:
-                    target.draftKey === current.defaultDraftKey
-                      ? (nextTargets[0]?.draftKey ?? null)
-                      : current.defaultDraftKey,
-                };
-              })
             }
           />
         ))}
       </fieldset>
       <div className="settings-open-targets__actions">
-        <button
-          type="button"
-          className="settings-project-card__secondary"
-          disabled={saving}
-          onClick={() =>
-            updateDraftState((current) => {
-              const nextTarget = createDraftTarget("app");
-              return {
-                targets: [...current.targets, nextTarget],
-                defaultDraftKey: current.defaultDraftKey ?? nextTarget.draftKey,
-              };
-            })
-          }
-        >
-          Add target
-        </button>
         <button
           type="button"
           className="settings-project-card__secondary"
@@ -215,12 +157,7 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
         <button
           type="button"
           className="settings-project-card__primary"
-          disabled={
-            saving ||
-            !dirty ||
-            issues.global != null ||
-            Object.keys(issues.byKey).length > 0
-          }
+          disabled={saving || !dirty || issues.global != null}
           onClick={() => void handleSave()}
         >
           Save
@@ -231,79 +168,39 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
 }
 
 type RowProps = {
-  target: DraftOpenTarget;
-  iconUrl?: string | null;
-  issue: string | null;
+  target: OpenTarget;
   isDefault: boolean;
   canMoveUp: boolean;
   canMoveDown: boolean;
   disabled: boolean;
-  onChange: (patch: Partial<DraftOpenTarget>) => void;
   onSetDefault: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
-  onDelete: () => void;
 };
 
 function OpenInTargetRow({
   target,
-  iconUrl,
-  issue,
   isDefault,
   canMoveUp,
   canMoveDown,
   disabled,
-  onChange,
   onSetDefault,
   onMoveUp,
   onMoveDown,
-  onDelete,
 }: RowProps) {
-  const previewTarget: OpenTarget = {
-    id: target.id,
-    label: target.label,
-    kind: target.kind,
-    appName: target.appName || null,
-    args: parseArgs(target.argsText),
-  };
-
   return (
     <section className="settings-open-target">
       <div className="settings-open-target__header">
         <span className="settings-open-target__preview" aria-hidden="true">
           <OpenTargetIcon
-            target={previewTarget}
-            iconUrl={iconUrl}
+            target={target}
             size={18}
             className="settings-open-target__preview-icon"
           />
         </span>
         <div className="settings-open-target__header-fields">
-          <label className="settings-field">
-            <span className="settings-field__label">Label</span>
-            <input
-              className="settings-field__input"
-              type="text"
-              value={target.label}
-              disabled={disabled}
-              placeholder="Cursor"
-              onChange={(event) => onChange({ label: event.target.value })}
-            />
-          </label>
-          <label className="settings-field">
-            <span className="settings-field__label">Kind</span>
-            <select
-              className="settings-field__input"
-              value={target.kind}
-              disabled={disabled}
-              onChange={(event) =>
-                onChange({ kind: event.target.value as OpenTargetKind })
-              }
-            >
-              <option value="app">Application</option>
-              <option value="fileManager">File manager</option>
-            </select>
-          </label>
+          <span className="settings-field__label">{target.label}</span>
+          <p className="settings-field__help">{describeTarget(target)}</p>
         </div>
         <div className="settings-open-target__controls">
           <label className="settings-open-target__default">
@@ -320,7 +217,7 @@ function OpenInTargetRow({
             type="button"
             className="settings-project-card__secondary"
             disabled={disabled || !canMoveUp}
-            aria-label={`Move ${target.label || "target"} up`}
+            aria-label={`Move ${target.label} up`}
             onClick={onMoveUp}
           >
             <ArrowUpIcon size={14} />
@@ -329,59 +226,23 @@ function OpenInTargetRow({
             type="button"
             className="settings-project-card__secondary"
             disabled={disabled || !canMoveDown}
-            aria-label={`Move ${target.label || "target"} down`}
+            aria-label={`Move ${target.label} down`}
             onClick={onMoveDown}
           >
             <ArrowDownIcon size={14} />
           </button>
-          <button
-            type="button"
-            className="settings-project-card__secondary"
-            disabled={disabled}
-            aria-label={`Remove ${target.label || "target"}`}
-            onClick={onDelete}
-          >
-            <CloseIcon size={12} />
-          </button>
         </div>
-      </div>
-      <div className="settings-open-target__body">
-        {target.kind === "app" ? (
-          <label className="settings-field">
-            <span className="settings-field__label">Application name</span>
-            <input
-              className="settings-field__input"
-              type="text"
-              value={target.appName}
-              disabled={disabled}
-              placeholder="Cursor"
-              onChange={(event) => onChange({ appName: event.target.value })}
-            />
-          </label>
-        ) : null}
-        {target.kind !== "fileManager" ? (
-          <label className="settings-field">
-            <span className="settings-field__label">Arguments</span>
-            <textarea
-              className="settings-field__textarea"
-              value={target.argsText}
-              disabled={disabled}
-              placeholder="--reuse-window"
-              onChange={(event) => onChange({ argsText: event.target.value })}
-            />
-          </label>
-        ) : (
-          <div className="settings-open-target__hint">
-            <span className="settings-open-target__hint-icon" aria-hidden="true">
-              <FolderIcon size={14} />
-            </span>
-            <p className="settings-field__help">
-              Uses the system file manager to open the environment folder.
-            </p>
-          </div>
-        )}
-        {issue ? <p className="settings-open-target__error">{issue}</p> : null}
       </div>
     </section>
   );
+}
+
+function describeTarget(target: OpenTarget) {
+  if (target.kind === "fileManager") {
+    return "Uses the system file manager to open the environment folder.";
+  }
+
+  return target.appName
+    ? `Launches ${target.appName}.`
+    : "Launches the selected application.";
 }

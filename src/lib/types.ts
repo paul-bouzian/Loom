@@ -191,7 +191,6 @@ export type OpenTarget = {
   label: string;
   kind: OpenTargetKind;
   appName?: string | null;
-  args: string[];
 };
 
 export type WorkspaceSnapshot = {

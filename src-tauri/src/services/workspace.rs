@@ -238,12 +238,20 @@ impl WorkspaceService {
     pub fn update_settings(&self, patch: GlobalSettingsPatch) -> AppResult<GlobalSettings> {
         let mut connection = self.database.open()?;
         let transaction = connection.transaction()?;
-        let mut settings = self.read_or_seed_settings(&transaction)?;
+        let mut settings = self.read_or_seed_stored_settings(&transaction)?;
+        let patch_updates_open_targets = patch.open_targets.is_some();
+        let patch_updates_default_open_target = patch.default_open_target_id.is_some();
         settings.apply_patch(patch);
-        settings.normalize_for_update().map_err(AppError::Validation)?;
-        settings
-            .validate()
-            .map_err(AppError::Validation)?;
+        if patch_updates_open_targets {
+            settings
+                .normalize_for_update()
+                .map_err(AppError::Validation)?;
+        } else if patch_updates_default_open_target {
+            settings
+                .normalize_default_open_target_for_update()
+                .map_err(AppError::Validation)?;
+        }
+        settings.validate().map_err(AppError::Validation)?;
 
         let payload = serde_json::to_string(&settings)
             .map_err(|error| AppError::Validation(error.to_string()))?;
@@ -258,7 +266,7 @@ impl WorkspaceService {
             params![payload, Utc::now()],
         )?;
         transaction.commit()?;
-        Ok(settings)
+        Ok(settings.projected_for_client())
     }
 
     pub fn current_settings(&self) -> AppResult<GlobalSettings> {
@@ -1093,8 +1101,7 @@ impl WorkspaceService {
         let settings = self.read_or_seed_settings(&connection)?;
         let target = settings
             .resolve_open_target(target_id)
-            .map_err(AppError::Validation)?
-            .clone();
+            .map_err(AppError::Validation)?;
 
         Ok(EnvironmentOpenContext {
             environment_path: PathBuf::from(environment_path),
@@ -1925,6 +1932,15 @@ impl WorkspaceService {
         &self,
         connection: &rusqlite::Connection,
     ) -> AppResult<GlobalSettings> {
+        Ok(self
+            .read_or_seed_stored_settings(connection)?
+            .projected_for_client())
+    }
+
+    fn read_or_seed_stored_settings(
+        &self,
+        connection: &rusqlite::Connection,
+    ) -> AppResult<GlobalSettings> {
         let payload = connection
             .query_row(
                 "SELECT payload_json FROM global_settings WHERE singleton_key = 'global'",
@@ -2255,7 +2271,9 @@ mod tests {
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
         ConversationComposerSettings, ConversationImageAttachment,
     };
-    use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch, ServiceTier};
+    use crate::domain::settings::{
+        GlobalSettings, GlobalSettingsPatch, OpenTarget, OpenTargetKind, ServiceTier,
+    };
     use crate::domain::shortcuts::ShortcutSettings;
     use crate::domain::workspace::{
         EnvironmentPullRequestSnapshot, PullRequestState, ThreadStatus,
@@ -3358,14 +3376,43 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_repairs_invalid_open_targets_without_losing_other_values() {
+    fn snapshot_projects_supported_open_targets_without_rewriting_stored_legacy_values() {
         let harness = WorkspaceHarness::new().expect("harness");
-        let mut settings = GlobalSettings {
+        let settings = GlobalSettings {
             default_model: "gpt-5.4-mini".to_string(),
+            open_targets: vec![
+                OpenTarget {
+                    id: "custom-app".to_string(),
+                    label: "Custom App".to_string(),
+                    kind: OpenTargetKind::App,
+                    app_name: Some("Custom App".to_string()),
+                    args: vec!["--reuse-window".to_string()],
+                },
+                OpenTarget {
+                    id: "cursor".to_string(),
+                    label: "Cursor".to_string(),
+                    kind: OpenTargetKind::App,
+                    app_name: Some("Malicious Cursor".to_string()),
+                    args: vec!["--reuse-window".to_string()],
+                },
+                OpenTarget {
+                    id: "cursor-cli".to_string(),
+                    label: "Cursor CLI".to_string(),
+                    kind: OpenTargetKind::Command,
+                    app_name: None,
+                    args: vec!["--reuse-window".to_string()],
+                },
+                OpenTarget {
+                    id: "file-manager".to_string(),
+                    label: "Finder".to_string(),
+                    kind: OpenTargetKind::FileManager,
+                    app_name: None,
+                    args: Vec::new(),
+                },
+            ],
+            default_open_target_id: "custom-app".to_string(),
             ..GlobalSettings::default()
         };
-        settings.open_targets.clear();
-        settings.default_open_target_id = "missing".to_string();
 
         harness
             .open_connection()
@@ -3385,16 +3432,264 @@ mod tests {
             .expect("settings should be persisted");
 
         let snapshot = harness.service.snapshot(Vec::new()).expect("snapshot");
+        let stored_payload: String = harness
+            .open_connection()
+            .query_row(
+                "SELECT payload_json FROM global_settings WHERE singleton_key = 'global'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored settings payload");
 
         assert_eq!(snapshot.settings.default_model, "gpt-5.4-mini");
-        assert!(!snapshot.settings.open_targets.is_empty());
-        assert!(
-            snapshot
-                .settings
+        assert!(snapshot
+            .settings
+            .open_targets
+            .iter()
+            .map(|target| target.id.as_str())
+            .eq(["cursor", "file-manager"].into_iter()));
+        assert_eq!(snapshot.settings.default_open_target_id, "file-manager");
+        assert!(stored_payload.contains("\"custom-app\""));
+        assert!(stored_payload.contains("\"cursor-cli\""));
+        assert!(stored_payload.contains("\"--reuse-window\""));
+    }
+
+    #[test]
+    fn update_settings_preserves_stored_legacy_open_targets_until_open_in_is_saved() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let settings = GlobalSettings {
+            default_model: "gpt-5.4".to_string(),
+            open_targets: vec![
+                OpenTarget {
+                    id: "custom-app".to_string(),
+                    label: "Custom App".to_string(),
+                    kind: OpenTargetKind::App,
+                    app_name: Some("Custom App".to_string()),
+                    args: vec!["--reuse-window".to_string()],
+                },
+                OpenTarget {
+                    id: "cursor".to_string(),
+                    label: "Cursor".to_string(),
+                    kind: OpenTargetKind::App,
+                    app_name: Some("Cursor".to_string()),
+                    args: Vec::new(),
+                },
+                OpenTarget {
+                    id: "file-manager".to_string(),
+                    label: "Finder".to_string(),
+                    kind: OpenTargetKind::FileManager,
+                    app_name: None,
+                    args: Vec::new(),
+                },
+            ],
+            default_open_target_id: "custom-app".to_string(),
+            ..GlobalSettings::default()
+        };
+
+        harness
+            .open_connection()
+            .execute(
+                "
+                INSERT INTO global_settings (singleton_key, payload_json, updated_at)
+                VALUES ('global', ?1, ?2)
+                ON CONFLICT(singleton_key) DO UPDATE SET
+                  payload_json = excluded.payload_json,
+                  updated_at = excluded.updated_at
+                ",
+                params![
+                    serde_json::to_string(&settings).expect("settings payload"),
+                    Utc::now(),
+                ],
+            )
+            .expect("settings should be persisted");
+
+        let updated = harness
+            .service
+            .update_settings(GlobalSettingsPatch {
+                default_model: Some("gpt-5.4-mini".to_string()),
+                ..GlobalSettingsPatch::default()
+            })
+            .expect("settings update");
+        let stored_payload: String = harness
+            .open_connection()
+            .query_row(
+                "SELECT payload_json FROM global_settings WHERE singleton_key = 'global'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored settings payload");
+
+        assert_eq!(updated.default_model, "gpt-5.4-mini");
+        assert!(updated
+            .open_targets
+            .iter()
+            .map(|target| target.id.as_str())
+            .eq(["cursor", "file-manager"].into_iter()));
+        assert_eq!(updated.default_open_target_id, "file-manager");
+        assert!(stored_payload.contains("\"custom-app\""));
+        assert!(stored_payload.contains("\"--reuse-window\""));
+    }
+
+    #[test]
+    fn update_settings_migrates_legacy_open_targets_only_when_open_in_payload_is_saved() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let settings = GlobalSettings {
+            open_targets: vec![
+                OpenTarget {
+                    id: "custom-app".to_string(),
+                    label: "Custom App".to_string(),
+                    kind: OpenTargetKind::App,
+                    app_name: Some("Custom App".to_string()),
+                    args: vec!["--reuse-window".to_string()],
+                },
+                OpenTarget {
+                    id: "cursor".to_string(),
+                    label: "Cursor".to_string(),
+                    kind: OpenTargetKind::App,
+                    app_name: Some("Cursor".to_string()),
+                    args: Vec::new(),
+                },
+                OpenTarget {
+                    id: "file-manager".to_string(),
+                    label: "Finder".to_string(),
+                    kind: OpenTargetKind::FileManager,
+                    app_name: None,
+                    args: Vec::new(),
+                },
+            ],
+            default_open_target_id: "custom-app".to_string(),
+            ..GlobalSettings::default()
+        };
+
+        harness
+            .open_connection()
+            .execute(
+                "
+                INSERT INTO global_settings (singleton_key, payload_json, updated_at)
+                VALUES ('global', ?1, ?2)
+                ON CONFLICT(singleton_key) DO UPDATE SET
+                  payload_json = excluded.payload_json,
+                  updated_at = excluded.updated_at
+                ",
+                params![
+                    serde_json::to_string(&settings).expect("settings payload"),
+                    Utc::now(),
+                ],
+            )
+            .expect("settings should be persisted");
+
+        let updated = harness
+            .service
+            .update_settings(GlobalSettingsPatch {
+                open_targets: Some(vec![
+                    OpenTarget {
+                        id: "zed".to_string(),
+                        label: "Zed".to_string(),
+                        kind: OpenTargetKind::App,
+                        app_name: Some("Zed".to_string()),
+                        args: Vec::new(),
+                    },
+                    OpenTarget {
+                        id: "file-manager".to_string(),
+                        label: "Finder".to_string(),
+                        kind: OpenTargetKind::FileManager,
+                        app_name: None,
+                        args: Vec::new(),
+                    },
+                ]),
+                default_open_target_id: Some("zed".to_string()),
+                ..GlobalSettingsPatch::default()
+            })
+            .expect("open in migration save");
+        let stored_payload: String = harness
+            .open_connection()
+            .query_row(
+                "SELECT payload_json FROM global_settings WHERE singleton_key = 'global'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored settings payload");
+
+        assert_eq!(
+            updated
                 .open_targets
                 .iter()
-                .any(|target| target.id == snapshot.settings.default_open_target_id)
+                .map(|target| target.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["zed", "file-manager"]
         );
+        assert_eq!(updated.default_open_target_id, "zed");
+        assert!(!stored_payload.contains("\"custom-app\""));
+        assert!(!stored_payload.contains("\"--reuse-window\""));
+    }
+
+    #[test]
+    fn update_settings_can_change_the_default_open_target_without_migrating_stored_targets() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let settings = GlobalSettings {
+            open_targets: vec![
+                OpenTarget {
+                    id: "custom-app".to_string(),
+                    label: "Custom App".to_string(),
+                    kind: OpenTargetKind::App,
+                    app_name: Some("Custom App".to_string()),
+                    args: vec!["--reuse-window".to_string()],
+                },
+                OpenTarget {
+                    id: "cursor".to_string(),
+                    label: "Cursor".to_string(),
+                    kind: OpenTargetKind::App,
+                    app_name: Some("Cursor".to_string()),
+                    args: Vec::new(),
+                },
+                OpenTarget {
+                    id: "file-manager".to_string(),
+                    label: "Finder".to_string(),
+                    kind: OpenTargetKind::FileManager,
+                    app_name: None,
+                    args: Vec::new(),
+                },
+            ],
+            default_open_target_id: "custom-app".to_string(),
+            ..GlobalSettings::default()
+        };
+
+        harness
+            .open_connection()
+            .execute(
+                "
+                INSERT INTO global_settings (singleton_key, payload_json, updated_at)
+                VALUES ('global', ?1, ?2)
+                ON CONFLICT(singleton_key) DO UPDATE SET
+                  payload_json = excluded.payload_json,
+                  updated_at = excluded.updated_at
+                ",
+                params![
+                    serde_json::to_string(&settings).expect("settings payload"),
+                    Utc::now(),
+                ],
+            )
+            .expect("settings should be persisted");
+
+        let updated = harness
+            .service
+            .update_settings(GlobalSettingsPatch {
+                default_open_target_id: Some("cursor".to_string()),
+                ..GlobalSettingsPatch::default()
+            })
+            .expect("default open target update");
+        let stored_payload: String = harness
+            .open_connection()
+            .query_row(
+                "SELECT payload_json FROM global_settings WHERE singleton_key = 'global'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored settings payload");
+
+        assert_eq!(updated.default_open_target_id, "cursor");
+        assert!(stored_payload.contains("\"custom-app\""));
+        assert!(stored_payload.contains("\"defaultOpenTargetId\":\"cursor\""));
     }
 
     #[test]

@@ -2,120 +2,63 @@ import { describe, expect, it } from "vitest";
 
 import type { OpenTarget } from "../../lib/types";
 import {
+  buildDraftState,
   matchesPersistedTargets,
+  moveDraftTarget,
   persistDraftTargets,
-  toPersistedTarget,
-  type OpenInDraftState,
 } from "./openInSettingsDraft";
 
-describe("openInSettingsDraft", () => {
-  it("preserves the selected default when finalized ids are deduplicated", () => {
-    const state: OpenInDraftState = {
-      targets: [
-        {
-          draftKey: "draft-1",
-          id: "open-target-draft-1",
-          label: "Zed",
-          kind: "app",
-          appName: "Zed",
-          argsText: "",
-        },
-        {
-          draftKey: "draft-2",
-          id: "open-target-draft-2",
-          label: "Zed",
-          kind: "app",
-          appName: "Zed Beta",
-          argsText: "",
-        },
-      ],
-      defaultDraftKey: "draft-2",
-    };
+const TARGETS: OpenTarget[] = [
+  {
+    id: "cursor",
+    label: "Cursor",
+    kind: "app",
+    appName: "Cursor",
+  },
+  {
+    id: "zed",
+    label: "Zed",
+    kind: "app",
+    appName: "Zed",
+  },
+  {
+    id: "file-manager",
+    label: "Finder",
+    kind: "fileManager",
+    appName: null,
+  },
+];
 
-    expect(persistDraftTargets(state)).toEqual({
-      openTargets: [
-        {
-          id: "zed",
-          label: "Zed",
-          kind: "app",
-          appName: "Zed",
-          args: [],
-        },
-        {
-          id: "zed-2",
-          label: "Zed",
-          kind: "app",
-          appName: "Zed Beta",
-          args: [],
-        },
-      ],
-      defaultOpenTargetId: "zed-2",
+describe("openInSettingsDraft", () => {
+  it("persists reordered targets with the selected default", () => {
+    const initialState = buildDraftState(TARGETS, "file-manager");
+    const movedTargets = moveDraftTarget(
+      initialState.targets,
+      initialState.targets[0]!.draftKey,
+      1,
+    );
+
+    expect(
+      persistDraftTargets({
+        targets: movedTargets,
+        defaultDraftKey: movedTargets[1]!.draftKey,
+      }),
+    ).toEqual({
+      openTargets: [TARGETS[1], TARGETS[0], TARGETS[2]],
+      defaultOpenTargetId: "cursor",
     });
   });
 
-  it("compares the finalized payload when checking for local changes", () => {
-    const persistedTargets: OpenTarget[] = [
-      {
-        id: "cursor",
-        label: "Cursor",
-        kind: "app",
-        appName: "Cursor",
-        args: ["--reuse-window"],
-      },
-    ];
+  it("treats equivalent ordered targets as unchanged", () => {
+    const draftState = buildDraftState(TARGETS.map((target) => ({ ...target })), "file-manager");
 
     expect(
       matchesPersistedTargets(
-        [
-          {
-            draftKey: "draft-1",
-            id: " cursor ",
-            label: " Cursor ",
-            kind: "app",
-            appName: " Cursor ",
-            argsText: " --reuse-window \n",
-          },
-        ],
-        "draft-1",
-        persistedTargets,
-        "cursor",
+        draftState.targets,
+        draftState.defaultDraftKey,
+        TARGETS,
+        "file-manager",
       ),
     ).toBe(true);
-  });
-
-  it("drops inactive app fields when serializing a file manager target", () => {
-    expect(
-      toPersistedTarget({
-        draftKey: "draft-1",
-        id: "finder",
-        label: "Finder",
-        kind: "fileManager",
-        appName: "Cursor",
-        argsText: "--reuse-window",
-      }),
-    ).toEqual({
-      id: "finder",
-      label: "Finder",
-      kind: "fileManager",
-      appName: null,
-      args: [],
-    });
-
-    expect(
-      toPersistedTarget({
-        draftKey: "draft-2",
-        id: "cursor",
-        label: "Cursor",
-        kind: "app",
-        appName: "Cursor",
-        argsText: "",
-      }),
-    ).toEqual({
-      id: "cursor",
-      label: "Cursor",
-      kind: "app",
-      appName: "Cursor",
-      args: [],
-    });
   });
 });

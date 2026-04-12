@@ -124,11 +124,6 @@ pub fn get_project_icon(root_path: String) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn get_open_app_icon(app_name: String) -> Option<String> {
-    crate::services::open::get_open_app_icon(&app_name)
-}
-
-#[tauri::command]
 pub fn read_image_as_data_url(path: String) -> Result<String, CommandError> {
     let trimmed = path.trim();
     if trimmed.is_empty() {

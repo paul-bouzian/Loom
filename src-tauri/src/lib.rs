@@ -74,7 +74,6 @@ pub fn run() {
             commands::git_review::push_git,
             commands::git_review::generate_git_commit_message,
             commands::system::get_bootstrap_status,
-            commands::system::get_open_app_icon,
             commands::system::get_project_icon,
             commands::system::read_image_as_data_url,
             commands::system::restart_app,

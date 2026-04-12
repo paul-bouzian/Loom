@@ -7,7 +7,6 @@ import type { GlobalSettings, OpenTarget } from "../../lib/types";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import { CheckIcon, ChevronRightIcon } from "../../shared/Icons";
 import { OpenTargetIcon } from "./OpenTargetIcon";
-import { useOpenAppIcons } from "./useOpenAppIcons";
 import "./OpenEnvironmentControl.css";
 
 type Props = {
@@ -39,13 +38,6 @@ export function OpenEnvironmentControl({ environmentId, settings }: Props) {
     () => resolveOpenTarget(targets, activeTargetId),
     [activeTargetId, targets],
   );
-  const iconTargets = useMemo(() => {
-    if (menuOpen) {
-      return targets;
-    }
-    return activeTarget ? [activeTarget] : [];
-  }, [activeTarget, menuOpen, targets]);
-  const appIcons = useOpenAppIcons(iconTargets);
 
   useEffect(() => {
     if (pendingTargetId && pendingTargetId === settings?.defaultOpenTargetId) {
@@ -195,7 +187,6 @@ export function OpenEnvironmentControl({ environmentId, settings }: Props) {
           {activeTarget ? (
             <OpenTargetIcon
               target={activeTarget}
-              iconUrl={appIcons[activeTarget.id] ?? null}
               size={14}
               className="open-environment-control__icon"
             />
@@ -246,7 +237,6 @@ export function OpenEnvironmentControl({ environmentId, settings }: Props) {
                   >
                     <OpenTargetIcon
                       target={target}
-                      iconUrl={appIcons[target.id] ?? null}
                       size={16}
                       className="open-environment-control__option-icon"
                     />

@@ -6,11 +6,9 @@ import * as bridge from "../../lib/bridge";
 import { makeGlobalSettings } from "../../test/fixtures/conversation";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import { OpenEnvironmentControl } from "./OpenEnvironmentControl";
-import { resetOpenAppIconCacheForTests } from "./useOpenAppIcons";
 
 vi.mock("../../lib/bridge", () => ({
   openEnvironment: vi.fn(),
-  getOpenAppIcon: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -20,10 +18,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 describe("OpenEnvironmentControl", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resetOpenAppIconCacheForTests();
     useWorkspaceStore.setState(useWorkspaceStore.getInitialState(), true);
     vi.mocked(bridge.openEnvironment).mockResolvedValue(undefined);
-    vi.mocked(bridge.getOpenAppIcon).mockResolvedValue(null);
     useWorkspaceStore.setState({
       updateGlobalSettings: vi.fn(async () => ({
         ok: true,
@@ -52,33 +48,6 @@ describe("OpenEnvironmentControl", () => {
     expect(bridge.openEnvironment).toHaveBeenCalledWith({
       environmentId: "env-1",
       targetId: "cursor",
-    });
-  });
-
-  it("prefers resolved app icons and only falls back to bundled assets", async () => {
-    const user = userEvent.setup();
-
-    render(
-      <OpenEnvironmentControl
-        environmentId="env-1"
-        settings={makeGlobalSettings({ defaultOpenTargetId: "cursor" })}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Open environment in Cursor" })).toBeInTheDocument();
-    });
-    await waitFor(() => {
-      expect(bridge.getOpenAppIcon).toHaveBeenCalledWith("Cursor");
-    });
-
-    await user.click(screen.getByRole("button", { name: "Choose open target" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("menuitemradio", { name: /Zed/ })).toBeInTheDocument();
-    });
-    await waitFor(() => {
-      expect(bridge.getOpenAppIcon).toHaveBeenCalledWith("Zed");
     });
   });
 

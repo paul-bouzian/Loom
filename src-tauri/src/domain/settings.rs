@@ -75,7 +75,8 @@ pub struct OpenTarget {
     pub kind: OpenTargetKind,
     #[serde(default)]
     pub app_name: Option<String>,
-    #[serde(default)]
+    // Legacy storage only. Launch behavior no longer consumes user-provided args.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
 }
 
@@ -166,49 +167,49 @@ impl GlobalSettings {
     }
 
     pub fn normalize_for_read(&mut self) -> bool {
-        self.normalize_open_targets(OpenTargetNormalizationMode::RepairStored)
-            .unwrap_or(false)
+        repair_stored_open_targets(&mut self.open_targets, &mut self.default_open_target_id)
     }
 
     pub fn normalize_for_update(&mut self) -> Result<(), String> {
-        self.normalize_open_targets(OpenTargetNormalizationMode::RejectInvalid)?;
+        normalize_open_targets_for_update(
+            &mut self.open_targets,
+            &mut self.default_open_target_id,
+        )?;
         Ok(())
     }
 
-    pub fn resolve_open_target(&self, target_id: Option<&str>) -> Result<&OpenTarget, String> {
+    pub fn normalize_default_open_target_for_update(&mut self) -> Result<(), String> {
+        normalize_default_open_target_for_update(
+            &self.open_targets,
+            &mut self.default_open_target_id,
+        )
+    }
+
+    pub fn projected_for_client(&self) -> Self {
+        let mut projected = self.clone();
+        let (open_targets, default_open_target_id) =
+            project_open_targets(&self.open_targets, &self.default_open_target_id);
+        projected.open_targets = open_targets;
+        projected.default_open_target_id = default_open_target_id;
+        projected
+    }
+
+    pub fn resolve_open_target(&self, target_id: Option<&str>) -> Result<OpenTarget, String> {
+        let (projected_targets, projected_default_target_id) =
+            project_open_targets(&self.open_targets, &self.default_open_target_id);
         let resolved_id = target_id
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .unwrap_or(self.default_open_target_id.as_str());
-        self.open_targets
-            .iter()
+            .unwrap_or(projected_default_target_id.as_str());
+        projected_targets
+            .into_iter()
             .find(|target| target.id == resolved_id)
             .ok_or_else(|| format!("Unknown Open In target: {resolved_id}"))
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        self.shortcuts.validate().map_err(|error| error.to_string())?;
-        let mut normalized = self.clone();
-        normalized.normalize_for_update()?;
-        Ok(())
+        self.shortcuts.validate().map_err(|error| error.to_string())
     }
-
-    fn normalize_open_targets(
-        &mut self,
-        mode: OpenTargetNormalizationMode,
-    ) -> Result<bool, String> {
-        normalize_open_targets(
-            &mut self.open_targets,
-            &mut self.default_open_target_id,
-            mode,
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum OpenTargetNormalizationMode {
-    RepairStored,
-    RejectInvalid,
 }
 
 impl OpenTarget {
@@ -231,85 +232,49 @@ impl OpenTarget {
             args: Vec::new(),
         }
     }
-
-    fn normalize(&mut self) -> Result<bool, String> {
-        let mut changed = false;
-
-        let id = self.id.trim();
-        if id.is_empty() {
-            return Err("Target id is required.".to_string());
-        }
-        if id != self.id {
-            self.id = id.to_string();
-            changed = true;
-        }
-
-        let label = self.label.trim();
-        if label.is_empty() {
-            return Err("Target label is required.".to_string());
-        }
-        if label != self.label {
-            self.label = label.to_string();
-            changed = true;
-        }
-
-        let normalized_app_name = normalize_optional_string(self.app_name.clone());
-        let normalized_args = normalize_args(&self.args);
-        if self.app_name != normalized_app_name {
-            self.app_name = normalized_app_name;
-            changed = true;
-        }
-        if self.args != normalized_args {
-            self.args = normalized_args;
-            changed = true;
-        }
-
-        match self.kind {
-            OpenTargetKind::App => {
-                if self.app_name.is_none() {
-                    return Err("App targets require an application name.".to_string());
-                }
-            }
-            OpenTargetKind::Command => {
-                return Err("Command-based Open In targets are no longer supported.".to_string());
-            }
-            OpenTargetKind::FileManager => {
-                if self.app_name.is_some() {
-                    self.app_name = None;
-                    changed = true;
-                }
-                if !self.args.is_empty() {
-                    self.args.clear();
-                    changed = true;
-                }
-            }
-        }
-
-        Ok(changed)
-    }
 }
 
-fn normalize_open_targets(
+#[cfg(target_os = "macos")]
+const CURATED_OPEN_TARGET_IDS: &[&str] = &[
+    "cursor",
+    "vscode",
+    "zed",
+    "idea",
+    "antigravity",
+    "ghostty",
+    "iterm2",
+    "terminal",
+    "file-manager",
+];
+
+#[cfg(not(target_os = "macos"))]
+const CURATED_OPEN_TARGET_IDS: &[&str] = &["file-manager"];
+
+fn repair_stored_open_targets(
     targets: &mut Vec<OpenTarget>,
     default_target_id: &mut String,
-    mode: OpenTargetNormalizationMode,
+) -> bool {
+    if targets.is_empty() {
+        *targets = default_open_targets();
+        *default_target_id = default_open_target_id();
+        return true;
+    }
+
+    false
+}
+
+fn normalize_open_targets_for_update(
+    targets: &mut Vec<OpenTarget>,
+    default_target_id: &mut String,
 ) -> Result<bool, String> {
     let mut changed = false;
     let mut next_targets = Vec::with_capacity(targets.len());
 
-    for (index, mut target) in targets.iter().cloned().enumerate() {
-        match target.normalize() {
-            Ok(target_changed) => {
-                changed |= target_changed;
-                next_targets.push(target);
-            }
-            Err(error) => match mode {
-                OpenTargetNormalizationMode::RepairStored => changed = true,
-                OpenTargetNormalizationMode::RejectInvalid => {
-                    return Err(format!("Open target {}: {error}", index + 1));
-                }
-            },
-        }
+    for (index, target) in targets.iter().enumerate() {
+        let canonical_target = canonical_open_target_for_update(target)
+            .map_err(|error| format!("Open target {}: {error}", index + 1))?;
+        changed |= target != &canonical_target;
+        next_targets.push(canonical_target);
     }
 
     let mut seen_ids = HashSet::new();
@@ -320,63 +285,116 @@ fn normalize_open_targets(
             continue;
         }
 
-        match mode {
-            OpenTargetNormalizationMode::RepairStored => changed = true,
-            OpenTargetNormalizationMode::RejectInvalid => {
-                return Err(format!("Open target ids must be unique: {}", target.id));
-            }
-        }
-    }
-
-    if matches!(mode, OpenTargetNormalizationMode::RepairStored) {
-        let previous_len = deduped_targets.len();
-        deduped_targets.retain(|target| !is_deprecated_seeded_open_target(target));
-        if deduped_targets.len() != previous_len {
-            changed = true;
-        }
+        return Err(format!("Open target ids must be unique: {}", target.id));
     }
 
     if deduped_targets.is_empty() {
-        match mode {
-            OpenTargetNormalizationMode::RepairStored => {
-                *targets = default_open_targets();
-                *default_target_id = default_open_target_id();
-                return Ok(true);
-            }
-            OpenTargetNormalizationMode::RejectInvalid => {
-                return Err("At least one Open In target is required.".to_string());
-            }
-        }
+        return Err("At least one Open In target is required.".to_string());
     }
 
-    let trimmed_default_id = default_target_id.trim();
-    if trimmed_default_id.is_empty()
-        || !deduped_targets
-            .iter()
-            .any(|target| target.id == trimmed_default_id)
-    {
-        *default_target_id = preferred_default_open_target_id(&deduped_targets);
-        changed = true;
-    } else if *default_target_id != trimmed_default_id {
-        *default_target_id = trimmed_default_id.to_string();
-        changed = true;
-    }
+    changed |= normalize_projected_default_target_id(default_target_id, &deduped_targets);
 
     *targets = deduped_targets;
     Ok(changed)
 }
 
-fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value
-        .map(|candidate| candidate.trim().to_string())
-        .filter(|candidate| !candidate.is_empty())
+fn normalize_default_open_target_for_update(
+    targets: &[OpenTarget],
+    default_target_id: &mut String,
+) -> Result<(), String> {
+    let (projected_targets, repaired_default_target_id) =
+        project_open_targets(targets, default_target_id);
+    let trimmed_default_id = default_target_id.trim();
+    if trimmed_default_id.is_empty() {
+        *default_target_id = repaired_default_target_id;
+        return Ok(());
+    }
+
+    if projected_targets
+        .iter()
+        .any(|target| target.id == trimmed_default_id)
+    {
+        if *default_target_id != trimmed_default_id {
+            *default_target_id = trimmed_default_id.to_string();
+        }
+        return Ok(());
+    }
+
+    Err(format!("Unknown Open In target: {trimmed_default_id}"))
 }
 
-fn normalize_args(args: &[String]) -> Vec<String> {
-    args.iter()
-        .map(|argument| argument.trim().to_string())
-        .filter(|argument| !argument.is_empty())
-        .collect()
+fn project_open_targets(
+    targets: &[OpenTarget],
+    default_target_id: &str,
+) -> (Vec<OpenTarget>, String) {
+    let mut seen_ids = HashSet::new();
+    let mut projected_targets = Vec::with_capacity(targets.len());
+    for target in targets {
+        let Some(projected_target) = project_stored_open_target(target) else {
+            continue;
+        };
+        if seen_ids.insert(projected_target.id.clone()) {
+            projected_targets.push(projected_target);
+        }
+    }
+
+    if projected_targets.is_empty() {
+        projected_targets = default_open_targets();
+    }
+
+    let default_target_id = normalized_default_target_id(default_target_id, &projected_targets);
+    (projected_targets, default_target_id)
+}
+
+fn project_stored_open_target(target: &OpenTarget) -> Option<OpenTarget> {
+    if matches!(target.kind, OpenTargetKind::Command) {
+        return None;
+    }
+
+    let target_id = target.id.trim();
+    if target_id.is_empty() {
+        return None;
+    }
+
+    curated_open_target_by_id(target_id)
+}
+
+fn canonical_open_target_for_update(target: &OpenTarget) -> Result<OpenTarget, String> {
+    if matches!(target.kind, OpenTargetKind::Command) {
+        return Err("Command-based Open In targets are no longer supported.".to_string());
+    }
+
+    let target_id = target.id.trim();
+    if target_id.is_empty() {
+        return Err("Target id is required.".to_string());
+    }
+
+    curated_open_target_by_id(target_id)
+        .ok_or_else(|| format!("Unknown Open In target: {target_id}"))
+}
+
+fn normalize_projected_default_target_id(
+    default_target_id: &mut String,
+    targets: &[OpenTarget],
+) -> bool {
+    let normalized_default_target_id = normalized_default_target_id(default_target_id, targets);
+    if *default_target_id == normalized_default_target_id {
+        return false;
+    }
+
+    *default_target_id = normalized_default_target_id;
+    true
+}
+
+fn normalized_default_target_id(default_target_id: &str, targets: &[OpenTarget]) -> String {
+    let trimmed_default_id = default_target_id.trim();
+    if !trimmed_default_id.is_empty()
+        && targets.iter().any(|target| target.id == trimmed_default_id)
+    {
+        return trimmed_default_id.to_string();
+    }
+
+    preferred_default_open_target_id(targets)
 }
 
 fn preferred_default_open_target_id(targets: &[OpenTarget]) -> String {
@@ -388,55 +406,37 @@ fn preferred_default_open_target_id(targets: &[OpenTarget]) -> String {
         .unwrap_or_else(|| "file-manager".to_string())
 }
 
-fn is_deprecated_seeded_open_target(target: &OpenTarget) -> bool {
-    matches!(
-        (
-            target.id.as_str(),
-            target.label.as_str(),
-            target.kind,
-            target.app_name.as_deref(),
-            target.args.is_empty(),
-        ),
-        (
-            "vscode-insiders",
-            "VS Code Insiders",
-            OpenTargetKind::App,
-            Some("Visual Studio Code - Insiders"),
-            true,
-        ) | (
-            "vscodium",
-            "VSCodium",
-            OpenTargetKind::App,
-            Some("VSCodium"),
-            true,
-        ) | (
-            "trae",
-            "Trae",
-            OpenTargetKind::App,
-            Some("Trae"),
-            true,
-        )
-    )
+fn curated_open_target_by_id(target_id: &str) -> Option<OpenTarget> {
+    #[cfg(target_os = "macos")]
+    {
+        match target_id {
+            "cursor" => Some(OpenTarget::app("cursor", "Cursor", "Cursor")),
+            "vscode" => Some(OpenTarget::app("vscode", "VS Code", "Visual Studio Code")),
+            "zed" => Some(OpenTarget::app("zed", "Zed", "Zed")),
+            "idea" => Some(OpenTarget::app("idea", "IntelliJ IDEA", "IntelliJ IDEA")),
+            "antigravity" => Some(OpenTarget::app("antigravity", "Antigravity", "Antigravity")),
+            "ghostty" => Some(OpenTarget::app("ghostty", "Ghostty", "Ghostty")),
+            "iterm2" => Some(OpenTarget::app("iterm2", "iTerm2", "iTerm")),
+            "terminal" => Some(OpenTarget::app("terminal", "Terminal", "Terminal")),
+            "file-manager" => Some(OpenTarget::file_manager("file-manager", "Finder")),
+            _ => None,
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        match target_id {
+            "file-manager" => Some(OpenTarget::file_manager("file-manager", "File Manager")),
+            _ => None,
+        }
+    }
 }
 
-#[cfg(target_os = "macos")]
 fn default_open_targets_for_platform() -> Vec<OpenTarget> {
-    vec![
-        OpenTarget::app("cursor", "Cursor", "Cursor"),
-        OpenTarget::app("vscode", "VS Code", "Visual Studio Code"),
-        OpenTarget::app("zed", "Zed", "Zed"),
-        OpenTarget::app("idea", "IntelliJ IDEA", "IntelliJ IDEA"),
-        OpenTarget::app("antigravity", "Antigravity", "Antigravity"),
-        OpenTarget::app("ghostty", "Ghostty", "Ghostty"),
-        OpenTarget::app("iterm2", "iTerm2", "iTerm"),
-        OpenTarget::app("terminal", "Terminal", "Terminal"),
-        OpenTarget::file_manager("file-manager", "Finder"),
-    ]
-}
-
-#[cfg(not(target_os = "macos"))]
-fn default_open_targets_for_platform() -> Vec<OpenTarget> {
-    vec![OpenTarget::file_manager("file-manager", "File Manager")]
+    CURATED_OPEN_TARGET_IDS
+        .iter()
+        .filter_map(|target_id| curated_open_target_by_id(target_id))
+        .collect()
 }
 
 #[cfg(test)]
@@ -488,7 +488,10 @@ mod tests {
         ));
         assert_eq!(settings.default_service_tier, Some(ServiceTier::Fast));
         assert!(settings.collapse_work_activity);
-        assert_eq!(settings.shortcuts.toggle_terminal.as_deref(), Some("mod+shift+j"));
+        assert_eq!(
+            settings.shortcuts.toggle_terminal.as_deref(),
+            Some("mod+shift+j")
+        );
         assert_eq!(settings.open_targets.len(), 1);
         assert_eq!(settings.default_open_target_id, "zed");
         assert_eq!(
@@ -558,14 +561,15 @@ mod tests {
         .expect("legacy settings should deserialize");
 
         assert!(settings.collapse_work_activity);
-        assert_eq!(settings.shortcuts.open_settings.as_deref(), Some("mod+comma"));
-        assert!(!settings.open_targets.is_empty());
-        assert!(
-            settings
-                .open_targets
-                .iter()
-                .any(|target| target.id == settings.default_open_target_id)
+        assert_eq!(
+            settings.shortcuts.open_settings.as_deref(),
+            Some("mod+comma")
         );
+        assert!(!settings.open_targets.is_empty());
+        assert!(settings
+            .open_targets
+            .iter()
+            .any(|target| target.id == settings.default_open_target_id));
         assert_eq!(settings.default_service_tier, Some(ServiceTier::Fast));
     }
 
@@ -594,7 +598,7 @@ mod tests {
                     args: vec![" --reuse-window ".to_string(), "".to_string()],
                 },
                 OpenTarget {
-                    id: "finder".to_string(),
+                    id: " file-manager ".to_string(),
                     label: " Finder ".to_string(),
                     kind: OpenTargetKind::FileManager,
                     app_name: Some("should-clear".to_string()),
@@ -612,11 +616,11 @@ mod tests {
         assert_eq!(settings.open_targets[0].id, "cursor");
         assert_eq!(settings.open_targets[0].label, "Cursor");
         assert_eq!(settings.open_targets[0].app_name.as_deref(), Some("Cursor"));
-        assert_eq!(settings.open_targets[0].args, vec!["--reuse-window".to_string()]);
+        assert!(settings.open_targets[0].args.is_empty());
         assert_eq!(settings.open_targets[1].label, "Finder");
         assert_eq!(settings.open_targets[1].app_name, None);
         assert!(settings.open_targets[1].args.is_empty());
-        assert_eq!(settings.default_open_target_id, "finder");
+        assert_eq!(settings.default_open_target_id, "file-manager");
     }
 
     #[test]
@@ -647,36 +651,28 @@ mod tests {
     #[test]
     fn normalize_for_read_repairs_invalid_stored_targets() {
         let mut settings = GlobalSettings {
-            open_targets: vec![OpenTarget {
-                id: " ".to_string(),
-                label: " ".to_string(),
-                kind: OpenTargetKind::App,
-                app_name: None,
-                args: Vec::new(),
-            }],
+            open_targets: Vec::new(),
             default_open_target_id: "missing".to_string(),
             ..GlobalSettings::default()
         };
 
         assert!(settings.normalize_for_read());
         assert!(!settings.open_targets.is_empty());
-        assert!(
-            settings
-                .open_targets
-                .iter()
-                .any(|target| target.id == settings.default_open_target_id)
-        );
+        assert!(settings
+            .open_targets
+            .iter()
+            .any(|target| target.id == settings.default_open_target_id));
     }
 
     #[test]
-    fn normalize_for_read_drops_legacy_command_targets() {
-        let mut settings = GlobalSettings {
+    fn projected_for_client_hides_legacy_targets_without_mutating_storage() {
+        let settings = GlobalSettings {
             open_targets: vec![
                 OpenTarget {
                     id: "cursor".to_string(),
                     label: "Cursor".to_string(),
                     kind: OpenTargetKind::App,
-                    app_name: Some("Cursor".to_string()),
+                    app_name: Some("Malicious Cursor".to_string()),
                     args: vec!["--reuse-window".to_string()],
                 },
                 OpenTarget {
@@ -691,15 +687,50 @@ mod tests {
             ..GlobalSettings::default()
         };
 
-        assert!(settings.normalize_for_read());
-        assert_eq!(settings.open_targets.len(), 1);
-        assert_eq!(settings.open_targets[0].id, "cursor");
-        assert_eq!(settings.default_open_target_id, "cursor");
+        let projected = settings.projected_for_client();
+
+        assert_eq!(projected.open_targets.len(), 1);
+        assert_eq!(projected.open_targets[0].id, "cursor");
+        assert_eq!(
+            projected.open_targets[0].app_name.as_deref(),
+            Some("Cursor")
+        );
+        assert!(projected.open_targets[0].args.is_empty());
+        assert_eq!(projected.default_open_target_id, "cursor");
+
+        assert_eq!(settings.open_targets.len(), 2);
+        assert_eq!(
+            settings.open_targets[0].app_name.as_deref(),
+            Some("Malicious Cursor")
+        );
+        assert_eq!(settings.open_targets[1].id, "cursor-cli");
+        assert_eq!(settings.default_open_target_id, "cursor-cli");
     }
 
     #[test]
-    fn normalize_for_read_drops_deprecated_seeded_targets() {
+    fn normalize_for_update_rejects_unknown_targets() {
         let mut settings = GlobalSettings {
+            open_targets: vec![OpenTarget {
+                id: "custom-app".to_string(),
+                label: "Custom App".to_string(),
+                kind: OpenTargetKind::App,
+                app_name: Some("Custom App".to_string()),
+                args: vec!["--anything".to_string()],
+            }],
+            ..GlobalSettings::default()
+        };
+
+        assert_eq!(
+            settings
+                .normalize_for_update()
+                .expect_err("unknown target should fail"),
+            "Open target 1: Unknown Open In target: custom-app"
+        );
+    }
+
+    #[test]
+    fn projected_for_client_hides_deprecated_seeded_targets() {
+        let settings = GlobalSettings {
             open_targets: vec![
                 OpenTarget::app("cursor", "Cursor", "Cursor"),
                 OpenTarget::app(
@@ -715,16 +746,17 @@ mod tests {
             ..GlobalSettings::default()
         };
 
-        assert!(settings.normalize_for_read());
+        let projected = settings.projected_for_client();
         assert_eq!(
-            settings
+            projected
                 .open_targets
                 .iter()
                 .map(|target| target.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["cursor", "file-manager"]
         );
-        assert_eq!(settings.default_open_target_id, "file-manager");
+        assert_eq!(projected.default_open_target_id, "file-manager");
+        assert_eq!(settings.default_open_target_id, "vscode-insiders");
     }
 
     #[cfg(not(target_os = "macos"))]

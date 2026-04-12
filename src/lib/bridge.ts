@@ -311,10 +311,6 @@ export function openEnvironment(
   return invoke<void>("open_environment", { input });
 }
 
-export function getOpenAppIcon(appName: string): Promise<string | null> {
-  return invoke<string | null>("get_open_app_icon", { appName });
-}
-
 export function addProject(
   input: AddProjectRequest,
 ): Promise<ProjectRecord> {

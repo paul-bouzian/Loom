@@ -11,14 +11,12 @@ describe("OpenTargetIcon", () => {
       label: "Finder",
       kind: "fileManager",
       appName: null,
-      args: [],
     };
     const genericTarget: OpenTarget = {
       id: "file-manager",
       label: "File Manager",
       kind: "fileManager",
       appName: null,
-      args: [],
     };
 
     const finderRender = render(<OpenTargetIcon target={finderTarget} />);

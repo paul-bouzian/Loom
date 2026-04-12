@@ -1,17 +1,12 @@
-import type { OpenTarget, OpenTargetKind } from "../../lib/types";
+import type { OpenTarget } from "../../lib/types";
 
 export type DraftOpenTarget = {
   draftKey: string;
-  id: string;
-  label: string;
-  kind: OpenTargetKind;
-  appName: string;
-  argsText: string;
+  target: OpenTarget;
 };
 
 export type DraftIssues = {
   global: string | null;
-  byKey: Record<string, string>;
 };
 
 export type OpenInDraftState = {
@@ -20,7 +15,6 @@ export type OpenInDraftState = {
 };
 
 let nextDraftId = 0;
-const DRAFT_ID_PREFIX = "open-target-draft-";
 
 export function buildDraftState(targets: OpenTarget[], defaultTargetId: string) {
   const nextTargets = buildDraftTargets(targets);
@@ -35,37 +29,14 @@ export function validateDraftTargets(
   defaultDraftKey: string | null,
 ): DraftIssues {
   if (targets.length === 0) {
-    return {
-      global: "Add at least one Open In target.",
-      byKey: {},
-    };
+    return { global: "At least one Open In target is required." };
   }
 
-  const byKey: Record<string, string> = {};
-  for (const target of targets) {
-    if (!target.label.trim()) {
-      byKey[target.draftKey] = "Label is required.";
-      continue;
-    }
-    if (target.kind === "app" && !target.appName.trim()) {
-      byKey[target.draftKey] = "Application name is required.";
-    }
+  if (!defaultDraftKey || !targets.some((target) => target.draftKey === defaultDraftKey)) {
+    return { global: "Choose a default target." };
   }
 
-  if (
-    !defaultDraftKey ||
-    !targets.some((target) => target.draftKey === defaultDraftKey)
-  ) {
-    return {
-      global: "Choose a default target.",
-      byKey,
-    };
-  }
-
-  return {
-    global: null,
-    byKey,
-  };
+  return { global: null };
 }
 
 export function matchesPersistedTargets(
@@ -74,27 +45,18 @@ export function matchesPersistedTargets(
   targets: OpenTarget[],
   defaultTargetId: string,
 ) {
-  const finalizedDraftTargets = finalizeDraftTargets(draftTargets);
-  if (finalizedDraftTargets.length !== targets.length) {
+  if (draftTargets.length !== targets.length) {
     return false;
   }
 
-  const defaultIndex = draftTargets.findIndex(
-    (target) => target.draftKey === defaultDraftKey,
-  );
-  if (
-    defaultIndex === -1 ||
-    finalizedDraftTargets[defaultIndex]?.id !== defaultTargetId
-  ) {
+  const defaultTarget = draftTargets.find((target) => target.draftKey === defaultDraftKey);
+  if (!defaultTarget || defaultTarget.target.id !== defaultTargetId) {
     return false;
   }
 
-  return finalizedDraftTargets.every((target, index) => {
+  return draftTargets.every((target, index) => {
     const persisted = targets[index];
-    if (!persisted) {
-      return false;
-    }
-    return openTargetsEqual(target, persisted);
+    return persisted ? openTargetsEqual(target.target, persisted) : false;
   });
 }
 
@@ -115,32 +77,16 @@ export function persistedOpenInSettingsEqual(
 }
 
 export function persistDraftTargets(state: OpenInDraftState) {
-  const defaultIndex = state.targets.findIndex(
+  const defaultTarget = state.targets.find(
     (target) => target.draftKey === state.defaultDraftKey,
   );
-  if (defaultIndex === -1) {
-    return null;
-  }
-  const persistedTargets = finalizeDraftTargets(state.targets);
-
-  const persistedDefaultTarget = persistedTargets[defaultIndex];
-  if (!persistedDefaultTarget) {
+  if (!defaultTarget) {
     return null;
   }
 
   return {
-    openTargets: persistedTargets,
-    defaultOpenTargetId: persistedDefaultTarget.id,
-  };
-}
-
-export function toPersistedTarget(target: DraftOpenTarget): OpenTarget {
-  return {
-    id: target.id,
-    label: target.label.trim(),
-    kind: target.kind,
-    appName: target.kind === "app" ? target.appName.trim() || null : null,
-    args: target.kind === "app" ? parseArgs(target.argsText) : [],
+    openTargets: state.targets.map(({ target }) => cloneOpenTarget(target)),
+    defaultOpenTargetId: defaultTarget.target.id,
   };
 }
 
@@ -164,102 +110,19 @@ export function moveDraftTarget(
   return nextTargets;
 }
 
-export function createDraftTarget(kind: OpenTargetKind): DraftOpenTarget {
-  const draftKey = nextOpenTargetDraftKey();
-  return {
-    draftKey,
-    id: draftKey,
-    label: "",
-    kind,
-    appName: "",
-    argsText: "",
-  };
-}
-
-export function parseArgs(argsText: string) {
-  return argsText
-    .split("\n")
-    .map((argument) => argument.trim())
-    .filter(Boolean);
-}
-
-function finalizeDraftTargets(targets: DraftOpenTarget[]) {
-  const seenIds = new Set<string>();
-  return targets.map((target, index) => {
-    const persisted = toPersistedTarget(target);
-    const baseId = persistedIdForDraft(target, index);
-    const uniqueId = dedupeId(baseId, seenIds);
-    seenIds.add(uniqueId);
-    return {
-      ...persisted,
-      id: uniqueId,
-    };
-  });
-}
-
-function persistedIdForDraft(
-  target: DraftOpenTarget,
-  index = 0,
-) {
-  const trimmedId = target.id.trim();
-  if (trimmedId && !trimmedId.startsWith(DRAFT_ID_PREFIX)) {
-    return trimmedId;
-  }
-
-  const labelSlug = slugify(target.label);
-  if (labelSlug) {
-    return labelSlug;
-  }
-
-  const kindPrefix =
-    target.kind === "fileManager" ? "file-manager" : "app";
-  return `${kindPrefix}-${index + 1}`;
-}
-
-function dedupeId(baseId: string, seenIds: Set<string>) {
-  if (!seenIds.has(baseId)) {
-    return baseId;
-  }
-
-  let suffix = 2;
-  let nextId = `${baseId}-${suffix}`;
-  while (seenIds.has(nextId)) {
-    suffix += 1;
-    nextId = `${baseId}-${suffix}`;
-  }
-  return nextId;
-}
-
-function slugify(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 function openTargetsEqual(left: OpenTarget, right: OpenTarget) {
   return (
     left.id === right.id &&
     left.label === right.label &&
     left.kind === right.kind &&
-    (left.appName ?? null) === (right.appName ?? null) &&
-    arraysEqual(left.args, right.args)
+    (left.appName ?? null) === (right.appName ?? null)
   );
-}
-
-function arraysEqual(left: string[], right: string[]) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function buildDraftTargets(targets: OpenTarget[]) {
   return targets.map((target) => ({
     draftKey: nextOpenTargetDraftKey(),
-    id: target.id,
-    label: target.label,
-    kind: target.kind,
-    appName: target.appName ?? "",
-    argsText: target.args.join("\n"),
+    target: cloneOpenTarget(target),
   }));
 }
 
@@ -270,8 +133,13 @@ function resolveDefaultDraftKey(
   if (targets.length === 0) {
     return null;
   }
-  const matched = targets.find((target) => target.id === defaultTargetId);
+
+  const matched = targets.find((target) => target.target.id === defaultTargetId);
   return matched ? matched.draftKey : targets[0]?.draftKey ?? null;
+}
+
+function cloneOpenTarget(target: OpenTarget): OpenTarget {
+  return { ...target };
 }
 
 function nextOpenTargetDraftKey() {

@@ -228,10 +228,9 @@ pub fn open_environment(
 ) -> Result<(), CommandError> {
     let environment_id = input.environment_id.trim();
     if environment_id.is_empty() {
-        return Err(crate::error::AppError::Validation(
-            "Environment id is required.".to_string(),
-        )
-        .into());
+        return Err(
+            crate::error::AppError::Validation("Environment id is required.".to_string()).into(),
+        );
     }
     let context = state
         .workspace
