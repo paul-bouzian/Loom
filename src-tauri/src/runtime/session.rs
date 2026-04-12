@@ -714,10 +714,19 @@ impl RuntimeSession {
                 "Codex runtime stopped before the request completed.".to_string(),
             )));
         }
-        let mut state = self.state.lock().await;
-        state.pending_server_requests.clear();
-        state.turn_modes_by_id.clear();
-        state.pending_turn_mode_by_thread.clear();
+        let thread_ids = {
+            let mut state = self.state.lock().await;
+            let thread_ids = state
+                .snapshots_by_thread
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            state.pending_server_requests.clear();
+            state.turn_modes_by_id.clear();
+            state.pending_turn_mode_by_thread.clear();
+            thread_ids
+        };
+        clear_buffered_snapshot_emits(&thread_ids).await;
         Ok(())
     }
 
@@ -2636,6 +2645,17 @@ fn snapshot_emit_state() -> &'static Mutex<HashMap<String, BufferedSnapshotEmit>
     SNAPSHOT_EMIT_STATE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+async fn clear_buffered_snapshot_emits(thread_ids: &[String]) {
+    if thread_ids.is_empty() {
+        return;
+    }
+
+    let mut emits = snapshot_emit_state().lock().await;
+    for thread_id in thread_ids {
+        emits.remove(thread_id);
+    }
+}
+
 fn conversation_item_is_streaming(item: &ConversationItem) -> bool {
     match item {
         ConversationItem::Message(message) => message.is_streaming,
@@ -2988,6 +3008,28 @@ mod tests {
             BufferedSnapshotEmitAction::EmitNow
         ));
         assert!(take_buffered_snapshot(&mut entry).is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_clears_buffered_snapshot_emit_state_for_loaded_threads() {
+        let session = test_session_with_snapshot(make_completed_snapshot());
+        snapshot_emit_state().lock().await.insert(
+            "thread-1".to_string(),
+            BufferedSnapshotEmit {
+                last_emitted_signature: Some(SnapshotEmitSignature::from_snapshot(
+                    &make_completed_snapshot(),
+                )),
+                latest_snapshot: Some(make_streaming_snapshot("Buffered")),
+                scheduled: true,
+            },
+        );
+
+        session.stop().await.expect("test session should stop cleanly");
+
+        assert!(
+            !snapshot_emit_state().lock().await.contains_key("thread-1"),
+            "stopped sessions should clear buffered emit state"
+        );
     }
 
     #[tokio::test]

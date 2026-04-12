@@ -35,7 +35,7 @@ struct IdleRuntimeCandidate {
 }
 
 struct IdleRuntimeClassification {
-    evictable_environment_ids: Vec<String>,
+    evictable_candidates: Vec<IdleRuntimeCandidate>,
     keep_alive_environment_ids: Vec<String>,
 }
 
@@ -445,10 +445,26 @@ impl RuntimeSupervisor {
             self.mark_runtime_activity(&environment_id).await;
         }
 
-        for environment_id in classification.evictable_environment_ids {
-            if let Err(error) = self.stop(&environment_id).await {
+        for candidate in classification.evictable_candidates {
+            if !should_stop_idle_runtime_candidate(
+                &self.registry,
+                &candidate,
+                Utc::now(),
+                cutoff,
+            )
+            .await
+            {
+                continue;
+            }
+
+            if candidate.session.has_keep_alive_work().await {
+                self.mark_runtime_activity(&candidate.environment_id).await;
+                continue;
+            }
+
+            if let Err(error) = self.stop(&candidate.environment_id).await {
                 warn!(
-                    environment_id = %environment_id,
+                    environment_id = %candidate.environment_id,
                     "failed to evict idle runtime: {error}"
                 );
             }
@@ -536,21 +552,37 @@ fn collect_idle_runtime_candidates(
 async fn classify_idle_runtime_candidates(
     candidates: Vec<IdleRuntimeCandidate>,
 ) -> IdleRuntimeClassification {
-    let mut evictable_environment_ids = Vec::new();
+    let mut evictable_candidates = Vec::new();
     let mut keep_alive_environment_ids = Vec::new();
 
     for candidate in candidates {
         if candidate.session.has_keep_alive_work().await {
             keep_alive_environment_ids.push(candidate.environment_id);
         } else {
-            evictable_environment_ids.push(candidate.environment_id);
+            evictable_candidates.push(candidate);
         }
     }
 
     IdleRuntimeClassification {
-        evictable_environment_ids,
+        evictable_candidates,
         keep_alive_environment_ids,
     }
+}
+
+async fn should_stop_idle_runtime_candidate(
+    registry: &Mutex<RuntimeRegistry>,
+    candidate: &IdleRuntimeCandidate,
+    now: DateTime<Utc>,
+    cutoff: chrono::Duration,
+) -> bool {
+    let registry = registry.lock().await;
+    registry
+        .running
+        .get(&candidate.environment_id)
+        .is_some_and(|runtime| {
+            Arc::ptr_eq(&runtime.session, &candidate.session)
+                && (now - runtime.last_activity_at) >= cutoff
+        })
 }
 
 async fn read_account_rate_limits_from_target(
@@ -621,8 +653,8 @@ mod tests {
     use super::{
         classify_idle_runtime_candidates, collect_idle_runtime_candidates,
         finish_headless_read, read_account_from_target, read_auth_status_from_target,
-        resolve_binary_path, touch_running_runtime, AppServerAuthStatus, RunningRuntime,
-        RuntimeReadTarget, RuntimeRegistry,
+        resolve_binary_path, should_stop_idle_runtime_candidate, touch_running_runtime,
+        AppServerAuthStatus, RunningRuntime, RuntimeReadTarget, RuntimeRegistry,
     };
     use crate::domain::conversation::{
         ConversationComposerSettings, ConversationMessageItem, ConversationRole,
@@ -767,11 +799,53 @@ mod tests {
 
         let classification = classify_idle_runtime_candidates(candidates).await;
 
-        assert_eq!(classification.evictable_environment_ids, vec!["env-idle"]);
+        assert_eq!(classification.evictable_candidates.len(), 1);
+        assert_eq!(
+            classification.evictable_candidates[0].environment_id,
+            "env-idle"
+        );
         assert_eq!(
             classification.keep_alive_environment_ids,
             vec!["env-active"]
         );
+    }
+
+    #[tokio::test]
+    async fn idle_revalidation_skips_candidates_touched_after_collection() {
+        let initial_activity_at = Utc
+            .with_ymd_and_hms(2026, 4, 12, 10, 0, 0)
+            .single()
+            .expect("valid timestamp");
+        let touched_at = initial_activity_at + ChronoDuration::minutes(12);
+        let now = initial_activity_at + ChronoDuration::minutes(11);
+        let cutoff = ChronoDuration::minutes(10);
+        let session = Arc::new(RuntimeSession::from_snapshot_for_test(
+            make_completed_snapshot(),
+        ));
+        let candidate = super::IdleRuntimeCandidate {
+            environment_id: "env-1".to_string(),
+            session: session.clone(),
+        };
+        let mut registry = RuntimeRegistry::default();
+        registry.running.insert(
+            "env-1".to_string(),
+            RunningRuntime {
+                session,
+                status: make_runtime_status("env-1"),
+                last_activity_at: initial_activity_at,
+            },
+        );
+        touch_running_runtime(&mut registry, "env-1", touched_at);
+
+        let should_stop = should_stop_idle_runtime_candidate(
+            &Mutex::new(registry),
+            &candidate,
+            now,
+            cutoff,
+        )
+        .await;
+
+        assert!(!should_stop);
     }
 
     #[test]

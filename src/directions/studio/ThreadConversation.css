@@ -1341,6 +1341,13 @@ ol.tx-markdown__list {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .tx-pill--connecting::after {
+    animation: none;
+    transform: none;
+  }
+}
+
 .tx-pill--running,
 .tx-pill--inProgress {
   background: color-mix(in srgb, var(--tx-progress) 18%, transparent);

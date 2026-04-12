@@ -421,4 +421,102 @@ describe("git-review-store", () => {
 
     expect(mockedBridge.getGitFileDiff.mock.calls.length).toBeGreaterThan(initialCalls);
   });
+
+  it("cancels adjacent prefetch when the diff is closed", async () => {
+    vi.useFakeTimers();
+    mockedBridge.getGitReviewSnapshot.mockResolvedValue(
+      makeGitReviewSnapshot({
+        sections: [
+          {
+            id: "unstaged",
+            label: "Unstaged",
+            files: [
+              {
+                path: "src/a.ts",
+                oldPath: null,
+                section: "unstaged",
+                kind: "modified",
+                additions: null,
+                deletions: null,
+                canStage: true,
+                canUnstage: false,
+                canRevert: true,
+              },
+              {
+                path: "src/b.ts",
+                oldPath: null,
+                section: "unstaged",
+                kind: "modified",
+                additions: null,
+                deletions: null,
+                canStage: true,
+                canUnstage: false,
+                canRevert: true,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    mockedBridge.getGitFileDiff.mockResolvedValue(makeGitFileDiff());
+
+    await useGitReviewStore.getState().loadReview("env-1");
+    await useGitReviewStore
+      .getState()
+      .selectFile("env-1", "uncommitted", "unstaged", "src/a.ts");
+
+    useGitReviewStore.getState().closeDiff("env-1", "uncommitted");
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(mockedBridge.getGitFileDiff).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels adjacent prefetch when the diff is cleared", async () => {
+    vi.useFakeTimers();
+    mockedBridge.getGitReviewSnapshot.mockResolvedValue(
+      makeGitReviewSnapshot({
+        sections: [
+          {
+            id: "unstaged",
+            label: "Unstaged",
+            files: [
+              {
+                path: "src/a.ts",
+                oldPath: null,
+                section: "unstaged",
+                kind: "modified",
+                additions: null,
+                deletions: null,
+                canStage: true,
+                canUnstage: false,
+                canRevert: true,
+              },
+              {
+                path: "src/b.ts",
+                oldPath: null,
+                section: "unstaged",
+                kind: "modified",
+                additions: null,
+                deletions: null,
+                canStage: true,
+                canUnstage: false,
+                canRevert: true,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    mockedBridge.getGitFileDiff.mockResolvedValue(makeGitFileDiff());
+
+    await useGitReviewStore.getState().loadReview("env-1");
+    await useGitReviewStore
+      .getState()
+      .selectFile("env-1", "uncommitted", "unstaged", "src/a.ts");
+
+    useGitReviewStore.getState().clearSelectedFile("env-1", "uncommitted");
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(mockedBridge.getGitFileDiff).toHaveBeenCalledTimes(1);
+  });
 });

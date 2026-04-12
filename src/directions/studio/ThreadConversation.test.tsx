@@ -236,6 +236,25 @@ describe("ThreadConversation", () => {
     expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
   });
 
+  it("touches the runtime as soon as the transport becomes ready", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot(),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockedBridge.touchEnvironmentRuntime).toHaveBeenCalledWith("env-1");
+    });
+  });
+
   it("collapses intermediate work activity into a single live block when the setting is enabled", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,

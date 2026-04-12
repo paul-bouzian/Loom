@@ -155,6 +155,10 @@ export const useGitReviewStore = create<GitReviewState>((set, get) => ({
         ...state.selectedFileByContext,
         [contextKey]: null,
       },
+      diffRequestIdByContext: {
+        ...state.diffRequestIdByContext,
+        [contextKey]: nextRequestId(state.diffRequestIdByContext[contextKey]),
+      },
     }));
   },
 
@@ -173,6 +177,10 @@ export const useGitReviewStore = create<GitReviewState>((set, get) => ({
       diffErrorByContext: {
         ...state.diffErrorByContext,
         [contextKey]: null,
+      },
+      diffRequestIdByContext: {
+        ...state.diffRequestIdByContext,
+        [contextKey]: nextRequestId(state.diffRequestIdByContext[contextKey]),
       },
     }));
   },

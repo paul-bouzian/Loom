@@ -186,6 +186,8 @@ export function ThreadConversation({
       return undefined;
     }
 
+    void bridge.touchEnvironmentRuntime(environment.id).catch(() => undefined);
+
     const interval = window.setInterval(() => {
       void bridge.touchEnvironmentRuntime(environment.id).catch(() => undefined);
     }, 60_000);
