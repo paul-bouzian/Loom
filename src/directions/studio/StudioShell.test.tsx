@@ -467,6 +467,31 @@ describe("StudioShell", () => {
     });
   });
 
+  it("saves Normal speed as the backend flex tier", async () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        settings: makeGlobalSettings({
+          defaultServiceTier: "fast",
+        }),
+      }),
+    }));
+
+    render(<StudioShell />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Default speed picker" }),
+    );
+    await userEvent.click(screen.getByRole("option", { name: "Normal" }));
+
+    await waitFor(() => {
+      expect(mockedBridge.updateGlobalSettings).toHaveBeenCalledWith({
+        defaultServiceTier: "flex",
+      });
+    });
+  });
+
   it("saves the compact work activity setting from Codex settings", async () => {
     render(<StudioShell />);
 

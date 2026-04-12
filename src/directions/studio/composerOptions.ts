@@ -3,6 +3,7 @@ import type {
   CollaborationMode,
   ModelOption,
   ReasoningEffort,
+  ServiceTier,
 } from "../../lib/types";
 import type { ComposerPickerOption } from "./ComposerPicker";
 
@@ -38,8 +39,8 @@ export const APPROVAL_OPTIONS: ComposerPickerOption<ApprovalPolicy>[] = [
   { value: "fullAccess", label: "Full access" },
 ];
 
-export const SPEED_MODE_OPTIONS: ComposerPickerOption<"normal" | "fast">[] = [
-  { value: "normal", label: "Normal" },
+export const SPEED_MODE_OPTIONS: ComposerPickerOption<ServiceTier>[] = [
+  { value: "flex", label: "Normal" },
   { value: "fast", label: "Fast" },
 ];
 

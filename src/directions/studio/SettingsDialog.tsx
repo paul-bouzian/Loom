@@ -312,11 +312,9 @@ function SettingsContent({
       <SettingsSelect
         disabled={disabled}
         label="Default speed"
-        value={settings.defaultServiceTier === "fast" ? "fast" : "normal"}
+        value={settings.defaultServiceTier ?? "flex"}
         options={SPEED_MODE_OPTIONS}
-        onChange={(value) =>
-          onChange({ defaultServiceTier: value === "fast" ? "fast" : null })
-        }
+        onChange={(value) => onChange({ defaultServiceTier: value })}
       />
       <SettingsToggle
         disabled={disabled}

@@ -6,9 +6,7 @@ fn default_collapse_work_activity() -> bool {
     true
 }
 
-fn deserialize_explicit_optional<'de, D, T>(
-    deserializer: D,
-) -> Result<Option<Option<T>>, D::Error>
+fn deserialize_explicit_optional<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
@@ -166,7 +164,10 @@ mod tests {
         ));
         assert_eq!(settings.default_service_tier, Some(ServiceTier::Fast));
         assert!(settings.collapse_work_activity);
-        assert_eq!(settings.shortcuts.toggle_terminal.as_deref(), Some("mod+shift+j"));
+        assert_eq!(
+            settings.shortcuts.toggle_terminal.as_deref(),
+            Some("mod+shift+j")
+        );
         assert_eq!(
             settings.codex_binary_path.as_deref(),
             Some("/opt/homebrew/bin/codex")
@@ -205,9 +206,8 @@ mod tests {
 
     #[test]
     fn deserializes_null_service_tier_patch_as_explicit_clear() {
-        let patch: GlobalSettingsPatch =
-            serde_json::from_str(r#"{"defaultServiceTier":null}"#)
-                .expect("service tier patch should deserialize");
+        let patch: GlobalSettingsPatch = serde_json::from_str(r#"{"defaultServiceTier":null}"#)
+            .expect("service tier patch should deserialize");
 
         assert_eq!(patch.default_service_tier, Some(None));
     }
@@ -236,7 +236,10 @@ mod tests {
 
         assert!(settings.collapse_work_activity);
         assert_eq!(settings.default_service_tier, Some(ServiceTier::Fast));
-        assert_eq!(settings.shortcuts.open_settings.as_deref(), Some("mod+comma"));
+        assert_eq!(
+            settings.shortcuts.open_settings.as_deref(),
+            Some("mod+comma")
+        );
     }
 
     #[test]
@@ -245,7 +248,9 @@ mod tests {
         settings.shortcuts.toggle_terminal = Some("j".to_string());
 
         assert_eq!(
-            settings.validate().expect_err("invalid shortcuts should fail"),
+            settings
+                .validate()
+                .expect_err("invalid shortcuts should fail"),
             "Toggle terminal: Shortcut needs a primary modifier unless it is Shift+Tab."
         );
     }

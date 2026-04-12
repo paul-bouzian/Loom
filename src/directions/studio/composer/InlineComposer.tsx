@@ -13,6 +13,7 @@ import {
   searchThreadFiles,
 } from "../../../lib/bridge";
 import type {
+  ComposerDraftMentionBinding,
   ComposerMentionBindingInput,
   ComposerFileSearchResult,
   ConversationComposerSettings,
@@ -48,7 +49,7 @@ import {
   addComposerMentionBinding,
   prepareComposerMentionBindingsForSend,
   rebaseComposerMentionBindings,
-  type ComposerDraftMentionBinding,
+  sameComposerMentionBindings,
 } from "./composer-mention-bindings";
 import { ComposerTextMirror } from "./ComposerTextMirror";
 import {
@@ -80,7 +81,10 @@ type Props = {
   onChangeImages: Dispatch<SetStateAction<ConversationImageAttachment[]>>;
   tokenUsage?: ThreadTokenUsageSnapshot | null;
   onCancelRefine: () => void;
-  onChangeDraft: (value: string) => void;
+  onChangeDraft: (
+    value: string,
+    bindings?: ComposerDraftMentionBinding[],
+  ) => void;
   onChangeMentionBindings: (bindings: ComposerDraftMentionBinding[]) => void;
   onInterrupt: () => void;
   onSend: (
@@ -119,6 +123,10 @@ export function InlineComposer({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const fileSearchRequestRef = useRef(0);
   const previousDraftRef = useRef(draft);
+  const previousThreadIdRef = useRef(threadId);
+  const lastNonFastServiceTierRef = useRef<
+    ConversationComposerSettings["serviceTier"]
+  >(composer.serviceTier === "fast" ? null : composer.serviceTier ?? null);
   const [catalog, setCatalog] = useState<ThreadComposerCatalog | null>(null);
   const [fileResults, setFileResults] = useState<ComposerFileSearchResult[]>(
     [],
@@ -276,17 +284,35 @@ export function InlineComposer({
   }, [activeTokenKey, dismissedTokenKey]);
 
   useEffect(() => {
+    if (previousThreadIdRef.current !== threadId) {
+      previousThreadIdRef.current = threadId;
+      previousDraftRef.current = draft;
+      lastNonFastServiceTierRef.current =
+        composer.serviceTier === "fast" ? null : composer.serviceTier ?? null;
+      setDismissedTokenKey(null);
+    }
+  }, [composer.serviceTier, draft, threadId]);
+
+  useEffect(() => {
+    if (composer.serviceTier !== "fast") {
+      lastNonFastServiceTierRef.current = composer.serviceTier ?? null;
+    }
+  }, [composer.serviceTier]);
+
+  useEffect(() => {
     if (previousDraftRef.current === draft) {
       return;
     }
-    onChangeMentionBindings(
-      rebaseComposerMentionBindings(
-        previousDraftRef.current,
-        draft,
-        mentionBindings,
-      ),
+    const nextMentionBindings = rebaseComposerMentionBindings(
+      previousDraftRef.current,
+      draft,
+      mentionBindings,
     );
     previousDraftRef.current = draft;
+    if (sameComposerMentionBindings(nextMentionBindings, mentionBindings)) {
+      return;
+    }
+    onChangeMentionBindings(nextMentionBindings);
   }, [draft, mentionBindings, onChangeMentionBindings]);
 
   useEffect(() => {
@@ -388,9 +414,8 @@ export function InlineComposer({
       item,
       activeToken.start,
     );
-    onChangeMentionBindings(nextBindings);
     previousDraftRef.current = replacement.text;
-    onChangeDraft(replacement.text);
+    onChangeDraft(replacement.text, nextBindings);
     setPendingCursor(replacement.cursor);
     setDismissedTokenKey(null);
   }
@@ -473,15 +498,13 @@ export function InlineComposer({
             disabled={inputDisabled}
             onChange={(event) => {
               const nextDraft = event.target.value;
-              onChangeMentionBindings(
-                rebaseComposerMentionBindings(
-                  previousDraftRef.current,
-                  nextDraft,
-                  mentionBindings,
-                ),
+              const nextBindings = rebaseComposerMentionBindings(
+                previousDraftRef.current,
+                nextDraft,
+                mentionBindings,
               );
               previousDraftRef.current = nextDraft;
-              onChangeDraft(nextDraft);
+              onChangeDraft(nextDraft, nextBindings);
               setSelection({
                 start: event.target.selectionStart ?? 0,
                 end: event.target.selectionEnd ?? 0,
@@ -642,7 +665,9 @@ export function InlineComposer({
             disabled={controlsDisabled || !fastModeSupported}
             onClick={() =>
               onUpdateComposer({
-                serviceTier: fastModeEnabled ? null : "fast",
+                serviceTier: fastModeEnabled
+                  ? lastNonFastServiceTierRef.current ?? null
+                  : "fast",
               })
             }
           >

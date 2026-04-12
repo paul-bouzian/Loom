@@ -264,8 +264,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        EnvironmentKind, EnvironmentRecord, FirstPromptRenameFailureEvent, ProjectSettings,
-        ProjectRecord, ProjectSettingsPatch, PullRequestState, RuntimeState,
+        EnvironmentKind, EnvironmentRecord, FirstPromptRenameFailureEvent, ProjectRecord,
+        ProjectSettings, ProjectSettingsPatch, PullRequestState, RuntimeState,
         RuntimeStatusSnapshot,
     };
 

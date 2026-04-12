@@ -603,6 +603,24 @@ export type ConversationImageAttachment =
       path: string;
     };
 
+export type ComposerMentionBindingInput = {
+  mention: string;
+  kind: "skill" | "app";
+  path: string;
+};
+
+export type ComposerDraftMentionBinding = ComposerMentionBindingInput & {
+  start: number;
+  end: number;
+};
+
+export type ConversationComposerDraft = {
+  text: string;
+  images: ConversationImageAttachment[];
+  mentionBindings: ComposerDraftMentionBinding[];
+  isRefiningPlan: boolean;
+};
+
 export type ConversationMessageItem = {
   kind: "message";
   id: string;
@@ -667,6 +685,7 @@ export type ThreadConversationSnapshot = {
 export type ThreadConversationOpenResponse = {
   snapshot: ThreadConversationSnapshot;
   capabilities: EnvironmentCapabilitiesSnapshot;
+  composerDraft?: ConversationComposerDraft | null;
 };
 
 export type ConversationEventPayload = {
@@ -751,10 +770,9 @@ export type SendThreadMessageInput = {
   mentionBindings?: ComposerMentionBindingInput[] | null;
 };
 
-export type ComposerMentionBindingInput = {
-  mention: string;
-  kind: "skill" | "app";
-  path: string;
+export type PersistThreadComposerDraftInput = {
+  threadId: string;
+  draft?: ConversationComposerDraft | null;
 };
 
 export type ApprovalResponseInput =

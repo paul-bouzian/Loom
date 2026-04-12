@@ -7,7 +7,7 @@ use serde::Deserialize;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::domain::conversation::ConversationComposerSettings;
+use crate::domain::conversation::{ConversationComposerDraft, ConversationComposerSettings};
 use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch};
 use crate::domain::shortcuts::ShortcutSettings;
 use crate::domain::workspace::{
@@ -234,9 +234,7 @@ impl WorkspaceService {
         let transaction = connection.transaction()?;
         let mut settings = self.read_or_seed_settings(&transaction)?;
         settings.apply_patch(patch);
-        settings
-            .validate()
-            .map_err(AppError::Validation)?;
+        settings.validate().map_err(AppError::Validation)?;
 
         let payload = serde_json::to_string(&settings)
             .map_err(|error| AppError::Validation(error.to_string()))?;
@@ -1181,13 +1179,14 @@ impl WorkspaceService {
         thread_id: &str,
         composer: &ConversationComposerSettings,
     ) -> AppResult<()> {
+        let default_service_tier = self.current_settings()?.default_service_tier;
         let overrides = ThreadOverrides {
             model: Some(composer.model.clone()),
             reasoning_effort: Some(composer.reasoning_effort),
             collaboration_mode: Some(composer.collaboration_mode),
             approval_policy: Some(composer.approval_policy),
             service_tier: composer.service_tier,
-            service_tier_overridden: true,
+            service_tier_overridden: composer.service_tier != default_service_tier,
         };
         let overrides_json = serde_json::to_string(&overrides)
             .map_err(|error| AppError::Validation(error.to_string()))?;
@@ -1205,6 +1204,72 @@ impl WorkspaceService {
         }
 
         Ok(())
+    }
+
+    pub fn thread_composer_draft(
+        &self,
+        thread_id: &str,
+    ) -> AppResult<Option<ConversationComposerDraft>> {
+        let connection = self.database.open()?;
+        let draft = connection
+            .query_row(
+                "
+                SELECT composer_draft_json
+                FROM threads
+                WHERE id = ?1
+                ",
+                params![thread_id],
+                |row| {
+                    let draft_json = row.get::<_, Option<String>>(0)?;
+                    let Some(draft_json) = draft_json else {
+                        return Ok(None);
+                    };
+                    let draft = serde_json::from_str::<ConversationComposerDraft>(&draft_json)
+                        .map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                draft_json.len(),
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })?;
+                    Ok((!draft.is_empty()).then_some(draft))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::NotFound("Thread not found.".to_string()))?;
+        Ok(draft)
+    }
+
+    pub fn persist_thread_composer_draft(
+        &self,
+        thread_id: &str,
+        draft: Option<&ConversationComposerDraft>,
+    ) -> AppResult<()> {
+        let draft_json = match draft {
+            Some(draft) if !draft.is_empty() => Some(
+                serde_json::to_string(draft)
+                    .map_err(|error| AppError::Validation(error.to_string()))?,
+            ),
+            _ => None,
+        };
+        let affected = self.database.open()?.execute(
+            "
+            UPDATE threads
+            SET composer_draft_json = ?1, updated_at = ?2
+            WHERE id = ?3
+            ",
+            params![draft_json, Utc::now(), thread_id],
+        )?;
+
+        if affected == 0 {
+            return Err(AppError::NotFound("Thread not found.".to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub fn clear_thread_composer_draft(&self, thread_id: &str) -> AppResult<()> {
+        self.persist_thread_composer_draft(thread_id, None)
     }
 
     fn project_by_id(
@@ -2135,7 +2200,10 @@ mod tests {
         ReorderProjectsRequest, ReorderWorktreeEnvironmentsRequest,
         SetProjectSidebarCollapsedRequest, WorkspaceService,
     };
-    use crate::domain::conversation::ConversationComposerSettings;
+    use crate::domain::conversation::{
+        ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
+        ConversationComposerSettings, ConversationImageAttachment,
+    };
     use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch, ServiceTier};
     use crate::domain::shortcuts::ShortcutSettings;
     use crate::domain::workspace::{
@@ -2517,7 +2585,12 @@ mod tests {
     fn persist_thread_composer_settings_can_explicitly_disable_fast_mode() {
         let harness = WorkspaceHarness::new().expect("harness");
         let repo = harness
-            .create_repo(&harness.temp_root.join("repos").join("service-tier-override"))
+            .create_repo(
+                &harness
+                    .temp_root
+                    .join("repos")
+                    .join("service-tier-override"),
+            )
             .expect("repo");
         let project = harness
             .service
@@ -2572,6 +2645,74 @@ mod tests {
             .expect("thread context should reload");
 
         assert_eq!(refreshed.composer.service_tier, None);
+    }
+
+    #[test]
+    fn persist_thread_composer_settings_keeps_service_tier_inherited_when_unchanged() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(
+                &harness
+                    .temp_root
+                    .join("repos")
+                    .join("service-tier-inheritance"),
+            )
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let environment_id = project
+            .environments
+            .first()
+            .expect("local environment should exist")
+            .id
+            .clone();
+        let thread = harness
+            .service
+            .create_thread(CreateThreadRequest {
+                environment_id,
+                title: Some("Inherited fast".to_string()),
+                overrides: None,
+            })
+            .expect("thread should be created");
+
+        harness
+            .service
+            .update_settings(GlobalSettingsPatch {
+                default_service_tier: Some(Some(ServiceTier::Fast)),
+                ..GlobalSettingsPatch::default()
+            })
+            .expect("settings should update");
+
+        let context = harness
+            .service
+            .thread_runtime_context(&thread.id)
+            .expect("thread context should load");
+        assert_eq!(context.composer.service_tier, Some(ServiceTier::Fast));
+
+        harness
+            .service
+            .persist_thread_composer_settings(&thread.id, &context.composer)
+            .expect("composer settings should persist");
+
+        harness
+            .service
+            .update_settings(GlobalSettingsPatch {
+                default_service_tier: Some(Some(ServiceTier::Flex)),
+                ..GlobalSettingsPatch::default()
+            })
+            .expect("settings should update");
+
+        let refreshed = harness
+            .service
+            .thread_runtime_context(&thread.id)
+            .expect("thread context should reload");
+
+        assert_eq!(refreshed.composer.service_tier, Some(ServiceTier::Flex));
     }
 
     #[test]
@@ -3105,11 +3246,9 @@ mod tests {
                 environment_ids: vec![local_environment_id],
             })
             .expect_err("local environment should not reorder as a worktree");
-        assert!(
-            local_environment_error
-                .to_string()
-                .contains("unknown worktree")
-        );
+        assert!(local_environment_error
+            .to_string()
+            .contains("unknown worktree"));
 
         let blank_project_error = harness
             .service
@@ -3118,11 +3257,9 @@ mod tests {
                 environment_ids: Vec::new(),
             })
             .expect_err("blank project id should fail");
-        assert!(
-            blank_project_error
-                .to_string()
-                .contains("project id cannot be empty")
-        );
+        assert!(blank_project_error
+            .to_string()
+            .contains("project id cannot be empty"));
 
         let blank_collapse_error = harness
             .service
@@ -3131,11 +3268,9 @@ mod tests {
                 collapsed: true,
             })
             .expect_err("blank project id should fail");
-        assert!(
-            blank_collapse_error
-                .to_string()
-                .contains("project id cannot be empty")
-        );
+        assert!(blank_collapse_error
+            .to_string()
+            .contains("project id cannot be empty"));
     }
 
     #[test]
@@ -3169,6 +3304,74 @@ mod tests {
 
         assert_eq!(snapshot.settings.default_model, "gpt-5.4-mini");
         assert_eq!(snapshot.settings.shortcuts, ShortcutSettings::default());
+    }
+
+    #[test]
+    fn thread_composer_drafts_round_trip_and_clear() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("draft-roundtrip-repo"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let environment_id = project
+            .environments
+            .first()
+            .expect("environment should exist")
+            .id
+            .clone();
+        let thread = harness
+            .service
+            .create_thread(CreateThreadRequest {
+                environment_id,
+                title: Some("Draft thread".to_string()),
+                overrides: None,
+            })
+            .expect("thread should be created");
+        let thread_id = thread.id.clone();
+        let draft = ConversationComposerDraft {
+            text: "Keep this thread-scoped draft".to_string(),
+            images: vec![ConversationImageAttachment::LocalImage {
+                path: "/tmp/thread-draft.png".to_string(),
+            }],
+            mention_bindings: vec![ComposerDraftMentionBinding {
+                mention: "github".to_string(),
+                kind: ComposerMentionBindingKind::App,
+                path: "app://github".to_string(),
+                start: 5,
+                end: 12,
+            }],
+            is_refining_plan: true,
+        };
+
+        harness
+            .service
+            .persist_thread_composer_draft(&thread_id, Some(&draft))
+            .expect("draft should persist");
+        assert_eq!(
+            harness
+                .service
+                .thread_composer_draft(&thread_id)
+                .expect("draft should load"),
+            Some(draft.clone())
+        );
+
+        harness
+            .service
+            .clear_thread_composer_draft(&thread_id)
+            .expect("draft should clear");
+        assert_eq!(
+            harness
+                .service
+                .thread_composer_draft(&thread_id)
+                .expect("cleared draft should load"),
+            None
+        );
     }
 
     struct WorkspaceHarness {

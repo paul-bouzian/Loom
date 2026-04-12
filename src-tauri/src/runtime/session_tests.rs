@@ -118,6 +118,12 @@ impl Drop for FakeCodexHarness {
     }
 }
 
+fn inter_agent_control_message(agent_path: &str) -> String {
+    format!(
+        "{{\"author\":\"{agent_path}\",\"recipient\":\"/root\",\"other_recipients\":[],\"content\":\"<subagent_notification>\\n{{\\\"agent_path\\\":\\\"{agent_path}\\\",\\\"status\\\":{{\\\"completed\\\":\\\"Done\\\"}}}}\\n</subagent_notification>\",\"trigger_turn\":false}}"
+    )
+}
+
 fn spawn_fake_codex(
     reader: DuplexStream,
     writer: Arc<Mutex<DuplexStream>>,
@@ -592,7 +598,7 @@ async fn send_message_forwards_fast_service_tier_for_supported_models() {
 }
 
 #[tokio::test]
-async fn send_message_omits_fast_service_tier_for_unsupported_models() {
+async fn send_message_clears_fast_service_tier_for_unsupported_models() {
     let (session, harness) = FakeCodexHarness::new().await;
     let mut runtime_context = context(
         "thread-normalized-fast-mode",
@@ -604,7 +610,11 @@ async fn send_message_omits_fast_service_tier_for_unsupported_models() {
     runtime_context.composer.service_tier = Some(ServiceTier::Fast);
 
     session
-        .send_message(runtime_context, "Use the fallback model".to_string(), Vec::new())
+        .send_message(
+            runtime_context,
+            "Use the fallback model".to_string(),
+            Vec::new(),
+        )
         .await
         .expect("message should send");
 
@@ -1813,4 +1823,101 @@ async fn collab_agent_notifications_update_subagent_strip_without_timeline_noise
         .snapshot;
 
     assert!(completed_snapshot.subagents.is_empty());
+}
+
+#[tokio::test]
+async fn agent_message_deltas_drop_inter_agent_control_envelopes() {
+    let (session, harness) = FakeCodexHarness::new().await;
+    let control_message = inter_agent_control_message("/root/proofplan_investigator");
+    let split_index = control_message
+        .find("{\\\"agent_path\\\":")
+        .expect("control message should contain nested subagent payload");
+
+    session
+        .send_message(
+            context(
+                "thread-local-control-envelope",
+                None,
+                CollaborationMode::Build,
+                ApprovalPolicy::AskToEdit,
+            ),
+            "Spawn a helper".to_string(),
+            Vec::new(),
+        )
+        .await
+        .expect("message should send");
+
+    harness
+        .emit_notification(
+            "item/agentMessage/delta",
+            json!({
+                "threadId": "thr-new",
+                "turnId": "turn-live-1",
+                "itemId": "assistant-control-1",
+                "delta": &control_message[..split_index]
+            }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let first_delta_snapshot = session
+        .open_thread(context(
+            "thread-local-control-envelope",
+            Some("thr-new"),
+            CollaborationMode::Build,
+            ApprovalPolicy::AskToEdit,
+        ))
+        .await
+        .expect("snapshot should reopen after first delta")
+        .snapshot;
+
+    assert!(first_delta_snapshot.items.iter().all(|item| !matches!(
+        item,
+        crate::domain::conversation::ConversationItem::Message(message)
+            if message.id == "assistant-control-1"
+    )));
+
+    harness
+        .emit_notification(
+            "item/agentMessage/delta",
+            json!({
+                "threadId": "thr-new",
+                "turnId": "turn-live-1",
+                "itemId": "assistant-control-1",
+                "delta": &control_message[split_index..]
+            }),
+        )
+        .await;
+    harness
+        .emit_notification(
+            "item/completed",
+            json!({
+                "threadId": "thr-new",
+                "turnId": "turn-live-1",
+                "item": {
+                    "id": "assistant-control-1",
+                    "type": "agentMessage",
+                    "text": control_message
+                }
+            }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let snapshot = session
+        .open_thread(context(
+            "thread-local-control-envelope",
+            Some("thr-new"),
+            CollaborationMode::Build,
+            ApprovalPolicy::AskToEdit,
+        ))
+        .await
+        .expect("snapshot should reopen")
+        .snapshot;
+
+    assert!(snapshot.items.iter().all(|item| !matches!(
+        item,
+        crate::domain::conversation::ConversationItem::Message(message)
+            if message.id == "assistant-control-1"
+    )));
 }
