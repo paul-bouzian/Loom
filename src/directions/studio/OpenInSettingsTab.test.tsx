@@ -27,6 +27,24 @@ describe("OpenInSettingsTab", () => {
     });
   });
 
+  it("loads installed app icons for the curated targets and keeps Finder local", async () => {
+    render(
+      <OpenInSettingsTab
+        targets={makeGlobalSettings().openTargets}
+        defaultTargetId={makeGlobalSettings().defaultOpenTargetId}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByDisplayValue("Cursor").length).toBeGreaterThan(0);
+    });
+    await waitFor(() => {
+      expect(bridge.getOpenAppIcon).toHaveBeenCalledWith("Cursor");
+    });
+    expect(bridge.getOpenAppIcon).toHaveBeenCalledWith("Zed");
+    expect(bridge.getOpenAppIcon).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps edits local until Save is clicked", async () => {
     const user = userEvent.setup();
     const updateGlobalSettings = vi.fn(async () => ({

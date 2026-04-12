@@ -1,5 +1,6 @@
 import type { OpenTarget } from "../../lib/types";
 import { FolderIcon, OpenInIcon } from "../../shared/Icons";
+import { getKnownOpenTargetIcon } from "./openTargetIcons";
 
 type Props = {
   target: OpenTarget;
@@ -14,10 +15,12 @@ export function OpenTargetIcon({
   size = 16,
   className,
 }: Props) {
-  if (iconUrl) {
+  const resolvedIconUrl = iconUrl ?? getKnownOpenTargetIcon(target.id, target.appName);
+
+  if (resolvedIconUrl) {
     return (
       <img
-        src={iconUrl}
+        src={resolvedIconUrl}
         alt=""
         aria-hidden="true"
         width={size}

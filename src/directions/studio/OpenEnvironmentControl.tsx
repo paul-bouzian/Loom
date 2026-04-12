@@ -39,19 +39,13 @@ export function OpenEnvironmentControl({ environmentId, settings }: Props) {
     () => resolveOpenTarget(targets, activeTargetId),
     [activeTargetId, targets],
   );
-  const iconAppNames = useMemo(() => {
+  const iconTargets = useMemo(() => {
     if (menuOpen) {
-      return targets.flatMap((target) =>
-        target.kind === "app" && typeof target.appName === "string"
-          ? [target.appName]
-          : [],
-      );
+      return targets;
     }
-    return activeTarget?.kind === "app" && typeof activeTarget.appName === "string"
-      ? [activeTarget.appName]
-      : [];
+    return activeTarget ? [activeTarget] : [];
   }, [activeTarget, menuOpen, targets]);
-  const appIcons = useOpenAppIcons(iconAppNames);
+  const appIcons = useOpenAppIcons(iconTargets);
 
   useEffect(() => {
     if (pendingTargetId && pendingTargetId === settings?.defaultOpenTargetId) {
@@ -201,7 +195,7 @@ export function OpenEnvironmentControl({ environmentId, settings }: Props) {
           {activeTarget ? (
             <OpenTargetIcon
               target={activeTarget}
-              iconUrl={activeTarget.appName ? appIcons[activeTarget.appName] : null}
+              iconUrl={appIcons[activeTarget.id] ?? null}
               size={14}
               className="open-environment-control__icon"
             />
@@ -252,7 +246,7 @@ export function OpenEnvironmentControl({ environmentId, settings }: Props) {
                   >
                     <OpenTargetIcon
                       target={target}
-                      iconUrl={target.appName ? appIcons[target.appName] : null}
+                      iconUrl={appIcons[target.id] ?? null}
                       size={16}
                       className="open-environment-control__option-icon"
                     />

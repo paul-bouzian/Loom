@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
 import * as bridge from "../../lib/bridge";
+import type { OpenTarget } from "../../lib/types";
 
 const iconCache = new Map<string, Promise<string | null>>();
 
@@ -18,35 +19,42 @@ function loadOpenAppIcon(appName: string) {
   return iconCache.get(appName)!;
 }
 
-export function useOpenAppIcons(appNames: string[]) {
+type ResolvedAppTarget = {
+  id: string;
+  appName: string;
+};
+
+export function useOpenAppIcons(targets: OpenTarget[]) {
   const [icons, setIcons] = useState<Record<string, string>>({});
-  const normalizedAppNames = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          appNames
-            .map((appName) => appName.trim())
-            .filter(Boolean),
-        ),
-      ),
-    [appNames],
+  const resolvedTargets = useMemo<ResolvedAppTarget[]>(
+    () => {
+      const byId = new Map<string, ResolvedAppTarget>();
+      for (const target of targets) {
+        if (target.kind !== "app" || typeof target.appName !== "string") {
+          continue;
+        }
+        const appName = target.appName.trim();
+        if (!appName) {
+          continue;
+        }
+
+        byId.set(target.id, { id: target.id, appName });
+      }
+      return Array.from(byId.values());
+    },
+    [targets],
   );
-  const deferredAppNames = useDeferredValue(normalizedAppNames);
-  const deferredAppNamesKey = deferredAppNames.join("\0");
-  const resolvedAppNames = useMemo(
-    () => (deferredAppNamesKey ? deferredAppNamesKey.split("\0") : []),
-    [deferredAppNamesKey],
-  );
+  const deferredTargets = useDeferredValue(resolvedTargets);
 
   useEffect(() => {
     let cancelled = false;
-    if (resolvedAppNames.length === 0) {
+    if (deferredTargets.length === 0) {
       setIcons({});
       return undefined;
     }
 
     void Promise.all(
-      resolvedAppNames.map(async (appName) => [appName, await loadOpenAppIcon(appName)] as const),
+      deferredTargets.map(async ({ id, appName }) => [id, await loadOpenAppIcon(appName)] as const),
     ).then((entries) => {
       if (cancelled) {
         return;
@@ -61,7 +69,7 @@ export function useOpenAppIcons(appNames: string[]) {
     return () => {
       cancelled = true;
     };
-  }, [resolvedAppNames]);
+  }, [deferredTargets]);
 
   return icons;
 }

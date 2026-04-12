@@ -306,6 +306,14 @@ fn normalize_open_targets(
         }
     }
 
+    if matches!(mode, OpenTargetNormalizationMode::RepairStored) {
+        let previous_len = deduped_targets.len();
+        deduped_targets.retain(|target| !is_deprecated_seeded_open_target(target));
+        if deduped_targets.len() != previous_len {
+            changed = true;
+        }
+    }
+
     if deduped_targets.is_empty() {
         match mode {
             OpenTargetNormalizationMode::RepairStored => {
@@ -358,19 +366,43 @@ fn preferred_default_open_target_id(targets: &[OpenTarget]) -> String {
         .unwrap_or_else(|| "file-manager".to_string())
 }
 
+fn is_deprecated_seeded_open_target(target: &OpenTarget) -> bool {
+    matches!(
+        (
+            target.id.as_str(),
+            target.label.as_str(),
+            target.kind,
+            target.app_name.as_deref(),
+            target.args.is_empty(),
+        ),
+        (
+            "vscode-insiders",
+            "VS Code Insiders",
+            OpenTargetKind::App,
+            Some("Visual Studio Code - Insiders"),
+            true,
+        ) | (
+            "vscodium",
+            "VSCodium",
+            OpenTargetKind::App,
+            Some("VSCodium"),
+            true,
+        ) | (
+            "trae",
+            "Trae",
+            OpenTargetKind::App,
+            Some("Trae"),
+            true,
+        )
+    )
+}
+
 #[cfg(target_os = "macos")]
 fn default_open_targets_for_platform() -> Vec<OpenTarget> {
     vec![
         OpenTarget::app("cursor", "Cursor", "Cursor"),
         OpenTarget::app("vscode", "VS Code", "Visual Studio Code"),
-        OpenTarget::app(
-            "vscode-insiders",
-            "VS Code Insiders",
-            "Visual Studio Code - Insiders",
-        ),
-        OpenTarget::app("vscodium", "VSCodium", "VSCodium"),
         OpenTarget::app("zed", "Zed", "Zed"),
-        OpenTarget::app("trae", "Trae", "Trae"),
         OpenTarget::app("idea", "IntelliJ IDEA", "IntelliJ IDEA"),
         OpenTarget::app("antigravity", "Antigravity", "Antigravity"),
         OpenTarget::app("ghostty", "Ghostty", "Ghostty"),
@@ -614,6 +646,36 @@ mod tests {
         assert_eq!(settings.default_open_target_id, "cursor");
     }
 
+    #[test]
+    fn normalize_for_read_drops_deprecated_seeded_targets() {
+        let mut settings = GlobalSettings {
+            open_targets: vec![
+                OpenTarget::app("cursor", "Cursor", "Cursor"),
+                OpenTarget::app(
+                    "vscode-insiders",
+                    "VS Code Insiders",
+                    "Visual Studio Code - Insiders",
+                ),
+                OpenTarget::app("vscodium", "VSCodium", "VSCodium"),
+                OpenTarget::app("trae", "Trae", "Trae"),
+                OpenTarget::file_manager("file-manager", "Finder"),
+            ],
+            default_open_target_id: "vscode-insiders".to_string(),
+            ..GlobalSettings::default()
+        };
+
+        assert!(settings.normalize_for_read());
+        assert_eq!(
+            settings
+                .open_targets
+                .iter()
+                .map(|target| target.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cursor", "file-manager"]
+        );
+        assert_eq!(settings.default_open_target_id, "file-manager");
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn non_macos_defaults_only_seed_supported_open_targets() {
@@ -632,6 +694,24 @@ mod tests {
         let settings = GlobalSettings::default();
 
         assert_eq!(settings.default_open_target_id, "file-manager");
+        assert_eq!(
+            settings
+                .open_targets
+                .iter()
+                .map(|target| target.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "cursor",
+                "vscode",
+                "zed",
+                "idea",
+                "antigravity",
+                "ghostty",
+                "iterm2",
+                "terminal",
+                "file-manager",
+            ]
+        );
         assert!(settings
             .open_targets
             .iter()

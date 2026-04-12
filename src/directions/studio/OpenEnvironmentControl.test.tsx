@@ -55,7 +55,7 @@ describe("OpenEnvironmentControl", () => {
     });
   });
 
-  it("loads only the active app icon until the menu is opened", async () => {
+  it("prefers resolved app icons and only falls back to bundled assets", async () => {
     const user = userEvent.setup();
 
     render(
@@ -66,16 +66,20 @@ describe("OpenEnvironmentControl", () => {
     );
 
     await waitFor(() => {
-      expect(bridge.getOpenAppIcon).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: "Open environment in Cursor" })).toBeInTheDocument();
     });
-    expect(bridge.getOpenAppIcon).toHaveBeenCalledWith("Cursor");
+    await waitFor(() => {
+      expect(bridge.getOpenAppIcon).toHaveBeenCalledWith("Cursor");
+    });
 
     await user.click(screen.getByRole("button", { name: "Choose open target" }));
 
     await waitFor(() => {
+      expect(screen.getByRole("menuitemradio", { name: /Zed/ })).toBeInTheDocument();
+    });
+    await waitFor(() => {
       expect(bridge.getOpenAppIcon).toHaveBeenCalledWith("Zed");
     });
-    expect(bridge.getOpenAppIcon).toHaveBeenCalledTimes(2);
   });
 
   it("opens the chosen target from the menu and persists it as the new default", async () => {

@@ -39,16 +39,17 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
   const lastDefaultTargetIdRef = useRef(defaultTargetId);
   const draftTargets = draftState.targets;
   const defaultDraftKey = draftState.defaultDraftKey;
-  const iconAppNames = useMemo(
-    () =>
-      draftTargets.flatMap((target) =>
-        target.kind === "app" && target.appName.trim()
-          ? [target.appName]
-          : [],
-      ),
+  const iconTargets = useMemo(
+    () => draftTargets.map((target) => ({
+      id: target.id,
+      label: target.label,
+      kind: target.kind,
+      appName: target.appName || null,
+      args: parseArgs(target.argsText),
+    })),
     [draftTargets],
   );
-  const appIcons = useOpenAppIcons(iconAppNames);
+  const appIcons = useOpenAppIcons(iconTargets);
 
   useEffect(() => {
     if (
@@ -82,12 +83,6 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
   async function handleSave() {
     if (issues.global || Object.keys(issues.byKey).length > 0) {
       setSaveError(issues.global ?? "Complete the invalid targets before saving.");
-      return;
-    }
-
-    const defaultTarget = draftTargets.find((target) => target.draftKey === defaultDraftKey);
-    if (!defaultTarget) {
-      setSaveError("Choose a default target before saving.");
       return;
     }
 
@@ -142,7 +137,7 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
           <OpenInTargetRow
             key={target.draftKey}
             target={target}
-            iconUrl={target.appName ? appIcons[target.appName] : null}
+            iconUrl={appIcons[target.id] ?? null}
             issue={issues.byKey[target.draftKey] ?? null}
             isDefault={target.draftKey === defaultDraftKey}
             canMoveUp={index > 0}
