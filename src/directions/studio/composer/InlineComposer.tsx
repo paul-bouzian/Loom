@@ -13,6 +13,7 @@ import {
   searchThreadFiles,
 } from "../../../lib/bridge";
 import type {
+  ComposerDraftMentionBinding,
   ComposerMentionBindingInput,
   ComposerFileSearchResult,
   ConversationComposerSettings,
@@ -46,7 +47,7 @@ import {
   addComposerMentionBinding,
   prepareComposerMentionBindingsForSend,
   rebaseComposerMentionBindings,
-  type ComposerDraftMentionBinding,
+  sameComposerMentionBindings,
 } from "./composer-mention-bindings";
 import { ComposerTextMirror } from "./ComposerTextMirror";
 import {
@@ -273,20 +274,25 @@ export function InlineComposer({
     if (previousThreadIdRef.current !== threadId) {
       previousThreadIdRef.current = threadId;
       previousDraftRef.current = draft;
-      return;
+      setDismissedTokenKey(null);
     }
+  }, [draft, threadId]);
+
+  useEffect(() => {
     if (previousDraftRef.current === draft) {
       return;
     }
-    onChangeMentionBindings(
-      rebaseComposerMentionBindings(
-        previousDraftRef.current,
-        draft,
-        mentionBindings,
-      ),
+    const nextMentionBindings = rebaseComposerMentionBindings(
+      previousDraftRef.current,
+      draft,
+      mentionBindings,
     );
     previousDraftRef.current = draft;
-  }, [draft, mentionBindings, onChangeMentionBindings, threadId]);
+    if (sameComposerMentionBindings(nextMentionBindings, mentionBindings)) {
+      return;
+    }
+    onChangeMentionBindings(nextMentionBindings);
+  }, [draft, mentionBindings, onChangeMentionBindings]);
 
   useEffect(() => {
     if (!activeToken || activeToken.kind !== "file") {

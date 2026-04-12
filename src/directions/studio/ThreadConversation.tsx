@@ -405,7 +405,7 @@ export function ThreadConversation({
         mentionBindings={mentionBindings}
         modelOptions={capabilities?.models ?? []}
         onChangeImages={(nextImages) =>
-          updateDraft(thread.id, (currentDraft: typeof composerDraft) => ({
+          updateDraft(thread.id, (currentDraft) => ({
             ...currentDraft,
             images:
               typeof nextImages === "function"

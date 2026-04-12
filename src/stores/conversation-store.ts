@@ -30,7 +30,6 @@ import {
 import { useWorkspaceStore } from "./workspace-store";
 
 const PRELOAD_ENVIRONMENT_CONCURRENCY = 4;
-
 type ConversationSet = (
   updater: (state: ConversationState) => Partial<ConversationState>,
 ) => void;
@@ -319,11 +318,6 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         },
         draftByThreadId: removeDraftEntry(state.draftByThreadId, threadId),
       }));
-      scheduleDraftPersistence(
-        threadId,
-        EMPTY_CONVERSATION_COMPOSER_DRAFT,
-        "immediate",
-      );
       refreshWorkspaceSnapshotNonBlocking();
       return true;
     } catch (cause: unknown) {
@@ -433,11 +427,6 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         },
         draftByThreadId: removeDraftEntry(state.draftByThreadId, input.threadId),
       }));
-      scheduleDraftPersistence(
-        input.threadId,
-        EMPTY_CONVERSATION_COMPOSER_DRAFT,
-        "immediate",
-      );
       refreshWorkspaceSnapshotNonBlocking();
       return true;
     } catch (cause: unknown) {

@@ -6,6 +6,7 @@ import type {
 } from "../lib/types";
 
 const DRAFT_PERSIST_DEBOUNCE_MS = 250;
+const DRAFT_PERSIST_RETRY_MS = 1000;
 
 export const EMPTY_CONVERSATION_COMPOSER_DRAFT: ConversationComposerDraft = {
   text: "",
@@ -87,6 +88,7 @@ export function persistenceModeForDraftChange(
 ): DraftPersistenceMode {
   if (
     !sameImageAttachments(currentDraft.images, nextDraft.images) ||
+    !sameMentionBindings(currentDraft.mentionBindings, nextDraft.mentionBindings) ||
     currentDraft.isRefiningPlan !== nextDraft.isRefiningPlan
   ) {
     return "immediate";
@@ -195,6 +197,7 @@ async function flushDraftPersistence(threadId: string) {
       if (controller.queued === undefined) {
         controller.queued = draft;
       }
+      scheduleDraftRetry(threadId, controller);
       return;
     } finally {
       controller.inflight = null;
@@ -226,6 +229,20 @@ function maybeDisposeDraftPersistenceController(threadId: string) {
     return;
   }
   draftPersistenceByThreadId.delete(threadId);
+}
+
+function scheduleDraftRetry(
+  threadId: string,
+  controller: DraftPersistenceController,
+) {
+  if (controller.timeoutId) {
+    return;
+  }
+
+  controller.timeoutId = setTimeout(() => {
+    controller.timeoutId = null;
+    void flushDraftPersistence(threadId);
+  }, DRAFT_PERSIST_RETRY_MS);
 }
 
 function draftPersistenceKey(draft: ConversationComposerDraft | null | undefined) {

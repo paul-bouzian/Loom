@@ -5,6 +5,9 @@ use rusqlite::Connection;
 use crate::app_identity::{
     AppStoragePaths, APP_DATABASE_FILE_NAME, LEGACY_APP_DATABASE_FILE_NAME,
 };
+use crate::domain::conversation::{
+    ComposerDraftMentionBinding, ConversationComposerDraft, ConversationImageAttachment,
+};
 use crate::error::{AppError, AppResult};
 
 const CURRENT_SCHEMA_VERSION: i32 = 5;
@@ -301,7 +304,88 @@ impl AppDatabase {
             "UPDATE environments SET path = REPLACE(path, ?1, ?2) WHERE INSTR(path, ?1) > 0",
             [&legacy, &current],
         )?;
+        let thread_drafts = {
+            let mut statement = connection.prepare(
+                "
+                SELECT id, composer_draft_json
+                FROM threads
+                WHERE composer_draft_json IS NOT NULL
+                  AND INSTR(composer_draft_json, ?1) > 0
+                ",
+            )?;
+            let drafts = statement
+                .query_map([&legacy], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            drafts
+        };
+
+        for (thread_id, draft_json) in thread_drafts {
+            let draft = serde_json::from_str::<ConversationComposerDraft>(&draft_json)
+                .map_err(|error| {
+                    AppError::Runtime(format!(
+                        "Failed to deserialize persisted composer draft for thread {thread_id}: {error}",
+                    ))
+                })?;
+            let normalized_draft = normalize_composer_draft_paths(draft, &legacy, &current);
+            connection.execute(
+                "
+                UPDATE threads
+                SET composer_draft_json = ?1
+                WHERE id = ?2
+                ",
+                rusqlite::params![
+                    serde_json::to_string(&normalized_draft)
+                        .map_err(|error| AppError::Runtime(error.to_string()))?,
+                    thread_id,
+                ],
+            )?;
+        }
         Ok(())
+    }
+}
+
+fn normalize_composer_draft_paths(
+    draft: ConversationComposerDraft,
+    legacy_home: &str,
+    current_home: &str,
+) -> ConversationComposerDraft {
+    let ConversationComposerDraft {
+        text,
+        images,
+        mention_bindings,
+        is_refining_plan,
+    } = draft;
+
+    ConversationComposerDraft {
+        text,
+        images: images
+            .into_iter()
+            .map(|attachment| match attachment {
+                ConversationImageAttachment::Image { .. } => attachment,
+                ConversationImageAttachment::LocalImage { path } => {
+                    ConversationImageAttachment::LocalImage {
+                        path: rewrite_legacy_home_prefix(&path, legacy_home, current_home),
+                    }
+                }
+            })
+            .collect(),
+        mention_bindings: mention_bindings
+            .into_iter()
+            .map(|binding| ComposerDraftMentionBinding {
+                path: rewrite_legacy_home_prefix(&binding.path, legacy_home, current_home),
+                ..binding
+            })
+            .collect(),
+        is_refining_plan,
+    }
+}
+
+fn rewrite_legacy_home_prefix(path: &str, legacy_home: &str, current_home: &str) -> String {
+    match path.strip_prefix(legacy_home) {
+        Some(suffix) => format!("{current_home}{suffix}"),
+        None => path.to_string(),
     }
 }
 
@@ -317,6 +401,10 @@ fn migrate_legacy_database_file(db_dir: &Path) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{migrate_legacy_database_file, AppDatabase};
+    use crate::domain::conversation::{
+        ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
+        ConversationImageAttachment,
+    };
     use rusqlite::Connection;
     use std::path::Path;
     use uuid::Uuid;
@@ -787,6 +875,39 @@ mod tests {
                 ],
             )
             .expect("environment should insert");
+        connection
+            .execute(
+                "
+                INSERT INTO threads (
+                  id, environment_id, title, status, codex_thread_id, overrides_json, composer_draft_json, created_at, updated_at, archived_at
+                )
+                VALUES (?1, ?2, ?3, ?4, NULL, '{}', ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
+                ",
+                rusqlite::params![
+                    "thread-1",
+                    "env-1",
+                    "Draft thread",
+                    "active",
+                    serde_json::to_string(&ConversationComposerDraft {
+                        text: "Keep this".to_string(),
+                        images: vec![ConversationImageAttachment::LocalImage {
+                            path: "/Users/test/.threadex/worktrees/loom/feature/screenshot.png"
+                                .to_string(),
+                        }],
+                        mention_bindings: vec![ComposerDraftMentionBinding {
+                            mention: "notes".to_string(),
+                            kind: ComposerMentionBindingKind::Skill,
+                            path: "/Users/test/.threadex/worktrees/loom/feature/notes.md"
+                                .to_string(),
+                            start: 0,
+                            end: 6,
+                        }],
+                        is_refining_plan: true,
+                    })
+                    .expect("draft should serialize"),
+                ],
+            )
+            .expect("thread should insert");
         drop(connection);
 
         database
@@ -800,9 +921,41 @@ mod tests {
         let environment_path: String = connection
             .query_row("SELECT path FROM environments WHERE id = 'env-1'", [], |row| row.get(0))
             .expect("environment path should read");
+        let draft: ConversationComposerDraft = connection
+            .query_row(
+                "SELECT composer_draft_json FROM threads WHERE id = 'thread-1'",
+                [],
+                |row| {
+                    let draft_json = row.get::<_, String>(0)?;
+                    serde_json::from_str(&draft_json).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            draft_json.len(),
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })
+                },
+            )
+            .expect("thread draft should read");
 
         assert_eq!(project_root, "/Users/test/.loom/worktrees/loom/project-root");
         assert_eq!(environment_path, "/Users/test/.loom/worktrees/loom/feature");
+        assert_eq!(
+            draft.images,
+            vec![ConversationImageAttachment::LocalImage {
+                path: "/Users/test/.loom/worktrees/loom/feature/screenshot.png".to_string(),
+            }]
+        );
+        assert_eq!(
+            draft.mention_bindings,
+            vec![ComposerDraftMentionBinding {
+                mention: "notes".to_string(),
+                kind: ComposerMentionBindingKind::Skill,
+                path: "/Users/test/.loom/worktrees/loom/feature/notes.md".to_string(),
+                start: 0,
+                end: 6,
+            }]
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

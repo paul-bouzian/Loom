@@ -552,6 +552,31 @@ describe("conversation store", () => {
     });
   });
 
+  it("stores drafts separately for each thread", () => {
+    useConversationStore.getState().updateDraft("thread-1", {
+      text: "Ship it",
+      isRefiningPlan: true,
+    });
+    useConversationStore.getState().updateDraft("thread-2", {
+      text: "Leave this alone",
+      images: [{ type: "localImage", path: "/tmp/thread-2.png" }],
+    });
+
+    const state = useConversationStore.getState();
+    expect(state.draftByThreadId["thread-1"]).toMatchObject({
+      text: "Ship it",
+      images: [],
+      mentionBindings: [],
+      isRefiningPlan: true,
+    });
+    expect(state.draftByThreadId["thread-2"]).toMatchObject({
+      text: "Leave this alone",
+      images: [{ type: "localImage", path: "/tmp/thread-2.png" }],
+      mentionBindings: [],
+      isRefiningPlan: false,
+    });
+  });
+
   it("persists text draft updates with a debounce", async () => {
     vi.useFakeTimers();
 
@@ -597,6 +622,73 @@ describe("conversation store", () => {
     });
   });
 
+  it("persists mention binding changes immediately", async () => {
+    useConversationStore.getState().updateDraft("thread-1", {
+      mentionBindings: [
+        {
+          mention: "github",
+          kind: "app",
+          path: "app://github",
+          start: 0,
+          end: 7,
+        },
+      ],
+    });
+    await Promise.resolve();
+
+    expect(mockedBridge.saveThreadComposerDraft).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      draft: {
+        text: "",
+        images: [],
+        mentionBindings: [
+          {
+            mention: "github",
+            kind: "app",
+            path: "app://github",
+            start: 0,
+            end: 7,
+          },
+        ],
+        isRefiningPlan: false,
+      },
+    });
+  });
+
+  it("retries draft persistence after a save failure", async () => {
+    vi.useFakeTimers();
+
+    try {
+      mockedBridge.saveThreadComposerDraft
+        .mockRejectedValueOnce(new Error("temporary failure"))
+        .mockResolvedValue(undefined);
+
+      useConversationStore.getState().updateDraft("thread-1", {
+        images: [{ type: "localImage", path: "/tmp/thread-1.png" }],
+      });
+      await Promise.resolve();
+
+      expect(mockedBridge.saveThreadComposerDraft).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(mockedBridge.saveThreadComposerDraft).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockedBridge.saveThreadComposerDraft).toHaveBeenCalledTimes(2);
+      expect(mockedBridge.saveThreadComposerDraft).toHaveBeenLastCalledWith({
+        threadId: "thread-1",
+        draft: {
+          text: "",
+          images: [{ type: "localImage", path: "/tmp/thread-1.png" }],
+          mentionBindings: [],
+          isRefiningPlan: false,
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears persisted drafts immediately on reset", async () => {
     useConversationStore.setState((state) => ({
       ...state,
@@ -620,6 +712,37 @@ describe("conversation store", () => {
     });
   });
 
+  it("resets only the requested thread draft", () => {
+    useConversationStore.getState().updateDraft("thread-1", {
+      text: "Thread 1",
+    });
+    useConversationStore.getState().updateDraft("thread-2", {
+      text: "Thread 2",
+    });
+
+    useConversationStore.getState().resetDraft("thread-1");
+
+    const state = useConversationStore.getState();
+    expect(state.draftByThreadId["thread-1"]).toBeUndefined();
+    expect(state.draftByThreadId["thread-2"]).toMatchObject({
+      text: "Thread 2",
+    });
+  });
+
+  it("drops an empty draft instead of storing a blank entry", () => {
+    useConversationStore.getState().updateDraft("thread-1", {
+      text: "Keep this",
+    });
+
+    useConversationStore.getState().updateDraft("thread-1", {
+      text: "",
+      images: [],
+      mentionBindings: [],
+      isRefiningPlan: false,
+    });
+
+    expect(useConversationStore.getState().draftByThreadId["thread-1"]).toBeUndefined();
+  });
   it("resets listener readiness on teardown", async () => {
     mockedBridge.listenToConversationEvents.mockResolvedValue(() => undefined);
 

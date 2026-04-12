@@ -10,7 +10,7 @@ use crate::domain::conversation::{
     ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
 use crate::domain::workspace::{WorkspaceEvent, WorkspaceEventKind};
-use crate::error::CommandError;
+use crate::error::{AppError, CommandError};
 use crate::services::workspace::{AutoRenameFirstPromptRequest, WorkspaceService};
 use crate::state::AppState;
 
@@ -56,6 +56,8 @@ pub fn save_thread_composer_draft(
     input: PersistThreadComposerDraftInput,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
+    validate_non_blank_thread_id(&input.thread_id)?;
+    validate_thread_composer_draft(input.draft.as_ref())?;
     state
         .workspace
         .persist_thread_composer_draft(&input.thread_id, input.draft.as_ref())?;
@@ -208,9 +210,15 @@ pub async fn send_thread_message(
     state
         .workspace
         .persist_thread_composer_settings(&result.snapshot.thread_id, &result.snapshot.composer)?;
-    state
+    if let Err(error) = state
         .workspace
-        .clear_thread_composer_draft(&result.snapshot.thread_id)?;
+        .clear_thread_composer_draft(&result.snapshot.thread_id)
+    {
+        warn!(
+            thread_id = %result.snapshot.thread_id,
+            "failed to clear persisted thread composer draft after successful send: {error}"
+        );
+    }
 
     Ok(result.snapshot)
 }
@@ -268,11 +276,72 @@ pub async fn submit_plan_decision(
     state
         .workspace
         .persist_thread_composer_settings(&result.snapshot.thread_id, &result.snapshot.composer)?;
-    state
+    if let Err(error) = state
         .workspace
-        .clear_thread_composer_draft(&result.snapshot.thread_id)?;
+        .clear_thread_composer_draft(&result.snapshot.thread_id)
+    {
+        warn!(
+            thread_id = %result.snapshot.thread_id,
+            "failed to clear persisted thread composer draft after successful plan decision: {error}"
+        );
+    }
 
     Ok(result.snapshot)
+}
+
+fn validate_non_blank_thread_id(thread_id: &str) -> Result<(), CommandError> {
+    if thread_id.trim().is_empty() {
+        return Err(AppError::Validation("Thread id cannot be empty.".to_string()).into());
+    }
+
+    Ok(())
+}
+
+fn validate_thread_composer_draft(
+    draft: Option<&ConversationComposerDraft>,
+) -> Result<(), CommandError> {
+    let Some(draft) = draft else {
+        return Ok(());
+    };
+
+    for attachment in &draft.images {
+        match attachment {
+            ConversationImageAttachment::Image { url } if url.trim().is_empty() => {
+                return Err(
+                    AppError::Validation("Draft image URL cannot be empty.".to_string()).into(),
+                );
+            }
+            ConversationImageAttachment::LocalImage { path } if path.trim().is_empty() => {
+                return Err(
+                    AppError::Validation("Draft image path cannot be empty.".to_string()).into(),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    for binding in &draft.mention_bindings {
+        if binding.mention.trim().is_empty() {
+            return Err(
+                AppError::Validation("Draft mention name cannot be empty.".to_string()).into(),
+            );
+        }
+        if binding.path.trim().is_empty() {
+            return Err(
+                AppError::Validation("Draft mention path cannot be empty.".to_string()).into(),
+            );
+        }
+        if binding.start >= binding.end {
+            return Err(
+                AppError::Validation(
+                    "Draft mention binding ranges must have start before end.".to_string(),
+                )
+                .into(),
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn emit_workspace_event(app: &AppHandle, payload: WorkspaceEvent) {
@@ -311,4 +380,43 @@ where
         .await
         .map_err(|error| CommandError::from(crate::error::AppError::Runtime(error.to_string())))?
         .map_err(CommandError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_non_blank_thread_id, validate_thread_composer_draft};
+    use crate::domain::conversation::{
+        ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
+        ConversationImageAttachment,
+    };
+
+    #[test]
+    fn save_thread_composer_draft_rejects_blank_thread_ids() {
+        let error = validate_non_blank_thread_id("   ").expect_err("blank thread id should fail");
+
+        assert_eq!(error.code, "validation_error");
+        assert!(error.message.contains("Thread id cannot be empty"));
+    }
+
+    #[test]
+    fn save_thread_composer_draft_rejects_invalid_payloads() {
+        let error = validate_thread_composer_draft(Some(&ConversationComposerDraft {
+            text: "Review this".to_string(),
+            images: vec![ConversationImageAttachment::LocalImage {
+                path: "/tmp/screenshot.png".to_string(),
+            }],
+            mention_bindings: vec![ComposerDraftMentionBinding {
+                mention: "github".to_string(),
+                kind: ComposerMentionBindingKind::App,
+                path: "app://github".to_string(),
+                start: 8,
+                end: 8,
+            }],
+            is_refining_plan: false,
+        }))
+        .expect_err("invalid draft should fail");
+
+        assert_eq!(error.code, "validation_error");
+        assert!(error.message.contains("start before end"));
+    }
 }

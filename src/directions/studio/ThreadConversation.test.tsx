@@ -2597,6 +2597,35 @@ describe("ThreadConversation", () => {
     });
   });
 
+  it("restores a pending text draft after remounting the same thread", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({ status: "idle" }),
+      capabilities: capabilitiesFixture,
+    });
+
+    const view = render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    const input = await screen.findByPlaceholderText("Message Loom...");
+    await userEvent.type(input, "Keep this around");
+
+    view.unmount();
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(
+      await screen.findByPlaceholderText("Message Loom..."),
+    ).toHaveValue("Keep this around");
+  });
   it("keeps attached images scoped to their original thread", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({ status: "idle" }),
@@ -2706,6 +2735,59 @@ describe("ThreadConversation", () => {
     expect(
       await screen.findByPlaceholderText("Message Loom..."),
     ).toHaveValue("Keep this around");
+  });
+
+  it("restores refine mode and draft content when returning to the same thread", async () => {
+    mockedBridge.openThreadConversation.mockImplementation(async (threadId) => ({
+      snapshot:
+        threadId === "thread-1"
+          ? makeConversationSnapshot({
+              status: "waitingForExternalAction",
+              composer: { ...baseComposer, collaborationMode: "plan" },
+              proposedPlan: makeProposedPlan(),
+            })
+          : makeConversationSnapshot({ status: "idle" }),
+      capabilities: capabilitiesFixture,
+    }));
+
+    const { rerender } = render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Refine" }),
+    );
+    const input = await screen.findByPlaceholderText(
+      "Refine the proposed plan...",
+    );
+    await userEvent.type(input, "Keep the rollback section");
+
+    rerender(
+      <ThreadConversation
+        environment={makeEnvironment({
+          id: "env-2",
+          threads: [makeThread({ id: "thread-2" })],
+        })}
+        thread={makeThread({ id: "thread-2" })}
+      />,
+    );
+    expect(
+      await screen.findByPlaceholderText("Message Loom..."),
+    ).toHaveValue("");
+
+    rerender(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(
+      await screen.findByPlaceholderText("Refine the proposed plan..."),
+    ).toHaveValue("Keep the rollback section");
   });
 
   it("restores refine mode from the persisted thread draft", async () => {
