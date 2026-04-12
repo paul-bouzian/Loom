@@ -4,7 +4,10 @@ import {
 import type { ThreadConversationSnapshot } from "../../lib/types";
 import { CloseIcon, PlusIcon } from "../../shared/Icons";
 import { RuntimeIndicator } from "../../shared/RuntimeIndicator";
-import { useConversationStore } from "../../stores/conversation-store";
+import {
+  selectConversationSnapshot,
+  useConversationStore,
+} from "../../stores/conversation-store";
 import {
   selectOwnerPendingVoiceOutcome,
   useVoiceSessionStore,
@@ -23,7 +26,6 @@ export function ThreadTabs() {
   const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
   const selectedThreadId = useWorkspaceStore((s) => s.selectedThreadId);
   const selectThread = useWorkspaceStore((s) => s.selectThread);
-  const snapshotsByThreadId = useConversationStore((state) => state.snapshotsByThreadId);
   const voicePhase = useVoiceSessionStore((state) => state.phase);
   const voiceOwnerThreadId = useVoiceSessionStore((state) => state.ownerThreadId);
   const ownerPendingVoiceOutcome = useVoiceSessionStore(
@@ -59,10 +61,7 @@ export function ThreadTabs() {
                 onClick={() => selectThread(thread.id)}
               >
                 <span className="thread-tab__status-dot" aria-hidden="true">
-                  <RuntimeIndicator
-                    tone={threadIndicatorTone(snapshotsByThreadId[thread.id])}
-                    size="sm"
-                  />
+                  <ThreadTabIndicator threadId={thread.id} />
                 </span>
                 <span className="thread-tab__title">{thread.title}</span>
               </button>
@@ -98,6 +97,11 @@ export function ThreadTabs() {
       </button>
     </div>
   );
+}
+
+function ThreadTabIndicator({ threadId }: { threadId: string }) {
+  const snapshot = useConversationStore(selectConversationSnapshot(threadId));
+  return <RuntimeIndicator tone={threadIndicatorTone(snapshot ?? undefined)} size="sm" />;
 }
 
 function threadIndicatorTone(snapshot: ThreadConversationSnapshot | undefined) {

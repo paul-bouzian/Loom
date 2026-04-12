@@ -9,9 +9,13 @@ import type { ComposerDraftMentionBinding } from "../../../lib/types";
 import {
   baseComposer,
   capabilitiesFixture,
+  makeEnvironment,
+  makeProject,
+  makeWorkspaceSnapshot,
 } from "../../../test/fixtures/conversation";
 import { resetVoiceSessionStore } from "../../../stores/voice-session-store";
 import { useVoiceStatusStore } from "../../../stores/voice-status-store";
+import { useWorkspaceStore } from "../../../stores/workspace-store";
 import { InlineComposer } from "./InlineComposer";
 import { startVoiceCapture } from "./composer-voice-audio";
 
@@ -54,6 +58,16 @@ function createDeferred<T>() {
 beforeEach(async () => {
   vi.clearAllMocks();
   await resetVoiceSessionStore();
+  useWorkspaceStore.setState((state) => ({
+    ...state,
+    snapshot: makeWorkspaceSnapshot({
+      projects: [
+        makeProject({
+          environments: [makeEnvironment({ id: "env-1" })],
+        }),
+      ],
+    }),
+  }));
   useVoiceStatusStore.setState((state) => ({
     ...state,
     snapshotsByEnvironmentId: {},

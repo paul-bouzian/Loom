@@ -72,7 +72,7 @@ beforeEach(() => {
     snapshotsByThreadId: {},
     capabilitiesByEnvironmentId: {},
     composerByThreadId: {},
-    loadingByThreadId: {},
+    hydrationByThreadId: {},
     errorByThreadId: {},
     listenerReady: false,
   }));

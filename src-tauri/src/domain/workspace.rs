@@ -195,6 +195,7 @@ pub struct FirstPromptRenameFailureEvent {
 pub enum WorkspaceEventKind {
     EnvironmentRenamed,
     EnvironmentPullRequestChanged,
+    RuntimeStatusChanged,
     ThreadAutoRenamed,
 }
 

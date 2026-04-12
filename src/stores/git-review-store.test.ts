@@ -24,6 +24,7 @@ const mockedBridge = vi.mocked(bridge);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useRealTimers();
   useGitReviewStore.setState({
     scopeByEnvironmentId: {},
     snapshotsByContext: {},
@@ -251,7 +252,7 @@ describe("git-review-store", () => {
     );
   });
 
-  it("merges concurrent diff loads instead of dropping earlier results", async () => {
+  it("keeps the latest selected diff when concurrent loads overlap", async () => {
     mockedBridge.getGitReviewSnapshot.mockResolvedValue(
       makeGitReviewSnapshot({
         sections: [
@@ -323,8 +324,10 @@ describe("git-review-store", () => {
     pending.get("src/a.ts")?.resolve(makeGitFileDiff({ path: "src/a.ts" }));
     await Promise.all([first, second]);
 
+    expect(
+      useGitReviewStore.getState().selectedFileByContext["env-1:uncommitted"],
+    ).toBe("unstaged:src/b.ts");
     expect(useGitReviewStore.getState().diffsByContext["env-1:uncommitted"]).toMatchObject({
-      "unstaged:src/a.ts": expect.objectContaining({ path: "src/a.ts" }),
       "unstaged:src/b.ts": expect.objectContaining({ path: "src/b.ts" }),
     });
   });

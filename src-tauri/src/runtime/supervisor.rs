@@ -1,17 +1,22 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use chrono::Utc;
-use tauri::AppHandle;
+use chrono::{DateTime, Utc};
+use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use tracing::warn;
 
+use crate::app_identity::WORKSPACE_EVENT_NAME;
 use crate::domain::conversation::{
     ApprovalResponseInput, ComposerMentionBindingInput, ConversationImageAttachment,
     RespondToUserInputRequestInput, SubmitPlanDecisionInput, ThreadComposerCatalog,
     ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
-use crate::domain::workspace::{CodexRateLimitSnapshot, RuntimeState, RuntimeStatusSnapshot};
+use crate::domain::workspace::{
+    CodexRateLimitSnapshot, RuntimeState, RuntimeStatusSnapshot, WorkspaceEvent,
+    WorkspaceEventKind,
+};
 use crate::error::{AppError, AppResult};
 use crate::runtime::codex_paths::resolve_codex_binary_path;
 use crate::runtime::protocol::AccountReadResponse;
@@ -21,6 +26,7 @@ use crate::services::workspace::ThreadRuntimeContext;
 struct RunningRuntime {
     session: Arc<RuntimeSession>,
     status: RuntimeStatusSnapshot,
+    last_activity_at: DateTime<Utc>,
 }
 
 enum RuntimeReadTarget {
@@ -40,6 +46,9 @@ pub struct RuntimeSupervisor {
     registry: Mutex<RuntimeRegistry>,
     environment_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
+
+pub const RUNTIME_IDLE_REAPER_INTERVAL: Duration = Duration::from_secs(60);
+pub const RUNTIME_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
 impl RuntimeSupervisor {
     pub fn new(app: AppHandle, app_version: String) -> Self {
@@ -76,6 +85,7 @@ impl RuntimeSupervisor {
 
         if !exited.is_empty() {
             let mut finalized = Vec::new();
+            let mut changed_environment_ids = Vec::new();
             let mut registry = self.registry.lock().await;
             for (environment_id, session, mut status, last_exit_code) in exited {
                 let should_remove = registry
@@ -90,8 +100,11 @@ impl RuntimeSupervisor {
                 status.pid = None;
                 status.started_at = None;
                 status.last_exit_code = Some(last_exit_code);
-                registry.last_known.insert(environment_id, status);
+                registry
+                    .last_known
+                    .insert(environment_id.clone(), status);
                 finalized.push(session);
+                changed_environment_ids.push(environment_id);
             }
             drop(registry);
 
@@ -99,6 +112,10 @@ impl RuntimeSupervisor {
                 if let Err(error) = session.stop().await {
                     warn!("failed to stop finalized runtime session: {error}");
                 }
+            }
+
+            for environment_id in changed_environment_ids {
+                self.emit_runtime_status_event(&environment_id);
             }
         }
 
@@ -177,11 +194,13 @@ impl RuntimeSupervisor {
         self.refresh_statuses().await?;
 
         if let Some(runtime) = self.running_runtime(environment_id).await {
+            self.mark_runtime_activity(environment_id).await;
             return Ok(runtime);
         }
 
         let binary_path = resolve_binary_path(codex_binary_path)?;
 
+        let now = Utc::now();
         let session = Arc::new(
             RuntimeSession::spawn(
                 self.app.clone(),
@@ -198,7 +217,7 @@ impl RuntimeSupervisor {
             state: RuntimeState::Running,
             pid,
             binary_path: Some(binary_path),
-            started_at: Some(Utc::now()),
+            started_at: Some(now),
             last_exit_code: None,
         };
 
@@ -208,13 +227,20 @@ impl RuntimeSupervisor {
             RunningRuntime {
                 session: session.clone(),
                 status: status.clone(),
+                last_activity_at: now,
             },
         );
         registry
             .last_known
             .insert(environment_id.to_string(), status.clone());
+        drop(registry);
+        self.emit_runtime_status_event(environment_id);
 
-        Ok(RunningRuntime { session, status })
+        Ok(RunningRuntime {
+            session,
+            status,
+            last_activity_at: now,
+        })
     }
 
     async fn environment_lock(&self, environment_id: &str) -> Arc<Mutex<()>> {
@@ -236,6 +262,7 @@ impl RuntimeSupervisor {
         self.refresh_statuses().await?;
 
         if let Some(runtime) = self.running_runtime(environment_id).await {
+            self.mark_runtime_activity(environment_id).await;
             return Ok(RuntimeReadTarget::Running(runtime.session));
         }
 
@@ -268,6 +295,7 @@ impl RuntimeSupervisor {
                 .await
                 .last_known
                 .insert(environment_id.to_string(), status.clone());
+            self.emit_runtime_status_event(environment_id);
             return Ok(status);
         }
 
@@ -286,6 +314,18 @@ impl RuntimeSupervisor {
                 started_at: None,
                 last_exit_code: None,
             }))
+    }
+
+    pub async fn touch(&self, environment_id: &str) -> AppResult<bool> {
+        self.refresh_statuses().await?;
+
+        let mut registry = self.registry.lock().await;
+        if let Some(runtime) = registry.running.get_mut(environment_id) {
+            runtime.last_activity_at = Utc::now();
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     pub async fn open_thread(
@@ -383,6 +423,43 @@ impl RuntimeSupervisor {
         session.submit_plan_decision(context, input).await
     }
 
+    pub async fn evict_idle_runtimes(&self, max_idle: Duration) -> AppResult<()> {
+        self.refresh_statuses().await?;
+
+        let cutoff = chrono::Duration::from_std(max_idle)
+            .map_err(|error| AppError::Runtime(error.to_string()))?;
+        let now = Utc::now();
+        let candidates = {
+            let registry = self.registry.lock().await;
+            registry
+                .running
+                .iter()
+                .filter_map(|(environment_id, runtime)| {
+                    ((now - runtime.last_activity_at) >= cutoff).then_some((
+                        environment_id.clone(),
+                        runtime.session.clone(),
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for (environment_id, session) in candidates {
+            if session.has_keep_alive_work().await {
+                self.mark_runtime_activity(&environment_id).await;
+                continue;
+            }
+
+            if let Err(error) = self.stop(&environment_id).await {
+                warn!(
+                    environment_id = %environment_id,
+                    "failed to evict idle runtime: {error}"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     async fn running_runtime(&self, environment_id: &str) -> Option<RunningRuntime> {
         self.registry
             .lock()
@@ -392,7 +469,29 @@ impl RuntimeSupervisor {
             .map(|runtime| RunningRuntime {
                 session: runtime.session.clone(),
                 status: runtime.status.clone(),
+                last_activity_at: runtime.last_activity_at,
             })
+    }
+
+    async fn mark_runtime_activity(&self, environment_id: &str) {
+        let mut registry = self.registry.lock().await;
+        if let Some(runtime) = registry.running.get_mut(environment_id) {
+            runtime.last_activity_at = Utc::now();
+        }
+    }
+
+    fn emit_runtime_status_event(&self, environment_id: &str) {
+        if let Err(error) = self.app.emit(
+            WORKSPACE_EVENT_NAME,
+            WorkspaceEvent {
+                kind: WorkspaceEventKind::RuntimeStatusChanged,
+                project_id: None,
+                environment_id: Some(environment_id.to_string()),
+                thread_id: None,
+            },
+        ) {
+            warn!("failed to emit workspace runtime event: {error}");
+        }
     }
 
     async fn ensure_runtime(

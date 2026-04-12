@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,18 +10,18 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::domain::conversation::{
     ApprovalResponseInput, CommandApprovalDecisionInput, ComposerMentionBindingInput,
-    ConversationEventPayload, ConversationImageAttachment, ConversationInteraction,
-    ConversationItem, ConversationMessageItem, ConversationRole, ConversationStatus,
-    ConversationTaskStatus, EnvironmentCapabilitiesSnapshot, FileChangeApprovalDecisionInput,
-    InputModality, PermissionGrantScope, PermissionsApprovalDecisionInput, PlanDecisionAction,
-    RespondToUserInputRequestInput, SubmitPlanDecisionInput, ThreadComposerCatalog,
-    ThreadConversationOpenResponse, ThreadConversationSnapshot,
+    ConversationEventPayload, ConversationImageAttachment, ConversationInteraction, ConversationItem,
+    ConversationMessageItem, ConversationRole, ConversationStatus, ConversationTaskStatus,
+    EnvironmentCapabilitiesSnapshot, FileChangeApprovalDecisionInput, InputModality,
+    PermissionGrantScope, PermissionsApprovalDecisionInput, PlanDecisionAction,
+    ProposedPlanStatus, RespondToUserInputRequestInput, SubagentStatus, SubmitPlanDecisionInput,
+    ThreadComposerCatalog, ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
 use crate::domain::settings::{CollaborationMode, ServiceTier};
 use crate::domain::voice::VoiceAuthMode;
@@ -57,6 +58,7 @@ use crate::services::composer::{
 use crate::services::workspace::ThreadRuntimeContext;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+const SNAPSHOT_EMIT_DEBOUNCE: Duration = Duration::from_millis(120);
 
 type PendingRequestMap = Arc<Mutex<HashMap<u64, oneshot::Sender<AppResult<serde_json::Value>>>>>;
 type SharedWriter = Arc<Mutex<Box<dyn AsyncWrite + Send + Unpin>>>;
@@ -92,6 +94,64 @@ struct BufferedAssistantControlDelta {
 struct PendingServerRequest {
     json_rpc_id: serde_json::Value,
     thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SnapshotEmitSignature {
+    status: ConversationStatus,
+    active_turn_id: Option<String>,
+    item_count: usize,
+    last_item_id: Option<String>,
+    last_item_is_streaming: bool,
+    pending_interaction_count: usize,
+    proposed_plan_status: Option<ProposedPlanStatus>,
+    proposed_plan_awaiting_decision: bool,
+    task_plan_status: Option<ConversationTaskStatus>,
+    task_plan_step_count: usize,
+    subagent_count: usize,
+    running_subagent_count: usize,
+    error_message: Option<String>,
+}
+
+#[derive(Default)]
+struct BufferedSnapshotEmit {
+    last_emitted_signature: Option<SnapshotEmitSignature>,
+    latest_snapshot: Option<ThreadConversationSnapshot>,
+    scheduled: bool,
+}
+
+static SNAPSHOT_EMIT_STATE: OnceLock<Mutex<HashMap<String, BufferedSnapshotEmit>>> =
+    OnceLock::new();
+
+impl SnapshotEmitSignature {
+    fn from_snapshot(snapshot: &ThreadConversationSnapshot) -> Self {
+        let last_item = snapshot.items.last();
+        Self {
+            status: snapshot.status,
+            active_turn_id: snapshot.active_turn_id.clone(),
+            item_count: snapshot.items.len(),
+            last_item_id: last_item.map(|item| item.id().to_string()),
+            last_item_is_streaming: last_item.is_some_and(conversation_item_is_streaming),
+            pending_interaction_count: snapshot.pending_interactions.len(),
+            proposed_plan_status: snapshot.proposed_plan.as_ref().map(|plan| plan.status),
+            proposed_plan_awaiting_decision: snapshot
+                .proposed_plan
+                .as_ref()
+                .is_some_and(|plan| plan.is_awaiting_decision),
+            task_plan_status: snapshot.task_plan.as_ref().map(|task| task.status),
+            task_plan_step_count: snapshot
+                .task_plan
+                .as_ref()
+                .map_or(0, |task| task.steps.len()),
+            subagent_count: snapshot.subagents.len(),
+            running_subagent_count: snapshot
+                .subagents
+                .iter()
+                .filter(|subagent| matches!(subagent.status, SubagentStatus::Running))
+                .count(),
+            error_message: snapshot.error.as_ref().map(|error| error.message.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -644,6 +704,21 @@ impl RuntimeSession {
     pub async fn pid(&self) -> Option<u32> {
         let child = self.child.as_ref()?;
         child.lock().await.id()
+    }
+
+    pub async fn has_keep_alive_work(&self) -> bool {
+        let state = self.state.lock().await;
+        state.snapshots_by_thread.values().any(|snapshot| {
+            matches!(
+                snapshot.status,
+                ConversationStatus::Running | ConversationStatus::WaitingForExternalAction
+            ) || snapshot.active_turn_id.is_some()
+                || !snapshot.pending_interactions.is_empty()
+                || snapshot
+                    .subagents
+                    .iter()
+                    .any(|subagent| matches!(subagent.status, SubagentStatus::Running))
+        })
     }
 
     pub async fn read_account_rate_limits(&self) -> AppResult<CodexRateLimitSnapshot> {
@@ -1445,14 +1520,7 @@ impl RuntimeSession {
         let Some(app) = self.app.as_ref() else {
             return;
         };
-        let payload = ConversationEventPayload {
-            thread_id: snapshot.thread_id.clone(),
-            environment_id: snapshot.environment_id.clone(),
-            snapshot: snapshot.clone(),
-        };
-        if let Err(error) = app.emit(CONVERSATION_EVENT_NAME, payload) {
-            warn!("failed to emit conversation snapshot: {error}");
-        }
+        queue_snapshot_emit(app.clone(), snapshot.clone());
     }
 }
 
@@ -2461,6 +2529,59 @@ fn emit_snapshot_from_handle(app: &Option<AppHandle>, snapshot: ThreadConversati
     let Some(app) = app.as_ref() else {
         return;
     };
+    queue_snapshot_emit(app.clone(), snapshot);
+}
+
+fn queue_snapshot_emit(app: AppHandle, snapshot: ThreadConversationSnapshot) {
+    tauri::async_runtime::spawn(async move {
+        let signature = SnapshotEmitSignature::from_snapshot(&snapshot);
+        let thread_id = snapshot.thread_id.clone();
+        let emit_state = snapshot_emit_state();
+
+        let mut should_emit_now = false;
+        let mut should_schedule = false;
+        {
+            let mut emits = emit_state.lock().await;
+            let entry = emits.entry(thread_id.clone()).or_default();
+            if entry.last_emitted_signature.as_ref() != Some(&signature) {
+                entry.last_emitted_signature = Some(signature);
+                entry.latest_snapshot = None;
+                should_emit_now = true;
+            } else {
+                entry.latest_snapshot = Some(snapshot.clone());
+                if !entry.scheduled {
+                    entry.scheduled = true;
+                    should_schedule = true;
+                }
+            }
+        }
+
+        if should_emit_now {
+            emit_snapshot_payload(&app, snapshot);
+            return;
+        }
+
+        if should_schedule {
+            tauri::async_runtime::spawn(async move {
+                sleep(SNAPSHOT_EMIT_DEBOUNCE).await;
+                let next_snapshot = {
+                    let mut emits = emit_state.lock().await;
+                    let Some(entry) = emits.get_mut(&thread_id) else {
+                        return;
+                    };
+                    entry.scheduled = false;
+                    entry.latest_snapshot.take()
+                };
+
+                if let Some(snapshot) = next_snapshot {
+                    emit_snapshot_payload(&app, snapshot);
+                }
+            });
+        }
+    });
+}
+
+fn emit_snapshot_payload(app: &AppHandle, snapshot: ThreadConversationSnapshot) {
     let payload = ConversationEventPayload {
         thread_id: snapshot.thread_id.clone(),
         environment_id: snapshot.environment_id.clone(),
@@ -2468,6 +2589,33 @@ fn emit_snapshot_from_handle(app: &Option<AppHandle>, snapshot: ThreadConversati
     };
     if let Err(error) = app.emit(CONVERSATION_EVENT_NAME, payload) {
         warn!("failed to emit conversation snapshot: {error}");
+    }
+}
+
+fn snapshot_emit_state() -> &'static Mutex<HashMap<String, BufferedSnapshotEmit>> {
+    SNAPSHOT_EMIT_STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn conversation_item_is_streaming(item: &ConversationItem) -> bool {
+    match item {
+        ConversationItem::Message(message) => message.is_streaming,
+        ConversationItem::Reasoning(reasoning) => reasoning.is_streaming,
+        ConversationItem::Tool(_) | ConversationItem::System(_) => false,
+    }
+}
+
+trait ConversationItemSnapshotExt {
+    fn id(&self) -> &str;
+}
+
+impl ConversationItemSnapshotExt for ConversationItem {
+    fn id(&self) -> &str {
+        match self {
+            ConversationItem::Message(message) => message.id.as_str(),
+            ConversationItem::Reasoning(reasoning) => reasoning.id.as_str(),
+            ConversationItem::Tool(tool) => tool.id.as_str(),
+            ConversationItem::System(system) => system.id.as_str(),
+        }
     }
 }
 

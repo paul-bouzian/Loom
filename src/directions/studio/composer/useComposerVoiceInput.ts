@@ -13,6 +13,7 @@ import {
 
 type Props = {
   currentDraft: string;
+  enabled: boolean;
   environmentId: string;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   locked: boolean;
@@ -22,6 +23,7 @@ type Props = {
 
 export function useComposerVoiceInput({
   currentDraft,
+  enabled,
   environmentId,
   inputRef,
   locked,
@@ -103,10 +105,17 @@ export function useComposerVoiceInput({
   }, [currentDraft]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     void ensureEnvironmentVoiceStatus(environmentId);
-  }, [ensureEnvironmentVoiceStatus, environmentId]);
+  }, [enabled, ensureEnvironmentVoiceStatus, environmentId]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     function handleWindowFocus() {
       void refreshEnvironmentVoiceStatus(environmentId);
     }
@@ -115,7 +124,7 @@ export function useComposerVoiceInput({
     return () => {
       window.removeEventListener("focus", handleWindowFocus);
     };
-  }, [environmentId, refreshEnvironmentVoiceStatus]);
+  }, [enabled, environmentId, refreshEnvironmentVoiceStatus]);
 
   useEffect(() => {
     if (!pendingOutcome) {
@@ -143,6 +152,7 @@ export function useComposerVoiceInput({
   }, [clearPendingOutcome, inputRef, onChangeDraft, pendingOutcome, threadId]);
 
   const buttonDisabled =
+    !enabled ||
     isTranscribing ||
     activeSessionElsewhere ||
     pendingOutcomeElsewhere ||
@@ -191,6 +201,7 @@ export function useComposerVoiceInput({
         phase !== "idle" ||
         pendingOutcome !== null ||
         locked ||
+        !enabled ||
         loading ||
         !voiceAvailable
       ) {
@@ -199,6 +210,7 @@ export function useComposerVoiceInput({
       void startSession({ environmentId, threadId });
     }, [
       environmentId,
+      enabled,
       isRecording,
       isStarting,
       loading,

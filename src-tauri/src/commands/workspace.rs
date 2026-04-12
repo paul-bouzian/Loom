@@ -208,6 +208,15 @@ pub async fn stop_environment_runtime(
 }
 
 #[tauri::command]
+pub async fn touch_environment_runtime(
+    environment_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, CommandError> {
+    state.workspace.environment_runtime_target(&environment_id)?;
+    Ok(state.runtime.touch(&environment_id).await?)
+}
+
+#[tauri::command]
 pub async fn get_environment_codex_rate_limits(
     environment_id: String,
     state: State<'_, AppState>,
