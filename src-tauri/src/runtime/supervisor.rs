@@ -29,6 +29,16 @@ struct RunningRuntime {
     last_activity_at: DateTime<Utc>,
 }
 
+struct IdleRuntimeCandidate {
+    environment_id: String,
+    session: Arc<RuntimeSession>,
+}
+
+struct IdleRuntimeClassification {
+    evictable_environment_ids: Vec<String>,
+    keep_alive_environment_ids: Vec<String>,
+}
+
 enum RuntimeReadTarget {
     Running(Arc<RuntimeSession>),
     Headless(Box<RuntimeSession>),
@@ -320,12 +330,7 @@ impl RuntimeSupervisor {
         self.refresh_statuses().await?;
 
         let mut registry = self.registry.lock().await;
-        if let Some(runtime) = registry.running.get_mut(environment_id) {
-            runtime.last_activity_at = Utc::now();
-            return Ok(true);
-        }
-
-        Ok(false)
+        Ok(touch_running_runtime(&mut registry, environment_id, Utc::now()))
     }
 
     pub async fn open_thread(
@@ -431,24 +436,16 @@ impl RuntimeSupervisor {
         let now = Utc::now();
         let candidates = {
             let registry = self.registry.lock().await;
-            registry
-                .running
-                .iter()
-                .filter_map(|(environment_id, runtime)| {
-                    ((now - runtime.last_activity_at) >= cutoff).then_some((
-                        environment_id.clone(),
-                        runtime.session.clone(),
-                    ))
-                })
-                .collect::<Vec<_>>()
+            collect_idle_runtime_candidates(&registry, now, cutoff)
         };
 
-        for (environment_id, session) in candidates {
-            if session.has_keep_alive_work().await {
-                self.mark_runtime_activity(&environment_id).await;
-                continue;
-            }
+        let classification = classify_idle_runtime_candidates(candidates).await;
 
+        for environment_id in classification.keep_alive_environment_ids {
+            self.mark_runtime_activity(&environment_id).await;
+        }
+
+        for environment_id in classification.evictable_environment_ids {
             if let Err(error) = self.stop(&environment_id).await {
                 warn!(
                     environment_id = %environment_id,
@@ -475,9 +472,7 @@ impl RuntimeSupervisor {
 
     async fn mark_runtime_activity(&self, environment_id: &str) {
         let mut registry = self.registry.lock().await;
-        if let Some(runtime) = registry.running.get_mut(environment_id) {
-            runtime.last_activity_at = Utc::now();
-        }
+        touch_running_runtime(&mut registry, environment_id, Utc::now());
     }
 
     fn emit_runtime_status_event(&self, environment_id: &str) {
@@ -506,6 +501,55 @@ impl RuntimeSupervisor {
             )
             .await?
             .session)
+    }
+}
+
+fn touch_running_runtime(
+    registry: &mut RuntimeRegistry,
+    environment_id: &str,
+    touched_at: DateTime<Utc>,
+) -> bool {
+    if let Some(runtime) = registry.running.get_mut(environment_id) {
+        runtime.last_activity_at = touched_at;
+        true
+    } else {
+        false
+    }
+}
+
+fn collect_idle_runtime_candidates(
+    registry: &RuntimeRegistry,
+    now: DateTime<Utc>,
+    cutoff: chrono::Duration,
+) -> Vec<IdleRuntimeCandidate> {
+    registry
+        .running
+        .iter()
+        .filter(|(_, runtime)| (now - runtime.last_activity_at) >= cutoff)
+        .map(|(environment_id, runtime)| IdleRuntimeCandidate {
+            environment_id: environment_id.clone(),
+            session: runtime.session.clone(),
+        })
+        .collect()
+}
+
+async fn classify_idle_runtime_candidates(
+    candidates: Vec<IdleRuntimeCandidate>,
+) -> IdleRuntimeClassification {
+    let mut evictable_environment_ids = Vec::new();
+    let mut keep_alive_environment_ids = Vec::new();
+
+    for candidate in candidates {
+        if candidate.session.has_keep_alive_work().await {
+            keep_alive_environment_ids.push(candidate.environment_id);
+        } else {
+            evictable_environment_ids.push(candidate.environment_id);
+        }
+    }
+
+    IdleRuntimeClassification {
+        evictable_environment_ids,
+        keep_alive_environment_ids,
     }
 }
 
@@ -567,6 +611,7 @@ fn resolve_binary_path(codex_binary_path: Option<String>) -> AppResult<String> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Duration as ChronoDuration, TimeZone, Utc};
     use std::sync::Arc;
 
     use serde_json::{json, Value};
@@ -574,10 +619,18 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::{
+        classify_idle_runtime_candidates, collect_idle_runtime_candidates,
         finish_headless_read, read_account_from_target, read_auth_status_from_target,
-        resolve_binary_path, AppServerAuthStatus, RuntimeReadTarget,
+        resolve_binary_path, touch_running_runtime, AppServerAuthStatus, RunningRuntime,
+        RuntimeReadTarget, RuntimeRegistry,
     };
+    use crate::domain::conversation::{
+        ConversationComposerSettings, ConversationMessageItem, ConversationRole,
+        ConversationStatus, SubagentThreadSnapshot, ThreadConversationSnapshot,
+    };
+    use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort};
     use crate::domain::voice::VoiceAuthMode;
+    use crate::domain::workspace::{RuntimeState, RuntimeStatusSnapshot};
     use crate::error::AppError;
     use crate::runtime::protocol::AccountReadAuthTypeWire;
     use crate::runtime::session::RuntimeSession;
@@ -624,6 +677,101 @@ mod tests {
             .find(|request| request.method == "account/read")
             .expect("account/read request should be recorded");
         assert_eq!(account_request.params["refreshToken"], false);
+    }
+
+    #[test]
+    fn touch_updates_last_activity_for_a_running_runtime() {
+        let mut registry = RuntimeRegistry::default();
+        let initial_activity_at = Utc
+            .with_ymd_and_hms(2026, 4, 12, 10, 0, 0)
+            .single()
+            .expect("valid timestamp");
+        let touched_at = initial_activity_at + ChronoDuration::minutes(5);
+        registry.running.insert(
+            "env-1".to_string(),
+            RunningRuntime {
+                session: Arc::new(RuntimeSession::from_snapshot_for_test(
+                    make_completed_snapshot(),
+                )),
+                status: make_runtime_status("env-1"),
+                last_activity_at: initial_activity_at,
+            },
+        );
+
+        let touched = touch_running_runtime(&mut registry, "env-1", touched_at);
+
+        assert!(touched);
+        assert_eq!(
+            registry
+                .running
+                .get("env-1")
+                .expect("runtime should stay registered")
+                .last_activity_at,
+            touched_at
+        );
+    }
+
+    #[test]
+    fn collect_idle_runtime_candidates_only_returns_expired_runtimes() {
+        let stale_activity_at = Utc
+            .with_ymd_and_hms(2026, 4, 12, 10, 0, 0)
+            .single()
+            .expect("valid timestamp");
+        let fresh_activity_at = stale_activity_at + ChronoDuration::minutes(9);
+        let now = stale_activity_at + ChronoDuration::minutes(11);
+        let mut registry = RuntimeRegistry::default();
+        registry.running.insert(
+            "env-stale".to_string(),
+            RunningRuntime {
+                session: Arc::new(RuntimeSession::from_snapshot_for_test(
+                    make_completed_snapshot(),
+                )),
+                status: make_runtime_status("env-stale"),
+                last_activity_at: stale_activity_at,
+            },
+        );
+        registry.running.insert(
+            "env-fresh".to_string(),
+            RunningRuntime {
+                session: Arc::new(RuntimeSession::from_snapshot_for_test(
+                    make_completed_snapshot(),
+                )),
+                status: make_runtime_status("env-fresh"),
+                last_activity_at: fresh_activity_at,
+            },
+        );
+
+        let candidates =
+            collect_idle_runtime_candidates(&registry, now, ChronoDuration::minutes(10));
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].environment_id, "env-stale");
+    }
+
+    #[tokio::test]
+    async fn idle_classification_skips_sessions_with_keep_alive_work() {
+        let candidates = vec![
+            super::IdleRuntimeCandidate {
+                environment_id: "env-idle".to_string(),
+                session: Arc::new(RuntimeSession::from_snapshot_for_test(
+                    make_completed_snapshot(),
+                )),
+            },
+            super::IdleRuntimeCandidate {
+                environment_id: "env-active".to_string(),
+                session: Arc::new(RuntimeSession::from_snapshot_for_test(
+                    make_waiting_snapshot(),
+                )),
+            },
+        ];
+
+        let classification = classify_idle_runtime_candidates(candidates).await;
+
+        assert_eq!(classification.evictable_environment_ids, vec!["env-idle"]);
+        assert_eq!(
+            classification.keep_alive_environment_ids,
+            vec!["env-active"]
+        );
     }
 
     #[test]
@@ -731,6 +879,61 @@ mod tests {
         .expect("test runtime should initialize");
 
         (session, FakeCodexHarness { requests, task })
+    }
+
+    fn make_runtime_status(environment_id: &str) -> RuntimeStatusSnapshot {
+        RuntimeStatusSnapshot {
+            environment_id: environment_id.to_string(),
+            state: RuntimeState::Running,
+            pid: Some(123),
+            binary_path: Some("/opt/homebrew/bin/codex".to_string()),
+            started_at: Some(
+                Utc.with_ymd_and_hms(2026, 4, 12, 10, 0, 0)
+                    .single()
+                    .expect("valid timestamp"),
+            ),
+            last_exit_code: None,
+        }
+    }
+
+    fn make_completed_snapshot() -> ThreadConversationSnapshot {
+        let mut snapshot = ThreadConversationSnapshot::new(
+            "thread-1".to_string(),
+            "env-1".to_string(),
+            Some("thr_codex".to_string()),
+            ConversationComposerSettings {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: ReasoningEffort::High,
+                collaboration_mode: CollaborationMode::Build,
+                approval_policy: ApprovalPolicy::AskToEdit,
+                service_tier: None,
+            },
+        );
+        snapshot.status = ConversationStatus::Completed;
+        snapshot.items.push(crate::domain::conversation::ConversationItem::Message(
+            ConversationMessageItem {
+                id: "assistant-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                role: ConversationRole::Assistant,
+                text: "Done".to_string(),
+                images: None,
+                is_streaming: false,
+            },
+        ));
+        snapshot
+    }
+
+    fn make_waiting_snapshot() -> ThreadConversationSnapshot {
+        let mut snapshot = make_completed_snapshot();
+        snapshot.status = ConversationStatus::WaitingForExternalAction;
+        snapshot.subagents = vec![SubagentThreadSnapshot {
+            thread_id: "subagent-1".to_string(),
+            nickname: Some("Scout".to_string()),
+            role: Some("explorer".to_string()),
+            depth: 1,
+            status: crate::domain::conversation::SubagentStatus::Running,
+        }];
+        snapshot
     }
 
     fn spawn_fake_codex(

@@ -30,7 +30,6 @@ export function SidebarUsagePanel() {
   const showLoadingState = loading && snapshot === null;
   const placeholder = resolveUsagePlaceholder(
     hasWorkspaceEnvironment,
-    sourceEnvironmentId !== null,
     snapshot !== null,
     showLoadingState,
     error,
@@ -79,7 +78,6 @@ export function SidebarUsagePanel() {
 
 function resolveUsagePlaceholder(
   hasWorkspaceEnvironment: boolean,
-  hasEnvironment: boolean,
   hasSnapshot: boolean,
   loading: boolean,
   error: string | null,
@@ -87,9 +85,6 @@ function resolveUsagePlaceholder(
 ) {
   if (!hasWorkspaceEnvironment && !hasSnapshot) {
     return "Add a project to inspect Codex usage.";
-  }
-  if (!hasEnvironment && !hasSnapshot) {
-    return "Start a Codex runtime to inspect usage.";
   }
   if (!loading && error) {
     return error;
@@ -115,13 +110,6 @@ function resolveUsageSourceEnvironmentId(
 
   const selectedEnvironment =
     environments.find((environment) => environment.id === selectedEnvironmentId) ?? null;
-  const runningEnvironments = environments.filter(
-    (environment) => environment.runtime.state === "running",
-  );
 
-  return (
-    (selectedEnvironment?.runtime.state === "running"
-      ? selectedEnvironment.id
-      : runningEnvironments[0]?.id) ?? null
-  );
+  return selectedEnvironment?.id ?? environments[0]?.id ?? null;
 }

@@ -28,9 +28,7 @@ import {
   type DraftUpdate,
 } from "./conversation-drafts";
 import {
-  getEnvironmentRuntimeState,
   requestWorkspaceRefresh,
-  useWorkspaceStore,
 } from "./workspace-store";
 
 type ConversationSet = (
@@ -478,7 +476,7 @@ async function openThreadWithOptions(
   threadId: string,
   options: OpenThreadOptions,
 ): Promise<boolean> {
-  if (options.skipIfLoaded && isThreadWarm(get(), threadId)) {
+  if (options.skipIfLoaded && restoreHydratedThreadIfPresent(get, set, threadId)) {
     return false;
   }
 
@@ -488,7 +486,7 @@ async function openThreadWithOptions(
   }
 
   const loadPromise = (async () => {
-    if (options.skipIfLoaded && isThreadWarm(get(), threadId)) {
+    if (options.skipIfLoaded && restoreHydratedThreadIfPresent(get, set, threadId)) {
       return false;
     }
 
@@ -591,22 +589,32 @@ function snapshotContainsItem(
   return snapshot?.items.some((item) => item.id === itemId) ?? false;
 }
 
-function isThreadWarm(
-  state: Pick<
-    ConversationState,
-    "capabilitiesByEnvironmentId" | "snapshotsByThreadId"
-  >,
+function restoreHydratedThreadIfPresent(
+  get: ConversationGet,
+  set: ConversationSet,
   threadId: string,
 ) {
+  const state = get();
   const snapshot = state.snapshotsByThreadId[threadId];
   if (!snapshot || !state.capabilitiesByEnvironmentId[snapshot.environmentId]) {
     return false;
   }
 
-  const workspaceSnapshot = useWorkspaceStore.getState().snapshot;
-  if (!workspaceSnapshot) {
-    return false;
+  if (
+    state.hydrationByThreadId[threadId] !== "ready" ||
+    state.errorByThreadId[threadId] !== null
+  ) {
+    set((currentState) => ({
+      hydrationByThreadId: {
+        ...currentState.hydrationByThreadId,
+        [threadId]: "ready",
+      },
+      errorByThreadId: {
+        ...currentState.errorByThreadId,
+        [threadId]: null,
+      },
+    }));
   }
 
-  return getEnvironmentRuntimeState(workspaceSnapshot, snapshot.environmentId) === "running";
+  return true;
 }

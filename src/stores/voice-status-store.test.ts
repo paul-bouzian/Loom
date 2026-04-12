@@ -154,7 +154,7 @@ describe("voice status store", () => {
     expect(state.errorByEnvironmentId["env-1"]).toBe("temporary failure");
   });
 
-  it("skips voice status reads for stopped runtimes", async () => {
+  it("still reads voice status for stopped runtimes through the backend", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
       snapshot: makeWorkspaceSnapshot({
@@ -173,10 +173,17 @@ describe("voice status store", () => {
         ],
       }),
     }));
+    mockedBridge.getEnvironmentVoiceStatus.mockResolvedValue({
+      environmentId: "env-1",
+      available: false,
+      authMode: null,
+      unavailableReason: "runtimeUnavailable",
+      message: "Voice transcription is unavailable right now.",
+    });
 
     await useVoiceStatusStore.getState().ensureEnvironmentVoiceStatus("env-1");
 
-    expect(mockedBridge.getEnvironmentVoiceStatus).not.toHaveBeenCalled();
+    expect(mockedBridge.getEnvironmentVoiceStatus).toHaveBeenCalledWith("env-1");
   });
 });
 

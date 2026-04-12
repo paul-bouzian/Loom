@@ -2,10 +2,6 @@ import { create } from "zustand";
 
 import * as bridge from "../lib/bridge";
 import type { EnvironmentVoiceStatusSnapshot } from "../lib/types";
-import {
-  getEnvironmentRuntimeState,
-  useWorkspaceStore,
-} from "./workspace-store";
 
 const VOICE_STATUS_CACHE_TTL_MS = 60_000;
 
@@ -38,9 +34,6 @@ export const useVoiceStatusStore = create<VoiceStatusState>((set, get) => ({
     if (!environmentId) {
       return;
     }
-    if (!isRuntimeRunning(environmentId)) {
-      return;
-    }
 
     const state = get();
     if (state.loadingByEnvironmentId[environmentId]) {
@@ -60,10 +53,6 @@ export const useVoiceStatusStore = create<VoiceStatusState>((set, get) => ({
   },
 
   refreshEnvironmentVoiceStatus: async (environmentId) => {
-    if (!isRuntimeRunning(environmentId)) {
-      return;
-    }
-
     const state = get();
     if (state.loadingByEnvironmentId[environmentId]) {
       return;
@@ -200,12 +189,5 @@ function isVoiceStatusFetchStale(
 ) {
   return (
     get().lastRequestedAtByEnvironmentId[environmentId] !== requestStartedAt
-  );
-}
-
-function isRuntimeRunning(environmentId: string) {
-  return (
-    getEnvironmentRuntimeState(useWorkspaceStore.getState().snapshot, environmentId) ===
-    "running"
   );
 }
