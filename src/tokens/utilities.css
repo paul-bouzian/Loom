@@ -86,7 +86,7 @@
     color var(--tx-transition-fast);
 }
 
-.tx-dropdown-option:hover {
+.tx-dropdown-option:hover:not(:disabled) {
   background: var(--tx-bg-hover);
   color: var(--tx-text-primary);
 }

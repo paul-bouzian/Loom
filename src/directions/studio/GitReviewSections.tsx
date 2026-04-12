@@ -76,8 +76,13 @@ export function ReviewSummarySection({
           {summary.baseBranch ?? "auto"}
         </span>
         <span className="inspector-summary-inline__sep" aria-hidden="true">·</span>
-        <span className="inspector-summary-inline__item">
-          {summary.ahead}↑ {summary.behind}↓
+        <span
+          className="inspector-summary-inline__item"
+          aria-label={`${summary.ahead} ahead, ${summary.behind} behind`}
+        >
+          <span aria-hidden="true">
+            {summary.ahead}↑ {summary.behind}↓
+          </span>
         </span>
       </div>
     </section>
