@@ -52,7 +52,6 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
 
   useEffect(() => {
     setDraftState(buildDraftState(targets, defaultTargetId));
-    setSaveError(null);
     setSaving(false);
   }, [defaultTargetId, targets]);
 
