@@ -1,6 +1,6 @@
 import type { OpenTarget } from "../../lib/types";
 import { FolderIcon, OpenInIcon } from "../../shared/Icons";
-import { getKnownOpenTargetIcon } from "./openTargetIcons";
+import { resolveOpenTargetIcon } from "./openTargetIcons";
 
 type Props = {
   target: OpenTarget;
@@ -15,7 +15,7 @@ export function OpenTargetIcon({
   size = 16,
   className,
 }: Props) {
-  const resolvedIconUrl = iconUrl ?? resolveFallbackIcon(target);
+  const resolvedIconUrl = iconUrl ?? resolveOpenTargetIcon(target);
 
   if (resolvedIconUrl) {
     return (
@@ -35,14 +35,4 @@ export function OpenTargetIcon({
   }
 
   return <OpenInIcon size={size} className={className} />;
-}
-
-function resolveFallbackIcon(target: OpenTarget) {
-  if (target.kind === "app") {
-    return getKnownOpenTargetIcon(target.id, target.appName);
-  }
-  if (target.label.trim() === "Finder") {
-    return getKnownOpenTargetIcon("file-manager");
-  }
-  return null;
 }

@@ -1,3 +1,4 @@
+import type { OpenTarget } from "../../lib/types";
 import antigravityIcon from "../../assets/open-target-icons/antigravity.png";
 import cursorIcon from "../../assets/open-target-icons/cursor.png";
 import finderIcon from "../../assets/open-target-icons/finder.png";
@@ -37,4 +38,14 @@ export function getKnownOpenTargetIcon(targetId: string, appName?: string | null
     (appName ? KNOWN_OPEN_TARGET_ICONS_BY_APP_NAME[appName.trim()] : null) ??
     null
   );
+}
+
+export function resolveOpenTargetIcon(target: OpenTarget) {
+  if (target.kind === "app") {
+    return getKnownOpenTargetIcon(target.id, target.appName);
+  }
+  if (target.label.trim() === "Finder") {
+    return getKnownOpenTargetIcon("file-manager");
+  }
+  return null;
 }

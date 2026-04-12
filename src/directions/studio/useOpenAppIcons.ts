@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
 import type { OpenTarget } from "../../lib/types";
-import { getKnownOpenTargetIcon } from "./openTargetIcons";
+import { resolveOpenTargetIcon } from "./openTargetIcons";
 
 export function resetOpenAppIconCacheForTests() {
   return undefined;
@@ -12,7 +12,7 @@ export function useOpenAppIcons(targets: OpenTarget[]) {
     () =>
       Object.fromEntries(
         targets.flatMap((target) => {
-          const icon = getKnownOpenTargetIcon(target.id, target.appName);
+          const icon = resolveOpenTargetIcon(target);
           return icon ? [[target.id, icon]] : [];
         }),
       ),
