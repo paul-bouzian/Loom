@@ -75,6 +75,27 @@ export function makeGlobalSettings(
       interruptThread: "ctrl+c",
       approveOrSubmit: "mod+enter",
     },
+    openTargets: [
+      {
+        id: "cursor",
+        label: "Cursor",
+        kind: "app",
+        appName: "Cursor",
+      },
+      {
+        id: "zed",
+        label: "Zed",
+        kind: "app",
+        appName: "Zed",
+      },
+      {
+        id: "file-manager",
+        label: "Finder",
+        kind: "fileManager",
+        appName: null,
+      },
+    ],
+    defaultOpenTargetId: "file-manager",
     codexBinaryPath: undefined,
     ...overrides,
   };

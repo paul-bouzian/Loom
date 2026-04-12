@@ -25,6 +25,7 @@ export type SubagentStatus = "running" | "completed" | "failed";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type CollaborationMode = "build" | "plan";
 export type ApprovalPolicy = "askToEdit" | "fullAccess";
+export type OpenTargetKind = "app" | "fileManager";
 export type ServiceTier = "fast" | "flex";
 export type InputModality = "text" | "image";
 export type ConversationStatus =
@@ -180,7 +181,16 @@ export type GlobalSettings = {
   defaultServiceTier?: ServiceTier | null;
   collapseWorkActivity: boolean;
   shortcuts: ShortcutSettings;
+  openTargets: OpenTarget[];
+  defaultOpenTargetId: string;
   codexBinaryPath?: string;
+};
+
+export type OpenTarget = {
+  id: string;
+  label: string;
+  kind: OpenTargetKind;
+  appName?: string | null;
 };
 
 export type WorkspaceSnapshot = {
@@ -831,7 +841,14 @@ export type GlobalSettingsPatch = {
   defaultServiceTier?: ServiceTier | null;
   collapseWorkActivity?: boolean;
   shortcuts?: ShortcutSettingsPatch;
+  openTargets?: OpenTarget[];
+  defaultOpenTargetId?: string;
   codexBinaryPath?: string | null;
+};
+
+export type OpenEnvironmentInput = {
+  environmentId: string;
+  targetId?: string | null;
 };
 
 export type ReorderProjectsRequest = {

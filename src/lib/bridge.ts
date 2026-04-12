@@ -33,6 +33,7 @@ import type {
   ManagedWorktreeCreateResult,
   EnvironmentVoiceStatusSnapshot,
   FirstPromptRenameFailureEventPayload,
+  OpenEnvironmentInput,
   PersistThreadComposerDraftInput,
   ProjectRecord,
   ReorderProjectsRequest,
@@ -302,6 +303,12 @@ export function updateGlobalSettings(
   patch: GlobalSettingsPatch,
 ): Promise<GlobalSettings> {
   return invoke<GlobalSettings>("update_global_settings", { patch });
+}
+
+export function openEnvironment(
+  input: OpenEnvironmentInput,
+): Promise<void> {
+  return invoke<void>("open_environment", { input });
 }
 
 export function addProject(
