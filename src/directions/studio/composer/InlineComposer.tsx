@@ -78,7 +78,10 @@ type Props = {
   onChangeImages: Dispatch<SetStateAction<ConversationImageAttachment[]>>;
   tokenUsage?: ThreadTokenUsageSnapshot | null;
   onCancelRefine: () => void;
-  onChangeDraft: (value: string) => void;
+  onChangeDraft: (
+    value: string,
+    bindings?: ComposerDraftMentionBinding[],
+  ) => void;
   onChangeMentionBindings: (bindings: ComposerDraftMentionBinding[]) => void;
   onInterrupt: () => void;
   onSend: (
@@ -117,6 +120,7 @@ export function InlineComposer({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const fileSearchRequestRef = useRef(0);
   const previousDraftRef = useRef(draft);
+  const previousThreadIdRef = useRef(threadId);
   const [catalog, setCatalog] = useState<ThreadComposerCatalog | null>(null);
   const [fileResults, setFileResults] = useState<ComposerFileSearchResult[]>(
     [],
@@ -266,6 +270,11 @@ export function InlineComposer({
   }, [activeTokenKey, dismissedTokenKey]);
 
   useEffect(() => {
+    if (previousThreadIdRef.current !== threadId) {
+      previousThreadIdRef.current = threadId;
+      previousDraftRef.current = draft;
+      return;
+    }
     if (previousDraftRef.current === draft) {
       return;
     }
@@ -277,7 +286,7 @@ export function InlineComposer({
       ),
     );
     previousDraftRef.current = draft;
-  }, [draft, mentionBindings, onChangeMentionBindings]);
+  }, [draft, mentionBindings, onChangeMentionBindings, threadId]);
 
   useEffect(() => {
     if (!activeToken || activeToken.kind !== "file") {
@@ -378,9 +387,8 @@ export function InlineComposer({
       item,
       activeToken.start,
     );
-    onChangeMentionBindings(nextBindings);
     previousDraftRef.current = replacement.text;
-    onChangeDraft(replacement.text);
+    onChangeDraft(replacement.text, nextBindings);
     setPendingCursor(replacement.cursor);
     setDismissedTokenKey(null);
   }
@@ -463,15 +471,13 @@ export function InlineComposer({
             disabled={inputDisabled}
             onChange={(event) => {
               const nextDraft = event.target.value;
-              onChangeMentionBindings(
-                rebaseComposerMentionBindings(
-                  previousDraftRef.current,
-                  nextDraft,
-                  mentionBindings,
-                ),
+              const nextBindings = rebaseComposerMentionBindings(
+                previousDraftRef.current,
+                nextDraft,
+                mentionBindings,
               );
               previousDraftRef.current = nextDraft;
-              onChangeDraft(nextDraft);
+              onChangeDraft(nextDraft, nextBindings);
               setSelection({
                 start: event.target.selectionStart ?? 0,
                 end: event.target.selectionEnd ?? 0,

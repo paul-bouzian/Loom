@@ -4,10 +4,10 @@ use tracing::warn;
 
 use crate::app_identity::{FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME, WORKSPACE_EVENT_NAME};
 use crate::domain::conversation::{
-    ComposerFileSearchResult, ComposerMentionBindingInput, ConversationComposerSettings,
-    ConversationImageAttachment, RespondToApprovalRequestInput, RespondToUserInputRequestInput,
-    SubmitPlanDecisionInput, ThreadComposerCatalog, ThreadConversationOpenResponse,
-    ThreadConversationSnapshot,
+    ComposerFileSearchResult, ComposerMentionBindingInput, ConversationComposerDraft,
+    ConversationComposerSettings, ConversationImageAttachment, RespondToApprovalRequestInput,
+    RespondToUserInputRequestInput, SubmitPlanDecisionInput, ThreadComposerCatalog,
+    ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
 use crate::domain::workspace::{WorkspaceEvent, WorkspaceEventKind};
 use crate::error::CommandError;
@@ -32,13 +32,34 @@ pub struct SearchThreadFilesInput {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistThreadComposerDraftInput {
+    pub thread_id: String,
+    pub draft: Option<ConversationComposerDraft>,
+}
+
 #[tauri::command]
 pub async fn open_thread_conversation(
     thread_id: String,
     state: State<'_, AppState>,
 ) -> Result<ThreadConversationOpenResponse, CommandError> {
     let context = state.workspace.thread_runtime_context(&thread_id)?;
-    Ok(state.runtime.open_thread(context).await?)
+    let composer_draft = state.workspace.thread_composer_draft(&thread_id)?;
+    let mut response = state.runtime.open_thread(context).await?;
+    response.composer_draft = composer_draft;
+    Ok(response)
+}
+
+#[tauri::command]
+pub fn save_thread_composer_draft(
+    input: PersistThreadComposerDraftInput,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    state
+        .workspace
+        .persist_thread_composer_draft(&input.thread_id, input.draft.as_ref())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -187,6 +208,9 @@ pub async fn send_thread_message(
     state
         .workspace
         .persist_thread_composer_settings(&result.snapshot.thread_id, &result.snapshot.composer)?;
+    state
+        .workspace
+        .clear_thread_composer_draft(&result.snapshot.thread_id)?;
 
     Ok(result.snapshot)
 }
@@ -244,6 +268,9 @@ pub async fn submit_plan_decision(
     state
         .workspace
         .persist_thread_composer_settings(&result.snapshot.thread_id, &result.snapshot.composer)?;
+    state
+        .workspace
+        .clear_thread_composer_draft(&result.snapshot.thread_id)?;
 
     Ok(result.snapshot)
 }

@@ -1,10 +1,9 @@
-import type { ComposerMentionBindingInput } from "../../../lib/types";
+import type {
+  ComposerDraftMentionBinding,
+  ComposerMentionBindingInput,
+} from "../../../lib/types";
 import type { ComposerAutocompleteItem } from "./composer-model";
-
-export type ComposerDraftMentionBinding = ComposerMentionBindingInput & {
-  start: number;
-  end: number;
-};
+export type { ComposerDraftMentionBinding } from "../../../lib/types";
 
 export function rebaseComposerMentionBindings(
   previousText: string,

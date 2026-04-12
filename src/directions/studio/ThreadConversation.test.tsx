@@ -17,6 +17,7 @@ import {
   makeWorkspaceSnapshot,
 } from "../../test/fixtures/conversation";
 import {
+  INITIAL_CONVERSATION_STATE,
   teardownConversationListener,
   useConversationStore,
 } from "../../stores/conversation-store";
@@ -32,6 +33,7 @@ const clipboardWriteTextMock = vi.fn();
 
 vi.mock("../../lib/bridge", () => ({
   openThreadConversation: vi.fn(),
+  saveThreadComposerDraft: vi.fn(),
   refreshThreadConversation: vi.fn(),
   getThreadComposerCatalog: vi.fn(),
   searchThreadFiles: vi.fn(),
@@ -89,12 +91,7 @@ function resetStores() {
   const conversationState = useConversationStore.getState();
   useConversationStore.setState({
     ...conversationState,
-    snapshotsByThreadId: {},
-    capabilitiesByEnvironmentId: {},
-    composerByThreadId: {},
-    loadingByThreadId: {},
-    errorByThreadId: {},
-    listenerReady: false,
+    ...INITIAL_CONVERSATION_STATE,
   });
   useWorkspaceStore.setState((state) => ({
     ...state,
@@ -127,6 +124,7 @@ beforeEach(async () => {
   });
   await resetVoiceSessionStore();
   resetStores();
+  mockedBridge.saveThreadComposerDraft.mockResolvedValue(undefined);
   mockedBridge.getThreadComposerCatalog.mockResolvedValue({
     prompts: [],
     skills: [],
@@ -1936,7 +1934,7 @@ describe("ThreadConversation", () => {
     expect(mockedBridge.submitPlanDecision).not.toHaveBeenCalled();
   });
 
-  it("leaves refine mode on Escape", async () => {
+  it("leaves refine mode on Escape without clearing the draft", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({
         status: "waitingForExternalAction",
@@ -1963,9 +1961,9 @@ describe("ThreadConversation", () => {
     expect(
       screen.queryByPlaceholderText("Refine the proposed plan..."),
     ).toBeNull();
-    expect(
-      screen.getByPlaceholderText("Message Loom..."),
-    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Message Loom...")).toHaveValue(
+      "Need rollback notes",
+    );
   });
 
   it("renders task progress inline without proposal actions and keeps the composer available", async () => {
@@ -2504,7 +2502,7 @@ describe("ThreadConversation", () => {
     });
   });
 
-  it("preserves selected mention bindings when switching threads with a pending draft", async () => {
+  it("restores selected mention bindings when returning to the original thread", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({ status: "idle" }),
       capabilities: capabilitiesFixture,
@@ -2564,14 +2562,26 @@ describe("ThreadConversation", () => {
     const switchedInput = await screen.findByPlaceholderText(
       "Message Loom...",
     );
-    expect(switchedInput).toHaveValue("Use $github ");
+    expect(switchedInput).toHaveValue("");
 
-    await user.type(switchedInput, "now");
+    rerender(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    const restoredInput = await screen.findByPlaceholderText(
+      "Message Loom...",
+    );
+    expect(restoredInput).toHaveValue("Use $github ");
+
+    await user.type(restoredInput, "now");
     await user.keyboard("{Enter}");
 
     await waitFor(() => {
       expect(mockedBridge.sendThreadMessage).toHaveBeenCalledWith({
-        threadId: "thread-2",
+        threadId: "thread-1",
         text: "Use $github now",
         composer: expect.objectContaining({
           collaborationMode: "build",
@@ -2587,7 +2597,7 @@ describe("ThreadConversation", () => {
     });
   });
 
-  it("clears attached images when switching threads", async () => {
+  it("keeps attached images scoped to their original thread", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({ status: "idle" }),
       capabilities: capabilitiesFixture,
@@ -2642,6 +2652,88 @@ describe("ThreadConversation", () => {
         }),
       });
     });
+
+    rerender(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("thread-a.png")).toBeInTheDocument();
+    });
+  });
+
+  it("restores a persisted draft after remounting the same thread", async () => {
+    mockedBridge.openThreadConversation
+      .mockResolvedValueOnce({
+        snapshot: makeConversationSnapshot({ status: "idle" }),
+        capabilities: capabilitiesFixture,
+      })
+      .mockResolvedValueOnce({
+        snapshot: makeConversationSnapshot({ status: "idle" }),
+        capabilities: capabilitiesFixture,
+        composerDraft: {
+          text: "Keep this around",
+          images: [],
+          mentionBindings: [],
+          isRefiningPlan: false,
+        },
+      });
+
+    const view = render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(
+      await screen.findByPlaceholderText("Message Loom..."),
+    ).toHaveValue("");
+
+    view.unmount();
+    resetStores();
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(
+      await screen.findByPlaceholderText("Message Loom..."),
+    ).toHaveValue("Keep this around");
+  });
+
+  it("restores refine mode from the persisted thread draft", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "waitingForExternalAction",
+        composer: { ...baseComposer, collaborationMode: "plan" },
+        proposedPlan: makeProposedPlan(),
+      }),
+      capabilities: capabilitiesFixture,
+      composerDraft: {
+        text: "Keep the rollback section",
+        images: [],
+        mentionBindings: [],
+        isRefiningPlan: true,
+      },
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(
+      await screen.findByPlaceholderText("Refine the proposed plan..."),
+    ).toHaveValue("Keep the rollback section");
   });
 
   it("does not keep a previous thread submission in flight after switching threads", async () => {

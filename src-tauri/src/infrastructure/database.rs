@@ -7,7 +7,7 @@ use crate::app_identity::{
 };
 use crate::error::{AppError, AppResult};
 
-const CURRENT_SCHEMA_VERSION: i32 = 4;
+const CURRENT_SCHEMA_VERSION: i32 = 5;
 
 #[derive(Debug, Clone)]
 pub struct AppDatabase {
@@ -89,6 +89,7 @@ impl AppDatabase {
                       status TEXT NOT NULL,
                       codex_thread_id TEXT,
                       overrides_json TEXT NOT NULL,
+                      composer_draft_json TEXT,
                       created_at TEXT NOT NULL,
                       updated_at TEXT NOT NULL,
                       archived_at TEXT
@@ -103,7 +104,7 @@ impl AppDatabase {
                     CREATE UNIQUE INDEX idx_projects_managed_worktree_dir_active
                     ON projects(managed_worktree_dir)
                     WHERE archived_at IS NULL AND managed_worktree_dir IS NOT NULL;
-                    PRAGMA user_version = 4;
+                    PRAGMA user_version = 5;
                     COMMIT;
                     ",
                 )?;
@@ -122,6 +123,8 @@ impl AppDatabase {
                     ADD COLUMN sidebar_collapsed INTEGER NOT NULL DEFAULT 0;
                     ALTER TABLE environments
                     ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE threads
+                    ADD COLUMN composer_draft_json TEXT;
                     CREATE UNIQUE INDEX idx_projects_managed_worktree_dir_active
                     ON projects(managed_worktree_dir)
                     WHERE archived_at IS NULL AND managed_worktree_dir IS NOT NULL;
@@ -154,7 +157,7 @@ impl AppDatabase {
                       FROM ranked_environments
                       WHERE ranked_environments.id = environments.id
                     );
-                    PRAGMA user_version = 4;
+                    PRAGMA user_version = 5;
                     COMMIT;
                     ",
                 )?;
@@ -171,6 +174,8 @@ impl AppDatabase {
                     ADD COLUMN sidebar_collapsed INTEGER NOT NULL DEFAULT 0;
                     ALTER TABLE environments
                     ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE threads
+                    ADD COLUMN composer_draft_json TEXT;
                     CREATE UNIQUE INDEX idx_projects_managed_worktree_dir_active
                     ON projects(managed_worktree_dir)
                     WHERE archived_at IS NULL AND managed_worktree_dir IS NOT NULL;
@@ -203,7 +208,7 @@ impl AppDatabase {
                       FROM ranked_environments
                       WHERE ranked_environments.id = environments.id
                     );
-                    PRAGMA user_version = 4;
+                    PRAGMA user_version = 5;
                     COMMIT;
                     ",
                 )?;
@@ -218,6 +223,8 @@ impl AppDatabase {
                     ADD COLUMN sidebar_collapsed INTEGER NOT NULL DEFAULT 0;
                     ALTER TABLE environments
                     ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE threads
+                    ADD COLUMN composer_draft_json TEXT;
 	                    WITH ranked_projects AS (
 	                      SELECT
 	                        id,
@@ -247,7 +254,18 @@ impl AppDatabase {
                       FROM ranked_environments
                       WHERE ranked_environments.id = environments.id
                     );
-                    PRAGMA user_version = 4;
+                    PRAGMA user_version = 5;
+                    COMMIT;
+                    ",
+                )?;
+            }
+            4 => {
+                connection.execute_batch(
+                    "
+                    BEGIN;
+                    ALTER TABLE threads
+                    ADD COLUMN composer_draft_json TEXT;
+                    PRAGMA user_version = 5;
                     COMMIT;
                     ",
                 )?;
@@ -409,7 +427,7 @@ mod tests {
             )
             .expect("environment sort_order column should exist");
 
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         assert_eq!(default_settings, "'{}'");
         assert_eq!(managed_worktree_dir_default, None);
         assert_eq!(project_sort_order_default, "0");
@@ -512,7 +530,7 @@ mod tests {
             )
             .expect("environment sort_order column should exist");
 
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         assert_eq!(project_sort_order_default, "0");
         assert_eq!(environment_sort_order_default, "0");
         assert_eq!(
@@ -622,12 +640,95 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("environment order should collect");
 
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         assert_eq!(project_order, vec!["project-first", "project-second"]);
         assert_eq!(
             environment_order,
             vec!["env-local", "env-worktree-early", "env-worktree-late"]
         );
+
+        drop(connection);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrate_v4_adds_thread_composer_draft_storage() {
+        let root = std::env::temp_dir().join(format!("loom-db-test-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("test directory should exist");
+        let db_path = root.join("loom.sqlite3");
+        let connection = Connection::open(&db_path).expect("db should open");
+        connection
+            .execute_batch(
+                "
+                BEGIN;
+                CREATE TABLE projects (
+                  id TEXT PRIMARY KEY,
+                  name TEXT NOT NULL,
+                  root_path TEXT NOT NULL UNIQUE,
+                  managed_worktree_dir TEXT,
+                  settings_json TEXT NOT NULL DEFAULT '{}',
+                  sort_order INTEGER NOT NULL DEFAULT 0,
+                  sidebar_collapsed INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  archived_at TEXT
+                );
+                CREATE TABLE environments (
+                  id TEXT PRIMARY KEY,
+                  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                  name TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  path TEXT NOT NULL UNIQUE,
+                  git_branch TEXT,
+                  base_branch TEXT,
+                  is_default INTEGER NOT NULL DEFAULT 0,
+                  sort_order INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                );
+                CREATE TABLE threads (
+                  id TEXT PRIMARY KEY,
+                  environment_id TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+                  title TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  codex_thread_id TEXT,
+                  overrides_json TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  archived_at TEXT
+                );
+                CREATE TABLE global_settings (
+                  singleton_key TEXT PRIMARY KEY CHECK (singleton_key = 'global'),
+                  payload_json TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                );
+                CREATE INDEX idx_environments_project_id ON environments(project_id);
+                CREATE INDEX idx_threads_environment_id ON threads(environment_id);
+                CREATE UNIQUE INDEX idx_projects_managed_worktree_dir_active
+                ON projects(managed_worktree_dir)
+                WHERE archived_at IS NULL AND managed_worktree_dir IS NOT NULL;
+                PRAGMA user_version = 4;
+                COMMIT;
+                ",
+            )
+            .expect("v4 schema should be created");
+        drop(connection);
+
+        let database = AppDatabase::for_test(db_path.clone()).expect("migration should succeed");
+        let connection = database.open().expect("db should reopen");
+        let version: i32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("schema version should be readable");
+        let composer_draft_default: Option<String> = connection
+            .query_row(
+                "SELECT dflt_value FROM pragma_table_info('threads') WHERE name = 'composer_draft_json'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("composer_draft_json column should exist");
+
+        assert_eq!(version, 5);
+        assert_eq!(composer_draft_default, None);
 
         drop(connection);
         let _ = std::fs::remove_dir_all(root);

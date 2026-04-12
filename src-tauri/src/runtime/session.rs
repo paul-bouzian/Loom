@@ -307,6 +307,7 @@ impl RuntimeSession {
             return Ok(ThreadConversationOpenResponse {
                 snapshot,
                 capabilities,
+                composer_draft: None,
             });
         }
 
@@ -379,6 +380,7 @@ impl RuntimeSession {
         Ok(ThreadConversationOpenResponse {
             snapshot,
             capabilities,
+            composer_draft: None,
         })
     }
 

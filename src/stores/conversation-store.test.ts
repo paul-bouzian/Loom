@@ -11,6 +11,7 @@ import {
   makeWorkspaceSnapshot,
 } from "../test/fixtures/conversation";
 import {
+  INITIAL_CONVERSATION_STATE,
   teardownConversationListener,
   useConversationStore,
 } from "./conversation-store";
@@ -18,6 +19,7 @@ import { useWorkspaceStore } from "./workspace-store";
 
 vi.mock("../lib/bridge", () => ({
   openThreadConversation: vi.fn(),
+  saveThreadComposerDraft: vi.fn(),
   refreshThreadConversation: vi.fn(),
   getThreadComposerCatalog: vi.fn(),
   searchThreadFiles: vi.fn(),
@@ -54,18 +56,14 @@ function resetConversationState() {
   const state = useConversationStore.getState();
   useConversationStore.setState({
     ...state,
-    snapshotsByThreadId: {},
-    capabilitiesByEnvironmentId: {},
-    composerByThreadId: {},
-    loadingByThreadId: {},
-    errorByThreadId: {},
-    listenerReady: false,
+    ...INITIAL_CONVERSATION_STATE,
   });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   resetConversationState();
+  mockedBridge.saveThreadComposerDraft.mockResolvedValue(undefined);
   useWorkspaceStore.setState((state) => ({
     ...state,
     snapshot: null,
@@ -495,6 +493,131 @@ describe("conversation store", () => {
     });
 
     expect(useConversationStore.getState().composerByThreadId["thread-missing"]).toBeUndefined();
+  });
+
+  it("hydrates a persisted draft when opening a thread", async () => {
+    const snapshot = makeConversationSnapshot();
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot,
+      capabilities: capabilitiesFixture,
+      composerDraft: {
+        text: "Restore me",
+        images: [{ type: "localImage", path: "/tmp/draft.png" }],
+        mentionBindings: [],
+        isRefiningPlan: true,
+      },
+    });
+
+    await useConversationStore.getState().openThread("thread-1");
+
+    expect(useConversationStore.getState().draftByThreadId["thread-1"]).toEqual({
+      text: "Restore me",
+      images: [{ type: "localImage", path: "/tmp/draft.png" }],
+      mentionBindings: [],
+      isRefiningPlan: true,
+    });
+  });
+
+  it("keeps the newer in-memory draft when reopening a thread", async () => {
+    const snapshot = makeConversationSnapshot();
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot,
+      capabilities: capabilitiesFixture,
+      composerDraft: {
+        text: "Persisted draft",
+        images: [],
+        mentionBindings: [],
+        isRefiningPlan: false,
+      },
+    });
+    useConversationStore.setState((state) => ({
+      ...state,
+      draftByThreadId: {
+        "thread-1": {
+          text: "Local draft",
+          images: [],
+          mentionBindings: [],
+          isRefiningPlan: false,
+        },
+      },
+    }));
+
+    await useConversationStore.getState().openThread("thread-1");
+
+    expect(useConversationStore.getState().draftByThreadId["thread-1"]).toEqual({
+      text: "Local draft",
+      images: [],
+      mentionBindings: [],
+      isRefiningPlan: false,
+    });
+  });
+
+  it("persists text draft updates with a debounce", async () => {
+    vi.useFakeTimers();
+
+    try {
+      useConversationStore.getState().updateDraft("thread-1", {
+        text: "Ship it",
+      });
+
+      expect(mockedBridge.saveThreadComposerDraft).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(mockedBridge.saveThreadComposerDraft).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockedBridge.saveThreadComposerDraft).toHaveBeenCalledWith({
+        threadId: "thread-1",
+        draft: {
+          text: "Ship it",
+          images: [],
+          mentionBindings: [],
+          isRefiningPlan: false,
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("persists non-text draft changes immediately", async () => {
+    useConversationStore.getState().updateDraft("thread-1", {
+      images: [{ type: "localImage", path: "/tmp/thread-1.png" }],
+    });
+    await Promise.resolve();
+
+    expect(mockedBridge.saveThreadComposerDraft).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      draft: {
+        text: "",
+        images: [{ type: "localImage", path: "/tmp/thread-1.png" }],
+        mentionBindings: [],
+        isRefiningPlan: false,
+      },
+    });
+  });
+
+  it("clears persisted drafts immediately on reset", async () => {
+    useConversationStore.setState((state) => ({
+      ...state,
+      draftByThreadId: {
+        "thread-1": {
+          text: "Pending work",
+          images: [],
+          mentionBindings: [],
+          isRefiningPlan: false,
+        },
+      },
+    }));
+
+    useConversationStore.getState().resetDraft("thread-1");
+    await Promise.resolve();
+
+    expect(useConversationStore.getState().draftByThreadId["thread-1"]).toBeUndefined();
+    expect(mockedBridge.saveThreadComposerDraft).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      draft: null,
+    });
   });
 
   it("resets listener readiness on teardown", async () => {
