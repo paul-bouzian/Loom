@@ -3,23 +3,34 @@ import { create } from "zustand";
 import * as bridge from "../lib/bridge";
 import type {
   ApprovalResponseInput,
+  ComposerMentionBindingInput,
+  ConversationComposerDraft,
+  ConversationComposerSettings,
   ConversationImageAttachment,
   ConversationMessageItem,
-  ComposerMentionBindingInput,
-  ConversationComposerSettings,
   EnvironmentCapabilitiesSnapshot,
   SubmitPlanDecisionInput,
   ThreadConversationSnapshot,
   WorkspaceSnapshot,
 } from "../lib/types";
+import {
+  clearThreadDraftPersistence,
+  clearDraftPersistenceControllers,
+  draftForThread,
+  hydrateDraftEntry,
+  EMPTY_CONVERSATION_COMPOSER_DRAFT,
+  normalizeDraft,
+  persistenceModeForDraftChange,
+  removeDraftEntry,
+  sameDraft,
+  scheduleDraftPersistence,
+  setDraftEntry,
+  type DraftPersistenceMode,
+  type DraftUpdate,
+} from "./conversation-drafts";
 import { useWorkspaceStore } from "./workspace-store";
 
 const PRELOAD_ENVIRONMENT_CONCURRENCY = 4;
-
-function refreshWorkspaceSnapshotNonBlocking() {
-  void useWorkspaceStore.getState().refreshSnapshot().catch(() => undefined);
-}
-
 type ConversationSet = (
   updater: (state: ConversationState) => Partial<ConversationState>,
 ) => void;
@@ -35,6 +46,7 @@ type ConversationState = {
   snapshotsByThreadId: Record<string, ThreadConversationSnapshot>;
   capabilitiesByEnvironmentId: Record<string, EnvironmentCapabilitiesSnapshot>;
   composerByThreadId: Record<string, ConversationComposerSettings>;
+  draftByThreadId: Record<string, ConversationComposerDraft>;
   loadingByThreadId: Record<string, boolean>;
   errorByThreadId: Record<string, string | null>;
   listenerReady: boolean;
@@ -47,6 +59,12 @@ type ConversationState = {
     threadId: string,
     patch: Partial<ConversationComposerSettings>,
   ) => void;
+  updateDraft: (threadId: string, update: DraftUpdate) => void;
+  replaceDraftLocally: (
+    threadId: string,
+    draft: ConversationComposerDraft | null,
+  ) => void;
+  resetDraft: (threadId: string) => void;
   sendMessage: (
     threadId: string,
     text: string,
@@ -64,9 +82,28 @@ type ConversationState = {
     interactionId: string,
     answers: Record<string, string[]>,
   ) => Promise<void>;
-  submitPlanDecision: (
-    input: SubmitPlanDecisionInput,
-  ) => Promise<boolean>;
+  submitPlanDecision: (input: SubmitPlanDecisionInput) => Promise<boolean>;
+};
+
+type ConversationStateData = Pick<
+  ConversationState,
+  | "snapshotsByThreadId"
+  | "capabilitiesByEnvironmentId"
+  | "composerByThreadId"
+  | "draftByThreadId"
+  | "loadingByThreadId"
+  | "errorByThreadId"
+  | "listenerReady"
+>;
+
+export const INITIAL_CONVERSATION_STATE: ConversationStateData = {
+  snapshotsByThreadId: {},
+  capabilitiesByEnvironmentId: {},
+  composerByThreadId: {},
+  draftByThreadId: {},
+  loadingByThreadId: {},
+  errorByThreadId: {},
+  listenerReady: false,
 };
 
 let unlistenConversationEvents: null | (() => void) = null;
@@ -75,13 +112,12 @@ let listenerGeneration = 0;
 let preloadActiveThreadsPromise: Promise<void> | null = null;
 const inflightThreadLoads = new Map<string, Promise<boolean>>();
 
+function refreshWorkspaceSnapshotNonBlocking() {
+  void useWorkspaceStore.getState().refreshSnapshot().catch(() => undefined);
+}
+
 export const useConversationStore = create<ConversationState>((set, get) => ({
-  snapshotsByThreadId: {},
-  capabilitiesByEnvironmentId: {},
-  composerByThreadId: {},
-  loadingByThreadId: {},
-  errorByThreadId: {},
-  listenerReady: false,
+  ...INITIAL_CONVERSATION_STATE,
 
   initializeListener: async () => {
     if (get().listenerReady) return;
@@ -197,6 +233,52 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       };
     }),
 
+  updateDraft: (threadId, update) => {
+    let nextDraft: ConversationComposerDraft | null = null;
+    let persistenceMode: DraftPersistenceMode | null = null;
+
+    set((state) => {
+      const currentDraft = draftForThread(state.draftByThreadId, threadId);
+      const updatedDraft =
+        typeof update === "function"
+          ? normalizeDraft(update(normalizeDraft(currentDraft)))
+          : normalizeDraft({
+              ...currentDraft,
+              ...update,
+            });
+
+      if (sameDraft(currentDraft, updatedDraft)) {
+        return state;
+      }
+
+      nextDraft = updatedDraft;
+      persistenceMode = persistenceModeForDraftChange(currentDraft, updatedDraft);
+      return {
+        draftByThreadId: setDraftEntry(state.draftByThreadId, threadId, updatedDraft),
+      };
+    });
+
+    if (nextDraft && persistenceMode) {
+      scheduleDraftPersistence(threadId, nextDraft, persistenceMode);
+    }
+  },
+
+  replaceDraftLocally: (threadId, draft) =>
+    set((state) => ({
+      draftByThreadId: setDraftEntry(state.draftByThreadId, threadId, draft),
+    })),
+
+  resetDraft: (threadId) => {
+    set((state) => ({
+      draftByThreadId: setDraftEntry(state.draftByThreadId, threadId, null),
+    }));
+    scheduleDraftPersistence(
+      threadId,
+      EMPTY_CONVERSATION_COMPOSER_DRAFT,
+      "immediate",
+    );
+  },
+
   sendMessage: async (threadId, text, images = [], mentionBindings = []) => {
     set((state) => ({
       errorByThreadId: { ...state.errorByThreadId, [threadId]: null },
@@ -217,6 +299,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         },
       }));
     }
+
     try {
       const snapshot = await bridge.sendThreadMessage({
         threadId,
@@ -234,7 +317,9 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           ...state.composerByThreadId,
           [threadId]: snapshot.composer,
         },
+        draftByThreadId: removeDraftEntry(state.draftByThreadId, threadId),
       }));
+      clearThreadDraftPersistence(threadId);
       refreshWorkspaceSnapshotNonBlocking();
       return true;
     } catch (cause: unknown) {
@@ -342,7 +427,9 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           ...state.composerByThreadId,
           [input.threadId]: snapshot.composer,
         },
+        draftByThreadId: removeDraftEntry(state.draftByThreadId, input.threadId),
       }));
+      clearThreadDraftPersistence(input.threadId);
       refreshWorkspaceSnapshotNonBlocking();
       return true;
     } catch (cause: unknown) {
@@ -368,9 +455,13 @@ export function selectConversationComposer(threadId: string | null) {
     null;
 }
 
-export function selectConversationCapabilities(
-  environmentId: string | null,
-) {
+export function selectConversationDraft(threadId: string | null) {
+  return (state: ConversationState) =>
+    (threadId ? state.draftByThreadId[threadId] : null) ??
+    EMPTY_CONVERSATION_COMPOSER_DRAFT;
+}
+
+export function selectConversationCapabilities(environmentId: string | null) {
   return (state: ConversationState) =>
     (environmentId ? state.capabilitiesByEnvironmentId[environmentId] : null) ?? null;
 }
@@ -387,6 +478,7 @@ export function teardownConversationListener() {
   listenerInitialization = null;
   preloadActiveThreadsPromise = null;
   inflightThreadLoads.clear();
+  clearDraftPersistenceControllers();
   useConversationStore.setState({ listenerReady: false });
 }
 
@@ -451,21 +543,28 @@ async function openThreadWithOptions(
 
     try {
       const response = await bridge.openThreadConversation(threadId);
-      set((state) => ({
-        snapshotsByThreadId: {
-          ...state.snapshotsByThreadId,
-          [threadId]: response.snapshot,
-        },
-        capabilitiesByEnvironmentId: {
-          ...state.capabilitiesByEnvironmentId,
-          [response.capabilities.environmentId]: response.capabilities,
-        },
-        composerByThreadId: {
-          ...state.composerByThreadId,
-          [threadId]: response.snapshot.composer,
-        },
-        loadingByThreadId: { ...state.loadingByThreadId, [threadId]: false },
-      }));
+      set((state) => {
+        return {
+          snapshotsByThreadId: {
+            ...state.snapshotsByThreadId,
+            [threadId]: response.snapshot,
+          },
+          capabilitiesByEnvironmentId: {
+            ...state.capabilitiesByEnvironmentId,
+            [response.capabilities.environmentId]: response.capabilities,
+          },
+          composerByThreadId: {
+            ...state.composerByThreadId,
+            [threadId]: response.snapshot.composer,
+          },
+          draftByThreadId: hydrateDraftEntry(
+            state.draftByThreadId,
+            threadId,
+            response.composerDraft,
+          ),
+          loadingByThreadId: { ...state.loadingByThreadId, [threadId]: false },
+        };
+      });
 
       if (options.refreshWorkspace !== false) {
         await useWorkspaceStore.getState().refreshSnapshot();
@@ -539,9 +638,7 @@ function isThreadHydrated(
   threadId: string,
 ) {
   const snapshot = state.snapshotsByThreadId[threadId];
-  return Boolean(
-    snapshot && state.capabilitiesByEnvironmentId[snapshot.environmentId],
-  );
+  return Boolean(snapshot && state.capabilitiesByEnvironmentId[snapshot.environmentId]);
 }
 
 function collectEnvironmentPreloadTargets(snapshot: WorkspaceSnapshot) {

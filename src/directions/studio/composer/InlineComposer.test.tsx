@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import * as bridge from "../../../lib/bridge";
+import type { ComposerDraftMentionBinding } from "../../../lib/types";
 import {
   baseComposer,
   capabilitiesFixture,
@@ -12,7 +13,6 @@ import {
 import { resetVoiceSessionStore } from "../../../stores/voice-session-store";
 import { useVoiceStatusStore } from "../../../stores/voice-status-store";
 import { InlineComposer } from "./InlineComposer";
-import type { ComposerDraftMentionBinding } from "./composer-mention-bindings";
 import { startVoiceCapture } from "./composer-voice-audio";
 
 vi.mock("../../../lib/bridge", () => ({
@@ -604,14 +604,59 @@ describe("InlineComposer image attachments", () => {
       ),
     ).toBeInTheDocument();
   });
+
+  it("toggles fast mode from the lightning control", async () => {
+    const onUpdateComposer = vi.fn();
+    renderComposer("", { onUpdateComposer });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Fast mode is off/i }),
+    );
+
+    expect(onUpdateComposer).toHaveBeenCalledWith({ serviceTier: "fast" });
+  });
+
+  it("disables fast mode when the selected model does not support it", async () => {
+    renderComposer("", {
+      modelOptions: [
+        {
+          ...capabilitiesFixture.models[0],
+          supportedServiceTiers: [],
+        },
+      ],
+    });
+
+    const fastButton = await screen.findByRole("button", {
+      name: /Fast mode is unavailable/i,
+    });
+    expect(fastButton).toBeDisabled();
+  });
+
+  it("restores a prior flex tier when fast mode is toggled back off", async () => {
+    renderComposerWithManagedServiceTier("flex");
+
+    const fastButton = await screen.findByRole("button", {
+      name: /Fast mode is off/i,
+    });
+
+    await userEvent.click(fastButton);
+    expect(screen.getByTestId("service-tier")).toHaveTextContent("fast");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Fast mode is on/i }),
+    );
+    expect(screen.getByTestId("service-tier")).toHaveTextContent("flex");
+  });
 });
 
 function renderComposer(
   initialDraft: string,
   options: {
+    composer?: ComponentProps<typeof InlineComposer>["composer"];
     disabled?: boolean;
     modelOptions?: typeof capabilitiesFixture.models;
     onSend?: ComponentProps<typeof InlineComposer>["onSend"];
+    onUpdateComposer?: ComponentProps<typeof InlineComposer>["onUpdateComposer"];
   } = {},
 ) {
   function Harness() {
@@ -629,7 +674,7 @@ function renderComposer(
       <InlineComposer
         environmentId="env-1"
         threadId="thread-1"
-        composer={baseComposer}
+        composer={options.composer ?? baseComposer}
         collaborationModes={capabilitiesFixture.collaborationModes}
         disabled={options.disabled ?? false}
         draft={draft}
@@ -648,7 +693,7 @@ function renderComposer(
         onChangeMentionBindings={setMentionBindings}
         onInterrupt={() => undefined}
         onSend={(...args) => options.onSend?.(...args)}
-        onUpdateComposer={() => undefined}
+        onUpdateComposer={(patch) => options.onUpdateComposer?.(patch)}
       />
     );
   }
@@ -700,6 +745,65 @@ function renderComposerWithExternalDraftAction(initialDraft: string) {
           onInterrupt={() => undefined}
           onSend={() => undefined}
           onUpdateComposer={() => undefined}
+        />
+      </>
+    );
+  }
+
+  return render(<Harness />);
+}
+
+function renderComposerWithManagedServiceTier(initialServiceTier: "fast" | "flex") {
+  function Harness() {
+    const [composer, setComposer] = useState<
+      ComponentProps<typeof InlineComposer>["composer"]
+    >({
+      ...baseComposer,
+      serviceTier: initialServiceTier,
+    });
+    const [draft, setDraft] = useState("");
+    const [images, setImages] = useState<
+      Array<
+        { type: "image"; url: string } | { type: "localImage"; path: string }
+      >
+    >([]);
+    const [mentionBindings, setMentionBindings] = useState<
+      ComposerDraftMentionBinding[]
+    >([]);
+
+    return (
+      <>
+        <output data-testid="service-tier">
+          {composer.serviceTier ?? "none"}
+        </output>
+        <InlineComposer
+          environmentId="env-1"
+          threadId="thread-1"
+          composer={composer}
+          collaborationModes={capabilitiesFixture.collaborationModes}
+          disabled={false}
+          draft={draft}
+          effortOptions={["low", "medium", "high", "xhigh"]}
+          focusKey="thread-1"
+          images={images}
+          isBusy={false}
+          isSending={false}
+          isRefiningPlan={false}
+          mentionBindings={mentionBindings}
+          modelOptions={capabilitiesFixture.models}
+          onChangeImages={setImages}
+          tokenUsage={null}
+          onCancelRefine={() => undefined}
+          onChangeDraft={setDraft}
+          onChangeMentionBindings={setMentionBindings}
+          onInterrupt={() => undefined}
+          onSend={() => undefined}
+          onUpdateComposer={(patch) =>
+            setComposer((currentComposer) => ({
+              ...currentComposer,
+              ...patch,
+            }))
+          }
         />
       </>
     );

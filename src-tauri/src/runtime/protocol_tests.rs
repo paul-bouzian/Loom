@@ -1,10 +1,10 @@
 use serde_json::json;
 
 use crate::domain::conversation::{
-    ConversationComposerSettings, ConversationInteraction, ConversationItem,
+    ConversationComposerSettings, ConversationInteraction, ConversationItem, ConversationStatus,
     ConversationTaskStatus, InputModality, ProposedPlanSnapshot, ProposedPlanStatus,
 };
-use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort};
+use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort, ServiceTier};
 
 use super::protocol::{
     approval_policy_value, build_history_snapshot, collaboration_mode_options_from_response,
@@ -23,7 +23,14 @@ fn composer() -> ConversationComposerSettings {
         reasoning_effort: ReasoningEffort::High,
         collaboration_mode: CollaborationMode::Build,
         approval_policy: ApprovalPolicy::AskToEdit,
+        service_tier: None,
     }
+}
+
+fn inter_agent_control_message(agent_path: &str) -> String {
+    format!(
+        "{{\"author\":\"{agent_path}\",\"recipient\":\"/root\",\"other_recipients\":[],\"content\":\"<subagent_notification>\\n{{\\\"agent_path\\\":\\\"{agent_path}\\\",\\\"status\\\":{{\\\"completed\\\":\\\"Done\\\"}}}}\\n</subagent_notification>\",\"trigger_turn\":false}}"
+    )
 }
 
 #[test]
@@ -169,6 +176,68 @@ fn builds_history_snapshot_from_thread_turns() {
         item,
         ConversationItem::Tool(tool) if tool.summary.as_deref() == Some("ls")
     )));
+}
+
+#[test]
+fn history_snapshot_skips_hidden_inter_agent_messages() {
+    let snapshot = build_history_snapshot(
+        "thread-1".to_string(),
+        "env-1".to_string(),
+        Some("thr-existing".to_string()),
+        composer(),
+        ThreadWire {
+            id: "thr-existing".to_string(),
+            turns: vec![super::protocol::TurnWire {
+                id: "turn-1".to_string(),
+                status: "completed".to_string(),
+                error: None,
+                items: vec![
+                    json!({
+                        "id": "assistant-control-1",
+                        "type": "agentMessage",
+                        "text": inter_agent_control_message("/root/review_swarm_security")
+                    }),
+                    json!({
+                        "id": "assistant-visible-1",
+                        "type": "agentMessage",
+                        "text": "Visible answer"
+                    }),
+                ],
+            }],
+        },
+    );
+
+    assert_eq!(snapshot.items.len(), 1);
+    assert!(matches!(
+        snapshot.items.first(),
+        Some(ConversationItem::Message(message)) if message.text == "Visible answer"
+    ));
+}
+
+#[test]
+fn history_snapshot_reconciles_control_only_threads_to_idle() {
+    let snapshot = build_history_snapshot(
+        "thread-1".to_string(),
+        "env-1".to_string(),
+        Some("thr-existing".to_string()),
+        composer(),
+        ThreadWire {
+            id: "thr-existing".to_string(),
+            turns: vec![super::protocol::TurnWire {
+                id: "turn-1".to_string(),
+                status: "completed".to_string(),
+                error: None,
+                items: vec![json!({
+                    "id": "assistant-control-1",
+                    "type": "agentMessage",
+                    "text": inter_agent_control_message("/root/review_swarm_security")
+                })],
+            }],
+        },
+    );
+
+    assert!(snapshot.items.is_empty());
+    assert_eq!(snapshot.status, ConversationStatus::Idle);
 }
 
 #[test]
@@ -651,6 +720,7 @@ fn filters_hidden_models_and_preserves_effort_metadata() {
                 ],
                 default_reasoning_effort: ReasoningEffort::High,
                 input_modalities: vec![InputModality::Text, InputModality::Image],
+                additional_speed_tiers: vec![ServiceTier::Fast],
                 is_default: true,
                 hidden: false,
             },
@@ -661,6 +731,7 @@ fn filters_hidden_models_and_preserves_effort_metadata() {
                 supported_reasoning_efforts: vec![],
                 default_reasoning_effort: ReasoningEffort::Medium,
                 input_modalities: vec![InputModality::Text],
+                additional_speed_tiers: Vec::new(),
                 is_default: false,
                 hidden: true,
             },
@@ -670,6 +741,34 @@ fn filters_hidden_models_and_preserves_effort_metadata() {
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "gpt-5.4");
     assert_eq!(models[0].supported_reasoning_efforts.len(), 2);
+    assert_eq!(models[0].supported_service_tiers, vec![ServiceTier::Fast]);
+}
+
+#[test]
+fn ignores_unknown_additional_speed_tiers() {
+    let models = model_options_from_response(
+        serde_json::from_value::<ModelListResponse>(json!({
+            "data": [
+                {
+                    "id": "gpt-5.4",
+                    "displayName": "GPT-5.4",
+                    "description": "Main model",
+                    "supportedReasoningEfforts": [],
+                    "defaultReasoningEffort": "high",
+                    "additionalSpeedTiers": ["fast", "turbo", "flex"],
+                    "isDefault": true,
+                    "hidden": false
+                }
+            ]
+        }))
+        .expect("model list response should decode"),
+    );
+
+    assert_eq!(models.len(), 1);
+    assert_eq!(
+        models[0].supported_service_tiers,
+        vec![ServiceTier::Fast, ServiceTier::Flex]
+    );
 }
 
 #[test]

@@ -13,6 +13,7 @@ import {
   searchThreadFiles,
 } from "../../../lib/bridge";
 import type {
+  ComposerDraftMentionBinding,
   ComposerMentionBindingInput,
   ComposerFileSearchResult,
   ConversationComposerSettings,
@@ -22,6 +23,7 @@ import type {
   ThreadTokenUsageSnapshot,
 } from "../../../lib/types";
 import {
+  BoltIcon,
   CloseIcon,
   ImageIcon,
   MicIcon,
@@ -32,6 +34,7 @@ import { ComposerPicker } from "../ComposerPicker";
 import { ContextWindowMeter } from "../ContextWindowMeter";
 import {
   modelImageSupportMessage,
+  modelSupportsFastMode,
   modelSupportsImageInput,
 } from "../conversation-images";
 import {
@@ -46,7 +49,7 @@ import {
   addComposerMentionBinding,
   prepareComposerMentionBindingsForSend,
   rebaseComposerMentionBindings,
-  type ComposerDraftMentionBinding,
+  sameComposerMentionBindings,
 } from "./composer-mention-bindings";
 import { ComposerTextMirror } from "./ComposerTextMirror";
 import {
@@ -78,7 +81,10 @@ type Props = {
   onChangeImages: Dispatch<SetStateAction<ConversationImageAttachment[]>>;
   tokenUsage?: ThreadTokenUsageSnapshot | null;
   onCancelRefine: () => void;
-  onChangeDraft: (value: string) => void;
+  onChangeDraft: (
+    value: string,
+    bindings?: ComposerDraftMentionBinding[],
+  ) => void;
   onChangeMentionBindings: (bindings: ComposerDraftMentionBinding[]) => void;
   onInterrupt: () => void;
   onSend: (
@@ -117,6 +123,10 @@ export function InlineComposer({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const fileSearchRequestRef = useRef(0);
   const previousDraftRef = useRef(draft);
+  const previousThreadIdRef = useRef(threadId);
+  const lastNonFastServiceTierRef = useRef<
+    ConversationComposerSettings["serviceTier"]
+  >(composer.serviceTier === "fast" ? null : composer.serviceTier ?? null);
   const [catalog, setCatalog] = useState<ThreadComposerCatalog | null>(null);
   const [fileResults, setFileResults] = useState<ComposerFileSearchResult[]>(
     [],
@@ -146,6 +156,14 @@ export function InlineComposer({
       modelOptions.find((candidate) => candidate.id === composer.model) ?? null,
     [composer.model, modelOptions],
   );
+  const fastModeSupported = modelSupportsFastMode(selectedModel);
+  const fastModeEnabled = fastModeSupported && composer.serviceTier === "fast";
+  let fastModeLabel = "Fast mode is off. Enable faster responses at higher quota usage.";
+  if (!fastModeSupported) {
+    fastModeLabel = `Fast mode is unavailable for ${selectedModel?.displayName ?? composer.model}.`;
+  } else if (fastModeEnabled) {
+    fastModeLabel = "Fast mode is on. Faster responses use more quota.";
+  }
   const imagesEnabled = modelSupportsImageInput(selectedModel);
   const hasAttachedImages = images.length > 0;
   const hasDraftContent = draft.trim().length > 0;
@@ -266,17 +284,35 @@ export function InlineComposer({
   }, [activeTokenKey, dismissedTokenKey]);
 
   useEffect(() => {
+    if (previousThreadIdRef.current !== threadId) {
+      previousThreadIdRef.current = threadId;
+      previousDraftRef.current = draft;
+      lastNonFastServiceTierRef.current =
+        composer.serviceTier === "fast" ? null : composer.serviceTier ?? null;
+      setDismissedTokenKey(null);
+    }
+  }, [composer.serviceTier, draft, threadId]);
+
+  useEffect(() => {
+    if (composer.serviceTier !== "fast") {
+      lastNonFastServiceTierRef.current = composer.serviceTier ?? null;
+    }
+  }, [composer.serviceTier]);
+
+  useEffect(() => {
     if (previousDraftRef.current === draft) {
       return;
     }
-    onChangeMentionBindings(
-      rebaseComposerMentionBindings(
-        previousDraftRef.current,
-        draft,
-        mentionBindings,
-      ),
+    const nextMentionBindings = rebaseComposerMentionBindings(
+      previousDraftRef.current,
+      draft,
+      mentionBindings,
     );
     previousDraftRef.current = draft;
+    if (sameComposerMentionBindings(nextMentionBindings, mentionBindings)) {
+      return;
+    }
+    onChangeMentionBindings(nextMentionBindings);
   }, [draft, mentionBindings, onChangeMentionBindings]);
 
   useEffect(() => {
@@ -378,9 +414,8 @@ export function InlineComposer({
       item,
       activeToken.start,
     );
-    onChangeMentionBindings(nextBindings);
     previousDraftRef.current = replacement.text;
-    onChangeDraft(replacement.text);
+    onChangeDraft(replacement.text, nextBindings);
     setPendingCursor(replacement.cursor);
     setDismissedTokenKey(null);
   }
@@ -463,15 +498,13 @@ export function InlineComposer({
             disabled={inputDisabled}
             onChange={(event) => {
               const nextDraft = event.target.value;
-              onChangeMentionBindings(
-                rebaseComposerMentionBindings(
-                  previousDraftRef.current,
-                  nextDraft,
-                  mentionBindings,
-                ),
+              const nextBindings = rebaseComposerMentionBindings(
+                previousDraftRef.current,
+                nextDraft,
+                mentionBindings,
               );
               previousDraftRef.current = nextDraft;
-              onChangeDraft(nextDraft);
+              onChangeDraft(nextDraft, nextBindings);
               setSelection({
                 start: event.target.selectionStart ?? 0,
                 end: event.target.selectionEnd ?? 0,
@@ -617,6 +650,28 @@ export function InlineComposer({
             }}
           >
             {currentModeLabel}
+          </button>
+          <button
+            type="button"
+            className={[
+              "tx-composer__icon-toggle",
+              fastModeEnabled ? "tx-composer__icon-toggle--active" : null,
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            aria-label={fastModeLabel}
+            title={fastModeLabel}
+            aria-pressed={fastModeEnabled}
+            disabled={controlsDisabled || !fastModeSupported}
+            onClick={() =>
+              onUpdateComposer({
+                serviceTier: fastModeEnabled
+                  ? lastNonFastServiceTierRef.current ?? null
+                  : "fast",
+              })
+            }
+          >
+            <BoltIcon size={14} />
           </button>
           <ComposerPicker
             label="Access"

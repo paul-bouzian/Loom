@@ -26,6 +26,7 @@ export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type CollaborationMode = "build" | "plan";
 export type ApprovalPolicy = "askToEdit" | "fullAccess";
 export type OpenTargetKind = "app" | "fileManager";
+export type ServiceTier = "fast" | "flex";
 export type InputModality = "text" | "image";
 export type ConversationStatus =
   | "idle"
@@ -66,6 +67,8 @@ export type ThreadOverrides = {
   reasoningEffort?: ReasoningEffort;
   collaborationMode?: CollaborationMode;
   approvalPolicy?: ApprovalPolicy;
+  serviceTier?: ServiceTier | null;
+  serviceTierOverridden?: boolean;
 };
 
 export type RuntimeStatusSnapshot = {
@@ -175,6 +178,7 @@ export type GlobalSettings = {
   defaultReasoningEffort: ReasoningEffort;
   defaultCollaborationMode: CollaborationMode;
   defaultApprovalPolicy: ApprovalPolicy;
+  defaultServiceTier?: ServiceTier | null;
   collapseWorkActivity: boolean;
   shortcuts: ShortcutSettings;
   openTargets: OpenTarget[];
@@ -401,6 +405,7 @@ export type ConversationComposerSettings = {
   reasoningEffort: ReasoningEffort;
   collaborationMode: CollaborationMode;
   approvalPolicy: ApprovalPolicy;
+  serviceTier?: ServiceTier | null;
 };
 
 export type ComposerPromptArgumentMode = "none" | "named" | "positional";
@@ -445,6 +450,7 @@ export type ModelOption = {
   defaultReasoningEffort: ReasoningEffort;
   supportedReasoningEfforts: ReasoningEffort[];
   inputModalities: InputModality[];
+  supportedServiceTiers?: ServiceTier[];
   isDefault: boolean;
 };
 
@@ -608,6 +614,24 @@ export type ConversationImageAttachment =
       path: string;
     };
 
+export type ComposerMentionBindingInput = {
+  mention: string;
+  kind: "skill" | "app";
+  path: string;
+};
+
+export type ComposerDraftMentionBinding = ComposerMentionBindingInput & {
+  start: number;
+  end: number;
+};
+
+export type ConversationComposerDraft = {
+  text: string;
+  images: ConversationImageAttachment[];
+  mentionBindings: ComposerDraftMentionBinding[];
+  isRefiningPlan: boolean;
+};
+
 export type ConversationMessageItem = {
   kind: "message";
   id: string;
@@ -672,6 +696,7 @@ export type ThreadConversationSnapshot = {
 export type ThreadConversationOpenResponse = {
   snapshot: ThreadConversationSnapshot;
   capabilities: EnvironmentCapabilitiesSnapshot;
+  composerDraft?: ConversationComposerDraft | null;
 };
 
 export type ConversationEventPayload = {
@@ -756,10 +781,9 @@ export type SendThreadMessageInput = {
   mentionBindings?: ComposerMentionBindingInput[] | null;
 };
 
-export type ComposerMentionBindingInput = {
-  mention: string;
-  kind: "skill" | "app";
-  path: string;
+export type PersistThreadComposerDraftInput = {
+  threadId: string;
+  draft?: ConversationComposerDraft | null;
 };
 
 export type ApprovalResponseInput =
@@ -815,6 +839,7 @@ export type GlobalSettingsPatch = {
   defaultReasoningEffort?: ReasoningEffort;
   defaultCollaborationMode?: CollaborationMode;
   defaultApprovalPolicy?: ApprovalPolicy;
+  defaultServiceTier?: ServiceTier | null;
   collapseWorkActivity?: boolean;
   shortcuts?: ShortcutSettingsPatch;
   openTargets?: OpenTarget[];

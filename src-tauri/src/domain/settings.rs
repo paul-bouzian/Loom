@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::shortcuts::{ShortcutSettings, ShortcutSettingsPatch};
 
@@ -14,6 +14,14 @@ fn default_open_targets() -> Vec<OpenTarget> {
 
 fn default_open_target_id() -> String {
     preferred_default_open_target_id(&default_open_targets())
+}
+
+fn deserialize_explicit_optional<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,6 +39,13 @@ pub enum ReasoningEffort {
 pub enum CollaborationMode {
     Build,
     Plan,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceTier {
+    Fast,
+    Flex,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +86,7 @@ pub struct GlobalSettings {
     pub default_reasoning_effort: ReasoningEffort,
     pub default_collaboration_mode: CollaborationMode,
     pub default_approval_policy: ApprovalPolicy,
+    pub default_service_tier: Option<ServiceTier>,
     #[serde(default = "default_collapse_work_activity")]
     pub collapse_work_activity: bool,
     #[serde(default)]
@@ -89,6 +105,7 @@ impl Default for GlobalSettings {
             default_reasoning_effort: ReasoningEffort::High,
             default_collaboration_mode: CollaborationMode::Build,
             default_approval_policy: ApprovalPolicy::AskToEdit,
+            default_service_tier: None,
             collapse_work_activity: true,
             shortcuts: ShortcutSettings::default(),
             open_targets: default_open_targets(),
@@ -105,6 +122,8 @@ pub struct GlobalSettingsPatch {
     pub default_reasoning_effort: Option<ReasoningEffort>,
     pub default_collaboration_mode: Option<CollaborationMode>,
     pub default_approval_policy: Option<ApprovalPolicy>,
+    #[serde(default, deserialize_with = "deserialize_explicit_optional")]
+    pub default_service_tier: Option<Option<ServiceTier>>,
     pub collapse_work_activity: Option<bool>,
     pub shortcuts: Option<ShortcutSettingsPatch>,
     pub open_targets: Option<Vec<OpenTarget>>,
@@ -125,6 +144,9 @@ impl GlobalSettings {
         }
         if let Some(default_approval_policy) = patch.default_approval_policy {
             self.default_approval_policy = default_approval_policy;
+        }
+        if let Some(default_service_tier) = patch.default_service_tier {
+            self.default_service_tier = default_service_tier;
         }
         if let Some(collapse_work_activity) = patch.collapse_work_activity {
             self.collapse_work_activity = collapse_work_activity;
@@ -421,7 +443,7 @@ fn default_open_targets_for_platform() -> Vec<OpenTarget> {
 mod tests {
     use super::{
         ApprovalPolicy, CollaborationMode, GlobalSettings, GlobalSettingsPatch, OpenTarget,
-        OpenTargetKind, ReasoningEffort,
+        OpenTargetKind, ReasoningEffort, ServiceTier,
     };
     use crate::domain::shortcuts::ShortcutSettingsPatch;
 
@@ -434,6 +456,7 @@ mod tests {
             default_reasoning_effort: Some(ReasoningEffort::Medium),
             default_collaboration_mode: None,
             default_approval_policy: Some(ApprovalPolicy::FullAccess),
+            default_service_tier: Some(Some(ServiceTier::Fast)),
             collapse_work_activity: Some(true),
             shortcuts: Some(ShortcutSettingsPatch {
                 toggle_terminal: Some(Some("mod+shift+j".to_string())),
@@ -463,6 +486,7 @@ mod tests {
             settings.default_approval_policy,
             ApprovalPolicy::FullAccess
         ));
+        assert_eq!(settings.default_service_tier, Some(ServiceTier::Fast));
         assert!(settings.collapse_work_activity);
         assert_eq!(settings.shortcuts.toggle_terminal.as_deref(), Some("mod+shift+j"));
         assert_eq!(settings.open_targets.len(), 1);
@@ -489,6 +513,29 @@ mod tests {
     }
 
     #[test]
+    fn apply_patch_can_clear_optional_service_tier() {
+        let mut settings = GlobalSettings {
+            default_service_tier: Some(ServiceTier::Fast),
+            ..GlobalSettings::default()
+        };
+
+        settings.apply_patch(GlobalSettingsPatch {
+            default_service_tier: Some(None),
+            ..GlobalSettingsPatch::default()
+        });
+
+        assert_eq!(settings.default_service_tier, None);
+    }
+
+    #[test]
+    fn deserializes_null_service_tier_patch_as_explicit_clear() {
+        let patch: GlobalSettingsPatch = serde_json::from_str(r#"{"defaultServiceTier":null}"#)
+            .expect("service tier patch should deserialize");
+
+        assert_eq!(patch.default_service_tier, Some(None));
+    }
+
+    #[test]
     fn default_settings_enable_collapsed_work_activity_and_shortcuts() {
         let settings = GlobalSettings::default();
 
@@ -504,6 +551,7 @@ mod tests {
                 "defaultReasoningEffort":"high",
                 "defaultCollaborationMode":"build",
                 "defaultApprovalPolicy":"askToEdit",
+                "defaultServiceTier":"fast",
                 "codexBinaryPath":"/opt/homebrew/bin/codex"
             }"#,
         )
@@ -518,6 +566,7 @@ mod tests {
                 .iter()
                 .any(|target| target.id == settings.default_open_target_id)
         );
+        assert_eq!(settings.default_service_tier, Some(ServiceTier::Fast));
     }
 
     #[test]
@@ -526,7 +575,9 @@ mod tests {
         settings.shortcuts.toggle_terminal = Some("j".to_string());
 
         assert_eq!(
-            settings.validate().expect_err("invalid shortcuts should fail"),
+            settings
+                .validate()
+                .expect_err("invalid shortcuts should fail"),
             "Toggle terminal: Shortcut needs a primary modifier unless it is Shift+Tab."
         );
     }

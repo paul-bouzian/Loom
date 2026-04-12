@@ -60,7 +60,6 @@ export function OpenInSettingsTab({ targets, defaultTargetId }: Props) {
         defaultTargetId,
       )
     ) {
-      setSaving(false);
       return;
     }
 

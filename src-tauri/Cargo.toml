@@ -1,6 +1,6 @@
 [package]
 name = "loom"
-version = "0.1.5"
+version = "0.1.6"
 description = "Loom is a local-first macOS desktop app for Codex with native review, plans, approvals, and Git workflows"
 authors = ["Paul Bouzian"]
 edition = "2021"
@@ -10,6 +10,7 @@ edition = "2021"
 [lib]
 name = "loom_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+doctest = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

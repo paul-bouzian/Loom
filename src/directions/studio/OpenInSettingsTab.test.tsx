@@ -6,14 +6,26 @@ import * as bridge from "../../lib/bridge";
 import { makeGlobalSettings } from "../../test/fixtures/conversation";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import { OpenInSettingsTab } from "./OpenInSettingsTab";
+import { resetOpenAppIconCacheForTests } from "./useOpenAppIcons";
 
 vi.mock("../../lib/bridge", () => ({
   getOpenAppIcon: vi.fn(),
 }));
 
+type UpdateGlobalSettingsResult = Awaited<
+  Promise<{
+    ok: boolean;
+    refreshed: boolean;
+    warningMessage: string | null;
+    errorMessage: string | null;
+    settings: ReturnType<typeof makeGlobalSettings> | null;
+  }>
+>;
+
 describe("OpenInSettingsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetOpenAppIconCacheForTests();
     useWorkspaceStore.setState(useWorkspaceStore.getInitialState(), true);
     vi.mocked(bridge.getOpenAppIcon).mockResolvedValue(null);
     useWorkspaceStore.setState({
@@ -24,6 +36,63 @@ describe("OpenInSettingsTab", () => {
         errorMessage: null,
         settings: makeGlobalSettings(),
       })),
+    });
+  });
+
+  it("keeps Save disabled during an in-flight save when equivalent props refresh", async () => {
+    const user = userEvent.setup();
+    const settings = makeGlobalSettings();
+    let resolveSave!: (value: UpdateGlobalSettingsResult) => void;
+    const updateGlobalSettings = vi.fn(
+      () =>
+        new Promise<UpdateGlobalSettingsResult>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    useWorkspaceStore.setState({ updateGlobalSettings });
+
+    const { rerender } = render(
+      <OpenInSettingsTab
+        targets={settings.openTargets}
+        defaultTargetId={settings.defaultOpenTargetId}
+      />,
+    );
+
+    const labelInput = screen.getAllByLabelText("Label")[0];
+    await user.clear(labelInput);
+    await user.type(labelInput, "Cursor Pro");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    rerender(
+      <OpenInSettingsTab
+        targets={settings.openTargets.map((target) => ({ ...target }))}
+        defaultTargetId={settings.defaultOpenTargetId}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+
+    resolveSave({
+      ok: true,
+      refreshed: true,
+      warningMessage: null,
+      errorMessage: null,
+      settings: makeGlobalSettings({
+        openTargets: [
+          {
+            id: "cursor",
+            label: "Cursor Pro",
+            kind: "app",
+            appName: "Cursor",
+            args: [],
+          },
+          ...settings.openTargets.slice(1),
+        ],
+      }),
+    });
+
+    await waitFor(() => {
+      expect(updateGlobalSettings).toHaveBeenCalledTimes(1);
     });
   });
 
