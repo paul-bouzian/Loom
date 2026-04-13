@@ -203,6 +203,7 @@ export type GlobalSettings = {
   defaultServiceTier?: ServiceTier | null;
   collapseWorkActivity: boolean;
   desktopNotificationsEnabled: boolean;
+  streamAssistantResponses: boolean;
   notificationSounds: NotificationSoundSettings;
   shortcuts: ShortcutSettings;
   openTargets: OpenTarget[];
@@ -865,6 +866,7 @@ export type GlobalSettingsPatch = {
   defaultServiceTier?: ServiceTier | null;
   collapseWorkActivity?: boolean;
   desktopNotificationsEnabled?: boolean;
+  streamAssistantResponses?: boolean;
   notificationSounds?: NotificationSoundSettingsPatch;
   shortcuts?: ShortcutSettingsPatch;
   openTargets?: OpenTarget[];
