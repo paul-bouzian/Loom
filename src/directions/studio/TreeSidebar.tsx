@@ -36,6 +36,7 @@ import "./TreeSidebar.css";
 
 type Props = {
   theme: Theme;
+  collapsed?: boolean;
   onOpenSettings: () => void;
   onToggleTheme: () => void;
 };
@@ -58,7 +59,7 @@ const PROJECT_REMOVAL_BLOCKED_MESSAGE =
   "Delete this project's worktrees before removing it from Loom.";
 const PROJECT_REMOVAL_DIALOG_TITLE = "Remove project";
 
-export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
+export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggleTheme }: Props) {
   const projects = useWorkspaceStore(selectProjects);
   const selectedProjectId = useWorkspaceStore((s) => s.selectedProjectId);
   const selectedEnvironmentId = useWorkspaceStore(
@@ -251,7 +252,7 @@ export function TreeSidebar({ theme, onOpenSettings, onToggleTheme }: Props) {
   }
 
   return (
-    <aside className="tree-sidebar">
+    <aside className={`tree-sidebar ${collapsed ? "tree-sidebar--collapsed" : ""}`}>
       <div className="tree-sidebar__header">
         <span className="tree-sidebar__title tx-section-label">Projects</span>
         <button

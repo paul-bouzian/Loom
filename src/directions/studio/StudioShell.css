@@ -8,10 +8,6 @@
   overflow: hidden;
 }
 
-.studio-shell--without-sidebar {
-  grid-template-columns: 1fr auto;
-}
-
 .studio-shell > .studio-statusbar {
   grid-column: 1 / -1;
 }
