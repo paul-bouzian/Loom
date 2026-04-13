@@ -17,6 +17,7 @@ import {
 const DEFAULT_HEIGHT = 280;
 const MIN_HEIGHT = 120;
 export const MAX_TABS = 10;
+const pendingActionTabOpens = new Map<string, Promise<string | null>>();
 
 function clampHeight(value: number): number {
   const max = Math.floor(window.innerHeight * 0.8);
@@ -53,6 +54,10 @@ function readVisible(): boolean {
 
 function basenameOf(path: string): string {
   return path.split(/[/\\]/).filter(Boolean).pop() ?? "shell";
+}
+
+function actionTabOperationKey(environmentId: string, actionId: string) {
+  return `${environmentId}\u0000${actionId}`;
 }
 
 export type TerminalTab = {
@@ -243,6 +248,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       return runningTab.id;
     }
 
+    const operationKey = actionTabOperationKey(environmentId, action.id);
+    const pendingOpen = pendingActionTabOpens.get(operationKey);
+    if (pendingOpen) {
+      return pendingOpen;
+    }
+
     const reusableTab = slot.tabs.find(
       (tab) => tab.kind === "manualAction" && tab.actionId === action.id,
     );
@@ -251,58 +262,69 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       return null;
     }
 
-    await ensureTerminalOutputBusReady();
-    const { ptyId, cwd, actionId, actionLabel, actionIcon } = await bridge.runProjectAction({
-      environmentId,
-      actionId: action.id,
-    });
-    const slotAfter = get().byEnv[environmentId] ?? EMPTY_TERMINAL_SLOT;
-    const knownEnvironmentIds = get().knownEnvironmentIds;
-    const environmentKnown =
-      knownEnvironmentIds.length === 0 || knownEnvironmentIds.includes(environmentId);
-    const cappedOut = !reusableTab && slotAfter.tabs.length >= MAX_TABS;
-    if (!environmentKnown || cappedOut) {
-      try {
-        await bridge.killTerminal({ ptyId });
-      } catch {
-        /* ignore: terminal may already be dead */
+    const openPromise = (async () => {
+      await ensureTerminalOutputBusReady();
+      const { ptyId, cwd, actionId, actionLabel, actionIcon } = await bridge.runProjectAction({
+        environmentId,
+        actionId: action.id,
+      });
+      const slotAfter = get().byEnv[environmentId] ?? EMPTY_TERMINAL_SLOT;
+      const knownEnvironmentIds = get().knownEnvironmentIds;
+      const environmentKnown =
+        knownEnvironmentIds.length === 0 || knownEnvironmentIds.includes(environmentId);
+      const cappedOut = !reusableTab && slotAfter.tabs.length >= MAX_TABS;
+      if (!environmentKnown || cappedOut) {
+        try {
+          await bridge.killTerminal({ ptyId });
+        } catch {
+          /* ignore: terminal may already be dead */
+        }
+        dropPendingTerminalOutput(ptyId);
+        return null;
       }
-      dropPendingTerminalOutput(ptyId);
-      return null;
-    }
 
-    const nextTabId = reusableTab?.id ?? crypto.randomUUID();
-    const nextTab: TerminalTab = {
-      id: nextTabId,
-      ptyId,
-      cwd,
-      title: actionLabel,
-      exited: false,
-      kind: "manualAction",
-      actionId,
-      actionLabel,
-      actionIcon,
-    };
-
-    set((state) => {
-      const existing = state.byEnv[environmentId] ?? EMPTY_TERMINAL_SLOT;
-      const reusableTabStillPresent =
-        reusableTab != null && existing.tabs.some((tab) => tab.id === reusableTab.id);
-      return {
-        visible: true,
-        byEnv: {
-          ...state.byEnv,
-          [environmentId]: {
-            tabs: reusableTabStillPresent
-              ? existing.tabs.map((tab) => (tab.id === reusableTab.id ? nextTab : tab))
-              : [...existing.tabs, nextTab],
-            activeTabId: nextTabId,
-          },
-        },
+      const nextTabId = reusableTab?.id ?? crypto.randomUUID();
+      const nextTab: TerminalTab = {
+        id: nextTabId,
+        ptyId,
+        cwd,
+        title: actionLabel,
+        exited: false,
+        kind: "manualAction",
+        actionId,
+        actionLabel,
+        actionIcon,
       };
-    });
-    localStorage.setItem(TERMINAL_VISIBLE_STORAGE_KEY, "1");
-    return nextTabId;
+
+      set((state) => {
+        const existing = state.byEnv[environmentId] ?? EMPTY_TERMINAL_SLOT;
+        const reusableTabStillPresent =
+          reusableTab != null && existing.tabs.some((tab) => tab.id === reusableTab.id);
+        return {
+          visible: true,
+          byEnv: {
+            ...state.byEnv,
+            [environmentId]: {
+              tabs: reusableTabStillPresent
+                ? existing.tabs.map((tab) => (tab.id === reusableTab.id ? nextTab : tab))
+                : [...existing.tabs, nextTab],
+              activeTabId: nextTabId,
+            },
+          },
+        };
+      });
+      localStorage.setItem(TERMINAL_VISIBLE_STORAGE_KEY, "1");
+      return nextTabId;
+    })();
+
+    pendingActionTabOpens.set(operationKey, openPromise);
+    try {
+      return await openPromise;
+    } finally {
+      if (pendingActionTabOpens.get(operationKey) === openPromise) {
+        pendingActionTabOpens.delete(operationKey);
+      }
+    }
   },
 
   closeTab: async (environmentId, id) => {

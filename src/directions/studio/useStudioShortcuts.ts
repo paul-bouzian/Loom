@@ -172,21 +172,6 @@ export function useStudioShortcuts({
         return;
       }
 
-      if (selectedEnvironmentId && selectedProjectId) {
-        for (const action of manualActions) {
-          if (!matchesShortcut(event, action.shortcut)) {
-            continue;
-          }
-          event.preventDefault();
-          void launchProjectActionShortcut(
-            selectedEnvironmentId,
-            selectedProjectId,
-            action,
-          ).catch(reportShortcutError);
-          return;
-        }
-      }
-
       if (matchesShortcut(event, shortcuts.toggleProjectsSidebar)) {
         event.preventDefault();
         onToggleProjectsSidebar();
@@ -245,6 +230,21 @@ export function useStudioShortcuts({
         event.preventDefault();
         selectAdjacentEnvironment("previous");
         return;
+      }
+
+      if (selectedEnvironmentId && selectedProjectId) {
+        for (const action of manualActions) {
+          if (!matchesShortcut(event, action.shortcut)) {
+            continue;
+          }
+          event.preventDefault();
+          void launchProjectActionShortcut(
+            selectedEnvironmentId,
+            selectedProjectId,
+            action,
+          ).catch(reportShortcutError);
+          return;
+        }
       }
     }
 

@@ -263,6 +263,44 @@ describe("useStudioShortcuts", () => {
     });
   });
 
+  it("keeps core shortcuts ahead of conflicting project action shortcuts", () => {
+    const openActionTab = vi.fn(async () => "action-tab");
+    const toggleVisible = vi.fn();
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            settings: {
+              worktreeSetupScript: undefined,
+              worktreeTeardownScript: undefined,
+              manualActions: [
+                {
+                  id: "dev",
+                  label: "Dev",
+                  icon: "play",
+                  script: "bun run dev",
+                  shortcut: "mod+j",
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    }));
+    useTerminalStore.setState({ openActionTab, toggleVisible });
+
+    render(<Harness />);
+
+    fireEvent.keyDown(window, {
+      key: "J",
+      ...primaryModifier(),
+    });
+
+    expect(toggleVisible).toHaveBeenCalledTimes(1);
+    expect(openActionTab).not.toHaveBeenCalled();
+  });
+
   it("shows a warning when a project action shortcut cannot open a terminal tab", async () => {
     const openActionTab = vi.fn(async () => null);
     useWorkspaceStore.setState((state) => ({

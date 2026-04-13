@@ -271,6 +271,7 @@ impl WorkspaceService {
                 .map_err(AppError::Validation)?;
         }
         settings.validate().map_err(AppError::Validation)?;
+        validate_project_shortcuts_against_global_settings(&transaction, &settings.shortcuts)?;
 
         let payload = serde_json::to_string(&settings)
             .map_err(|error| AppError::Validation(error.to_string()))?;
@@ -2333,6 +2334,34 @@ fn project_settings_from_json(
     })
 }
 
+fn validate_project_shortcuts_against_global_settings(
+    connection: &rusqlite::Connection,
+    shortcuts: &ShortcutSettings,
+) -> AppResult<()> {
+    let mut statement = connection.prepare(
+        "
+        SELECT name, settings_json
+        FROM projects
+        WHERE archived_at IS NULL
+        ",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            project_settings_from_json(&row.get::<_, String>(1)?, 1)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (project_name, project_settings) = row?;
+        project_settings
+            .validate(Some(shortcuts))
+            .map_err(|error| AppError::Validation(format!("Project \"{project_name}\": {error}")))?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -2357,7 +2386,7 @@ mod tests {
         NotificationSoundId, NotificationSoundSettingsPatch, OpenTarget, OpenTargetKind,
         ServiceTier,
     };
-    use crate::domain::shortcuts::ShortcutSettings;
+    use crate::domain::shortcuts::{ShortcutSettings, ShortcutSettingsPatch};
     use crate::domain::workspace::{
         EnvironmentPullRequestSnapshot, ProjectActionIcon, ProjectManualAction,
         ProjectSettingsPatch, PullRequestState, ThreadStatus,
@@ -2453,6 +2482,52 @@ mod tests {
             })
             .expect_err("conflicting manual action shortcut should fail");
 
+        assert!(error.to_string().contains("Toggle terminal"));
+    }
+
+    #[test]
+    fn update_settings_rejects_global_shortcut_conflicts_with_existing_manual_actions() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("skein"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+
+        harness
+            .service
+            .update_project_settings(UpdateProjectSettingsRequest {
+                project_id: project.id,
+                patch: ProjectSettingsPatch {
+                    manual_actions: Some(Some(vec![ProjectManualAction {
+                        id: "dev".to_string(),
+                        label: "Dev".to_string(),
+                        icon: ProjectActionIcon::Play,
+                        script: "bun run dev".to_string(),
+                        shortcut: Some("mod+shift+d".to_string()),
+                    }])),
+                    ..ProjectSettingsPatch::default()
+                },
+            })
+            .expect("manual action should save");
+
+        let error = harness
+            .service
+            .update_settings(GlobalSettingsPatch {
+                shortcuts: Some(ShortcutSettingsPatch {
+                    toggle_terminal: Some(Some("mod+shift+d".to_string())),
+                    ..ShortcutSettingsPatch::default()
+                }),
+                ..GlobalSettingsPatch::default()
+            })
+            .expect_err("conflicting global shortcut should fail");
+
+        assert!(error.to_string().contains("Project \"skein\""));
         assert!(error.to_string().contains("Toggle terminal"));
     }
 

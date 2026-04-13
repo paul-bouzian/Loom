@@ -336,6 +336,44 @@ describe("terminal-store", () => {
     expect(mockedBridge.runProjectAction).toHaveBeenCalledTimes(2);
   });
 
+  it("deduplicates concurrent launches of the same manual action", async () => {
+    let resolveRun: (
+      value: Awaited<ReturnType<typeof bridge.runProjectAction>>,
+    ) => void = () => {};
+    const pendingRun = new Promise<Awaited<ReturnType<typeof bridge.runProjectAction>>>(
+      (resolve) => {
+        resolveRun = resolve;
+      },
+    );
+    mockedBridge.runProjectAction.mockImplementationOnce(() => pendingRun);
+
+    const firstOpen = useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+    const secondOpen = useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+
+    resolveRun({
+      ptyId: "pty-pending",
+      cwd: `/path/to/${ENV_A}`,
+      actionId: "dev",
+      actionLabel: "Dev",
+      actionIcon: "play",
+    });
+
+    const [firstId, secondId] = await Promise.all([firstOpen, secondOpen]);
+
+    expect(firstId).toBe(secondId);
+    expect(slotForA().tabs).toHaveLength(1);
+    expect(slotForA().tabs[0]?.ptyId).toBe("pty-pending");
+    expect(mockedBridge.runProjectAction).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves manual action titles when workspace metadata updates", async () => {
     await useTerminalStore.getState().openActionTab(ENV_A, {
       id: "dev",
