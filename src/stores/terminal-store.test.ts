@@ -354,6 +354,10 @@ describe("terminal-store", () => {
         defaultApprovalPolicy: "askToEdit",
         collapseWorkActivity: true,
         desktopNotificationsEnabled: false,
+        notificationSounds: {
+          attention: { enabled: true, sound: "glass" },
+          completion: { enabled: true, sound: "glass" },
+        },
       },
       projects: [
         {
