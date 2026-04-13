@@ -407,7 +407,9 @@ impl WorkspaceService {
         &self,
         input: RunProjectActionRequest,
     ) -> AppResult<ProjectActionExecutionTarget> {
-        let metadata = self.worktree_environment_metadata(&input.environment_id)?;
+        validate_non_blank_id(&input.environment_id, "environment")?;
+        validate_non_blank_id(&input.action_id, "action")?;
+        let metadata = self.project_action_environment_metadata(&input.environment_id)?;
         let action = metadata
             .project_settings
             .manual_actions
@@ -423,7 +425,7 @@ impl WorkspaceService {
             project_name: metadata.project_name,
             project_root: metadata.project_root,
             environment_name: metadata.environment_name,
-            branch_name: metadata.branch_name,
+            branch_name: metadata.branch_name.unwrap_or_default(),
             action,
         })
     }
@@ -1695,6 +1697,28 @@ impl WorkspaceService {
         &self,
         environment_id: &str,
     ) -> AppResult<WorktreeEnvironmentMetadata> {
+        let metadata = self.project_action_environment_metadata(environment_id)?;
+        let branch_name = metadata
+            .branch_name
+            .ok_or_else(|| AppError::Runtime("Environment branch is missing.".to_string()))?;
+
+        Ok(WorktreeEnvironmentMetadata {
+            environment_id: metadata.environment_id,
+            environment_name: metadata.environment_name,
+            kind: metadata.kind,
+            environment_path: metadata.environment_path,
+            branch_name,
+            project_id: metadata.project_id,
+            project_name: metadata.project_name,
+            project_root: metadata.project_root,
+            project_settings: metadata.project_settings,
+        })
+    }
+
+    fn project_action_environment_metadata(
+        &self,
+        environment_id: &str,
+    ) -> AppResult<ProjectActionEnvironmentMetadata> {
         let connection = self.database.open()?;
         connection
             .query_row(
@@ -1715,16 +1739,12 @@ impl WorkspaceService {
                 ",
                 params![environment_id],
                 |row| {
-                    Ok(WorktreeEnvironmentMetadata {
+                    Ok(ProjectActionEnvironmentMetadata {
                         environment_id: row.get(0)?,
                         environment_name: row.get(1)?,
                         kind: environment_kind_from_str(&row.get::<_, String>(2)?)?,
                         environment_path: PathBuf::from(row.get::<_, String>(3)?),
-                        branch_name: row.get::<_, Option<String>>(4)?.ok_or_else(|| {
-                            rusqlite::Error::InvalidParameterName(
-                                "Environment branch is missing.".to_string(),
-                            )
-                        })?,
+                        branch_name: row.get(4)?,
                         project_id: row.get(5)?,
                         project_name: row.get(6)?,
                         project_root: PathBuf::from(row.get::<_, String>(7)?),
@@ -2062,6 +2082,19 @@ struct WorktreeEnvironmentMetadata {
     kind: EnvironmentKind,
     environment_path: PathBuf,
     branch_name: String,
+    project_id: String,
+    project_name: String,
+    project_root: PathBuf,
+    project_settings: ProjectSettings,
+}
+
+#[derive(Debug)]
+struct ProjectActionEnvironmentMetadata {
+    environment_id: String,
+    environment_name: String,
+    kind: EnvironmentKind,
+    environment_path: PathBuf,
+    branch_name: Option<String>,
     project_id: String,
     project_name: String,
     project_root: PathBuf,
@@ -2478,6 +2511,86 @@ mod tests {
         );
         assert_eq!(target.branch_name, "main");
         assert_eq!(target.action.label, "Dev");
+        assert_eq!(target.action.script, "bun run dev");
+    }
+
+    #[test]
+    fn project_action_execution_target_rejects_blank_ids() {
+        let harness = WorkspaceHarness::new().expect("harness");
+
+        let environment_error = harness
+            .service
+            .project_action_execution_target(RunProjectActionRequest {
+                environment_id: "   ".to_string(),
+                action_id: "dev".to_string(),
+            })
+            .expect_err("blank environment id should fail");
+        assert!(environment_error
+            .to_string()
+            .contains("environment id cannot be empty"));
+
+        let action_error = harness
+            .service
+            .project_action_execution_target(RunProjectActionRequest {
+                environment_id: "env-1".to_string(),
+                action_id: "   ".to_string(),
+            })
+            .expect_err("blank action id should fail");
+        assert!(action_error
+            .to_string()
+            .contains("action id cannot be empty"));
+    }
+
+    #[test]
+    fn project_action_execution_target_tolerates_missing_branch() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("skein-detached"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let environment_id = project.environments[0].id.clone();
+
+        harness
+            .service
+            .update_project_settings(UpdateProjectSettingsRequest {
+                project_id: project.id.clone(),
+                patch: ProjectSettingsPatch {
+                    manual_actions: Some(Some(vec![ProjectManualAction {
+                        id: "dev".to_string(),
+                        label: "Dev".to_string(),
+                        icon: ProjectActionIcon::Play,
+                        script: "bun run dev".to_string(),
+                        shortcut: None,
+                    }])),
+                    ..ProjectSettingsPatch::default()
+                },
+            })
+            .expect("project settings should update");
+
+        harness
+            .open_connection()
+            .execute(
+                "UPDATE environments SET git_branch = NULL WHERE id = ?1",
+                params![environment_id],
+            )
+            .expect("environment branch should be cleared");
+
+        let target = harness
+            .service
+            .project_action_execution_target(RunProjectActionRequest {
+                environment_id: environment_id.clone(),
+                action_id: "dev".to_string(),
+            })
+            .expect("branchless action target should resolve");
+
+        assert_eq!(target.environment_id, environment_id);
+        assert_eq!(target.branch_name, "");
         assert_eq!(target.action.script, "bun run dev");
     }
 

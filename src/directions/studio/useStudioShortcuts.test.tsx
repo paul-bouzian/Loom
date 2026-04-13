@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { isMacPlatform } from "../../lib/shortcuts";
@@ -22,6 +22,7 @@ vi.mock("../../lib/bridge", () => ({
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: vi.fn(),
+  message: vi.fn(),
 }));
 
 type HarnessProps = {
@@ -259,6 +260,52 @@ describe("useStudioShortcuts", () => {
       icon: "play",
       script: "bun run dev",
       shortcut: "mod+shift+d",
+    });
+  });
+
+  it("shows a warning when a project action shortcut cannot open a terminal tab", async () => {
+    const openActionTab = vi.fn(async () => null);
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            settings: {
+              worktreeSetupScript: undefined,
+              worktreeTeardownScript: undefined,
+              manualActions: [
+                {
+                  id: "dev",
+                  label: "Dev",
+                  icon: "play",
+                  script: "bun run dev",
+                  shortcut: "mod+shift+d",
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    }));
+    useTerminalStore.setState({ openActionTab });
+
+    render(<Harness />);
+
+    fireEvent.keyDown(window, {
+      key: "D",
+      shiftKey: true,
+      ...primaryModifier(),
+    });
+
+    const { message } = await import("@tauri-apps/plugin-dialog");
+    await waitFor(() => {
+      expect(message).toHaveBeenCalledWith(
+        "Maximum 10 terminals are open in this environment.",
+        {
+          title: "Project action",
+          kind: "warning",
+        },
+      );
     });
   });
 });

@@ -394,6 +394,16 @@
   color: var(--tx-text-primary);
 }
 
+.settings-project-actions__add:focus-visible,
+.settings-project-action__summary:focus-visible,
+.settings-project-action__icon-btn:focus-visible,
+.settings-project-action__chip:focus-visible {
+  outline: none;
+  border-color: var(--tx-border-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tx-accent) 14%, transparent);
+  color: var(--tx-text-primary);
+}
+
 .settings-project-actions__copy {
   display: grid;
   gap: var(--tx-space-xs);
@@ -442,6 +452,10 @@
 
 .settings-project-action__summary:hover .settings-project-action__preview-label {
   color: var(--tx-text-primary);
+}
+
+.settings-project-action__summary:focus-visible {
+  border-radius: var(--tx-radius-md);
 }
 
 .settings-project-action__summary-chevron {

@@ -1,3 +1,4 @@
+import { message } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef } from "react";
 
 import { matchesShortcut } from "../../lib/shortcuts";
@@ -5,6 +6,7 @@ import type {
   ApprovalPolicy,
   CollaborationMode,
   ConversationComposerSettings,
+  ProjectManualAction,
   ReasoningEffort,
 } from "../../lib/types";
 import { useConversationStore } from "../../stores/conversation-store";
@@ -176,15 +178,11 @@ export function useStudioShortcuts({
             continue;
           }
           event.preventDefault();
-          void useTerminalStore
-            .getState()
-            .openActionTab(selectedEnvironmentId, action)
-            .then((tabId) => {
-              if (tabId) {
-                setPreferredActionIdForProject(selectedProjectId, action.id);
-              }
-            })
-            .catch(reportShortcutError);
+          void launchProjectActionShortcut(
+            selectedEnvironmentId,
+            selectedProjectId,
+            action,
+          ).catch(reportShortcutError);
           return;
         }
       }
@@ -338,6 +336,23 @@ function isComposerTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
     ? Boolean(target.closest(".tx-composer"))
     : false;
+}
+
+async function launchProjectActionShortcut(
+  environmentId: string,
+  projectId: string,
+  action: ProjectManualAction,
+) {
+  const tabId = await useTerminalStore.getState().openActionTab(environmentId, action);
+  if (!tabId) {
+    await message("Maximum 10 terminals are open in this environment.", {
+      title: "Project action",
+      kind: "warning",
+    });
+    return;
+  }
+
+  setPreferredActionIdForProject(projectId, action.id);
 }
 
 function reportShortcutError(error: unknown) {
