@@ -672,7 +672,6 @@ export function InlineComposer({
                   ? `Collaboration mode: ${currentModeLabel}. Switch to ${nextModeLabel}`
                   : `Collaboration mode: ${currentModeLabel}`
               }
-              title={canToggleMode ? `Switch to ${nextModeLabel}` : currentModeLabel}
               aria-pressed={isPlanMode}
               disabled={controlsDisabled || !canToggleMode}
               onClick={() =>
@@ -692,7 +691,6 @@ export function InlineComposer({
                 .filter(Boolean)
                 .join(" ")}
               aria-label={fastModeLabel}
-              title={fastModeLabel}
               aria-pressed={fastModeEnabled}
               disabled={controlsDisabled || !fastModeSupported}
               onClick={() =>

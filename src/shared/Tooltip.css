@@ -4,15 +4,14 @@
 }
 
 .tx-tooltip {
-  position: absolute;
-  left: 50%;
+  position: fixed;
+  z-index: 99998;
   transform: translateX(-50%);
-  z-index: 1000;
-  max-width: 220px;
-  padding: 4px 10px;
+  max-width: 240px;
+  padding: 5px 10px;
   border-radius: var(--tx-radius-sm);
   background: var(--tx-bg-raised);
-  border: 1px solid var(--tx-border-subtle);
+  border: 1px solid var(--tx-border-muted);
   box-shadow: var(--tx-shadow-md);
   color: var(--tx-text-primary);
   font-size: var(--tx-text-xs);
@@ -24,20 +23,18 @@
 }
 
 .tx-tooltip--top {
-  bottom: calc(100% + 6px);
+  transform: translateX(-50%) translateY(-100%);
 }
 
 .tx-tooltip--bottom {
-  top: calc(100% + 6px);
+  transform: translateX(-50%);
 }
 
 @keyframes tx-tooltip-in {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(2px);
   }
   to {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
   }
 }

@@ -95,6 +95,7 @@
 /* ── Compact mode (used in composer) ── */
 
 .tx-picker--compact {
+  position: relative;
   gap: 0;
 }
 
@@ -124,18 +125,13 @@
   opacity: 0.5;
 }
 
-.tx-picker--compact + .tx-picker--compact {
-  margin-left: 1px;
-  padding-left: 1px;
-  border-left: 1px solid var(--tx-border-subtle);
-}
-
-.tx-picker--compact + .tx-picker--compact .tx-picker__trigger {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
-
-.tx-picker--compact:has(+ .tx-picker--compact) .tx-picker__trigger {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
+.tx-picker--compact + .tx-picker--compact::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 14px;
+  background: var(--tx-border-subtle);
 }
