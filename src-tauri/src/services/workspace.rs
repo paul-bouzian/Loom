@@ -2825,6 +2825,65 @@ mod tests {
     }
 
     #[test]
+    fn update_settings_repairs_invalid_stored_notification_sounds_without_resetting_other_fields() {
+        let harness = WorkspaceHarness::new().expect("harness");
+
+        harness
+            .open_connection()
+            .execute(
+                "
+                INSERT INTO global_settings (singleton_key, payload_json, updated_at)
+                VALUES ('global', ?1, ?2)
+                ON CONFLICT(singleton_key) DO UPDATE SET
+                  payload_json = excluded.payload_json,
+                  updated_at = excluded.updated_at
+                ",
+                params![
+                    r#"{
+                        "defaultModel":"gpt-5.4-mini",
+                        "defaultReasoningEffort":"high",
+                        "defaultCollaborationMode":"build",
+                        "defaultApprovalPolicy":"askToEdit",
+                        "desktopNotificationsEnabled":true,
+                        "notificationSounds":{
+                            "attention":{"enabled":true},
+                            "completion":{"enabled":true,"sound":"future-bell"}
+                        }
+                    }"#,
+                    Utc::now(),
+                ],
+            )
+            .expect("settings should be persisted");
+
+        let updated = harness
+            .service
+            .update_settings(GlobalSettingsPatch {
+                default_model: Some("gpt-5.3-codex".to_string()),
+                ..GlobalSettingsPatch::default()
+            })
+            .expect("settings update should repair notification sounds");
+        let reloaded = harness
+            .service
+            .current_settings()
+            .expect("settings should reload");
+
+        assert_eq!(updated.default_model, "gpt-5.3-codex");
+        assert!(updated.desktop_notifications_enabled);
+        assert!(updated.notification_sounds.attention.enabled);
+        assert_eq!(
+            updated.notification_sounds.attention.sound,
+            NotificationSoundId::Glass
+        );
+        assert!(updated.notification_sounds.completion.enabled);
+        assert_eq!(
+            updated.notification_sounds.completion.sound,
+            NotificationSoundId::Polite
+        );
+        assert_eq!(updated.notification_sounds, reloaded.notification_sounds);
+        assert_eq!(updated.desktop_notifications_enabled, reloaded.desktop_notifications_enabled);
+    }
+
+    #[test]
     fn first_prompt_auto_rename_updates_the_managed_worktree_and_thread() {
         let harness = WorkspaceHarness::new().expect("harness");
         let repo = harness

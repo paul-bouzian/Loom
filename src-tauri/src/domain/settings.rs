@@ -20,10 +20,6 @@ fn default_desktop_notifications_enabled() -> bool {
     false
 }
 
-fn default_notification_sound_channel_enabled() -> bool {
-    false
-}
-
 fn default_attention_notification_sound() -> NotificationSoundId {
     NotificationSoundId::Glass
 }
@@ -116,15 +112,14 @@ pub struct OpenTarget {
     pub args: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationSoundChannelSettings {
-    #[serde(default = "default_notification_sound_channel_enabled")]
     pub enabled: bool,
     pub sound: NotificationSoundId,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationSoundSettings {
     #[serde(default = "default_attention_notification_sound_settings")]
@@ -301,6 +296,29 @@ impl NotificationSoundChannelSettings {
         }
     }
 
+    fn from_stored_value(
+        value: Option<&serde_json::Value>,
+        default_sound: NotificationSoundId,
+    ) -> Self {
+        let mut settings = Self::new(default_sound);
+        let Some(serde_json::Value::Object(channel)) = value else {
+            return settings;
+        };
+
+        if let Some(enabled) = channel.get("enabled").and_then(serde_json::Value::as_bool) {
+            settings.enabled = enabled;
+        }
+        if let Some(sound) = channel
+            .get("sound")
+            .and_then(serde_json::Value::as_str)
+            .and_then(NotificationSoundId::from_stored_value)
+        {
+            settings.sound = sound;
+        }
+
+        settings
+    }
+
     fn apply_patch(&mut self, patch: NotificationSoundChannelSettingsPatch) {
         if let Some(enabled) = patch.enabled {
             self.enabled = enabled;
@@ -321,6 +339,23 @@ impl Default for NotificationSoundSettings {
 }
 
 impl NotificationSoundSettings {
+    fn from_stored_value(value: serde_json::Value) -> Self {
+        let serde_json::Value::Object(notification_sounds) = value else {
+            return Self::default();
+        };
+
+        Self {
+            attention: NotificationSoundChannelSettings::from_stored_value(
+                notification_sounds.get("attention"),
+                default_attention_notification_sound(),
+            ),
+            completion: NotificationSoundChannelSettings::from_stored_value(
+                notification_sounds.get("completion"),
+                default_completion_notification_sound(),
+            ),
+        }
+    }
+
     fn apply_patch(&mut self, patch: NotificationSoundSettingsPatch) {
         if let Some(attention) = patch.attention {
             self.attention.apply_patch(attention);
@@ -328,6 +363,27 @@ impl NotificationSoundSettings {
         if let Some(completion) = patch.completion {
             self.completion.apply_patch(completion);
         }
+    }
+}
+
+impl NotificationSoundId {
+    fn from_stored_value(value: &str) -> Option<Self> {
+        match value {
+            "glass" => Some(Self::Glass),
+            "chord" => Some(Self::Chord),
+            "polite" => Some(Self::Polite),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NotificationSoundSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(Self::from_stored_value(value))
     }
 }
 
@@ -727,6 +783,62 @@ mod tests {
             .iter()
             .any(|target| target.id == settings.default_open_target_id));
         assert_eq!(settings.default_service_tier, Some(ServiceTier::Fast));
+    }
+
+    #[test]
+    fn deserialize_notification_sounds_repairs_partial_channels() {
+        let settings: GlobalSettings = serde_json::from_str(
+            r#"{
+                "defaultModel":"gpt-5.4",
+                "defaultReasoningEffort":"high",
+                "defaultCollaborationMode":"build",
+                "defaultApprovalPolicy":"askToEdit",
+                "notificationSounds":{
+                    "attention":{"enabled":true},
+                    "completion":{"sound":"chord"}
+                }
+            }"#,
+        )
+        .expect("partial notification sound payload should deserialize");
+
+        assert!(settings.notification_sounds.attention.enabled);
+        assert_eq!(
+            settings.notification_sounds.attention.sound,
+            NotificationSoundId::Glass
+        );
+        assert!(!settings.notification_sounds.completion.enabled);
+        assert_eq!(
+            settings.notification_sounds.completion.sound,
+            NotificationSoundId::Chord
+        );
+    }
+
+    #[test]
+    fn deserialize_notification_sounds_repairs_unknown_sound_ids() {
+        let settings: GlobalSettings = serde_json::from_str(
+            r#"{
+                "defaultModel":"gpt-5.4",
+                "defaultReasoningEffort":"high",
+                "defaultCollaborationMode":"build",
+                "defaultApprovalPolicy":"askToEdit",
+                "notificationSounds":{
+                    "attention":{"enabled":true,"sound":"future-bell"},
+                    "completion":{"enabled":true,"sound":"future-chime"}
+                }
+            }"#,
+        )
+        .expect("unknown notification sound ids should deserialize");
+
+        assert!(settings.notification_sounds.attention.enabled);
+        assert_eq!(
+            settings.notification_sounds.attention.sound,
+            NotificationSoundId::Glass
+        );
+        assert!(settings.notification_sounds.completion.enabled);
+        assert_eq!(
+            settings.notification_sounds.completion.sound,
+            NotificationSoundId::Polite
+        );
     }
 
     #[test]
