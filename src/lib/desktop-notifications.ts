@@ -84,16 +84,18 @@ function isCompletedSnapshot(snapshot: ThreadConversationSnapshot): boolean {
 export function collectDesktopNotificationCandidates(
   previousSnapshotsByThreadId: Record<string, ThreadConversationSnapshot>,
   nextSnapshotsByThreadId: Record<string, ThreadConversationSnapshot>,
+  options?: {
+    suppressUnknownThreads?: boolean;
+  },
 ): DesktopNotificationCandidate[] {
   const candidates: DesktopNotificationCandidate[] = [];
-  const isInitialHydration =
-    Object.keys(previousSnapshotsByThreadId).length === 0;
+  const suppressUnknownThreads = options?.suppressUnknownThreads === true;
 
   for (const threadId of Object.keys(nextSnapshotsByThreadId).sort()) {
     const previousSnapshot = previousSnapshotsByThreadId[threadId];
     const nextSnapshot = nextSnapshotsByThreadId[threadId];
 
-    if (isInitialHydration && !previousSnapshot) {
+    if (suppressUnknownThreads && !previousSnapshot) {
       continue;
     }
 

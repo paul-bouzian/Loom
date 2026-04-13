@@ -26,6 +26,24 @@ describe("collectDesktopNotificationCandidates", () => {
     expect(candidates).toEqual([]);
   });
 
+  it("can suppress unknown threads during initial hydration when asked explicitly", () => {
+    const candidates = collectDesktopNotificationCandidates(
+      {},
+      {
+        "thread-1": makeConversationSnapshot({
+          threadId: "thread-1",
+          status: "waitingForExternalAction",
+          activeTurnId: "turn-1",
+          pendingInteractions: [makeApprovalRequest()],
+          proposedPlan: null,
+        }),
+      },
+      { suppressUnknownThreads: true },
+    );
+
+    expect(candidates).toEqual([]);
+  });
+
   it("emits one completion candidate when a running thread completes", () => {
     const candidates = collectDesktopNotificationCandidates(
       {

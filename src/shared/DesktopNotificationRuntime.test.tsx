@@ -58,6 +58,26 @@ function makeRuntimeWorkspaceSnapshot(desktopNotificationsEnabled: boolean) {
   });
 }
 
+function makeRuntimeWorkspaceSnapshotWithThreads(
+  desktopNotificationsEnabled: boolean,
+  threads: ReturnType<typeof makeThread>[],
+) {
+  return makeWorkspaceSnapshot({
+    settings: makeGlobalSettings({ desktopNotificationsEnabled }),
+    projects: [
+      makeProject({
+        environments: [
+          makeEnvironment({
+            id: "env-1",
+            name: "Feature Branch",
+            threads,
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
 beforeEach(() => {
   visibilityState = "visible";
   hasFocus = true;
@@ -188,6 +208,69 @@ describe("DesktopNotificationRuntime", () => {
     await waitFor(() => {
       expect(mockedNotifications.sendNotification).toHaveBeenCalledWith({
         title: "Ship desktop notifications",
+        body: "Needs your approval in Feature Branch.",
+      });
+    });
+  });
+
+  it("suppresses unknown threads only for the first hydration update", async () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeRuntimeWorkspaceSnapshotWithThreads(true, [
+        makeThread({
+          id: "thread-1",
+          environmentId: "env-1",
+          title: "Initial hydrated thread",
+        }),
+        makeThread({
+          id: "thread-2",
+          environmentId: "env-1",
+          title: "New background approval",
+        }),
+      ]),
+    }));
+
+    render(<DesktopNotificationRuntime />);
+
+    await act(async () => {
+      setBackgroundState(true);
+      useConversationStore.setState((state) => ({
+        ...state,
+        snapshotsByThreadId: {
+          "thread-1": makeConversationSnapshot({
+            threadId: "thread-1",
+            environmentId: "env-1",
+            status: "waitingForExternalAction",
+            activeTurnId: "turn-1",
+            pendingInteractions: [makeApprovalRequest()],
+            proposedPlan: null,
+          }),
+        },
+      }));
+    });
+
+    expect(mockedNotifications.sendNotification).not.toHaveBeenCalled();
+
+    await act(async () => {
+      useConversationStore.setState((state) => ({
+        ...state,
+        snapshotsByThreadId: {
+          ...state.snapshotsByThreadId,
+          "thread-2": makeConversationSnapshot({
+            threadId: "thread-2",
+            environmentId: "env-1",
+            status: "waitingForExternalAction",
+            activeTurnId: "turn-2",
+            pendingInteractions: [makeApprovalRequest({ id: "approval-2" })],
+            proposedPlan: null,
+          }),
+        },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(mockedNotifications.sendNotification).toHaveBeenCalledWith({
+        title: "New background approval",
         body: "Needs your approval in Feature Branch.",
       });
     });

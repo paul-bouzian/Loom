@@ -84,6 +84,7 @@ export function DesktopNotificationRuntime() {
   );
   const previousSnapshotsRef = useRef<Record<string, ThreadConversationSnapshot>>({});
   const readyRef = useRef(false);
+  const suppressUnknownThreadsRef = useRef(false);
   const [appInBackground, setAppInBackground] = useState(isAppInBackground);
 
   useEffect(() => {
@@ -105,12 +106,16 @@ export function DesktopNotificationRuntime() {
   useEffect(() => {
     if (!readyRef.current) {
       previousSnapshotsRef.current = snapshotsByThreadId;
+      suppressUnknownThreadsRef.current =
+        Object.keys(snapshotsByThreadId).length === 0;
       readyRef.current = true;
       return;
     }
 
     const previousSnapshots = previousSnapshotsRef.current;
+    const suppressUnknownThreads = suppressUnknownThreadsRef.current;
     previousSnapshotsRef.current = snapshotsByThreadId;
+    suppressUnknownThreadsRef.current = false;
 
     if (!desktopNotificationsEnabled || !appInBackground) {
       return;
@@ -119,6 +124,7 @@ export function DesktopNotificationRuntime() {
     const candidates = collectDesktopNotificationCandidates(
       previousSnapshots,
       snapshotsByThreadId,
+      { suppressUnknownThreads },
     );
 
     for (const candidate of candidates) {
