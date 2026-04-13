@@ -59,6 +59,7 @@ export function StudioMain({
   const [terminalEverOpened, setTerminalEverOpened] = useState(terminalVisible);
   useEffect(() => {
     if (terminalVisible) setTerminalEverOpened(true);
+    else setTerminalDragging(false);
   }, [terminalVisible]);
 
   let content;
