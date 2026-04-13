@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -16,10 +16,10 @@ use uuid::Uuid;
 
 use crate::domain::conversation::{
     ApprovalResponseInput, CommandApprovalDecisionInput, ComposerMentionBindingInput,
-    ConversationEventPayload, ConversationImageAttachment, ConversationInteraction, ConversationItem,
-    ConversationMessageItem, ConversationRole, ConversationStatus, ConversationTaskStatus,
-    EnvironmentCapabilitiesSnapshot, FileChangeApprovalDecisionInput, InputModality,
-    PermissionGrantScope, PermissionsApprovalDecisionInput, PlanDecisionAction,
+    ConversationEventPayload, ConversationImageAttachment, ConversationInteraction,
+    ConversationItem, ConversationMessageItem, ConversationRole, ConversationStatus,
+    ConversationTaskStatus, EnvironmentCapabilitiesSnapshot, FileChangeApprovalDecisionInput,
+    InputModality, PermissionGrantScope, PermissionsApprovalDecisionInput, PlanDecisionAction,
     ProposedPlanStatus, RespondToUserInputRequestInput, SubagentStatus, SubmitPlanDecisionInput,
     ThreadComposerCatalog, ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
@@ -43,6 +43,7 @@ use crate::runtime::protocol::{
     subagents_from_collab_item, task_plan_from_item, task_plan_from_turn_update,
     task_status_from_turn_status, token_usage_snapshot, upsert_item, user_input_payload,
     AccountRateLimitsReadResponse, AccountReadResponse, AppInfoWire, AppsListResponse,
+    AGENT_MESSAGE_DELTA_METHOD,
     CollaborationModeListResponse, ErrorNotification, FuzzyFileSearchMatchTypeWire,
     FuzzyFileSearchResponse, IncomingMessage, ItemDeltaNotification, ItemNotification,
     ModelListResponse, OutgoingNamedInput, OutgoingTextElement, OutgoingUserInputPayload,
@@ -193,6 +194,7 @@ impl RuntimeSession {
         environment_path: String,
         binary_path: String,
         app_version: String,
+        stream_assistant_responses: bool,
     ) -> AppResult<Self> {
         Self::spawn_with_app(
             Some(app),
@@ -200,6 +202,7 @@ impl RuntimeSession {
             environment_path,
             binary_path,
             app_version,
+            stream_assistant_responses,
         )
         .await
     }
@@ -209,6 +212,7 @@ impl RuntimeSession {
         environment_path: String,
         binary_path: String,
         app_version: String,
+        stream_assistant_responses: bool,
     ) -> AppResult<Self> {
         Self::spawn_with_app(
             None,
@@ -216,6 +220,7 @@ impl RuntimeSession {
             environment_path,
             binary_path,
             app_version,
+            stream_assistant_responses,
         )
         .await
     }
@@ -226,6 +231,7 @@ impl RuntimeSession {
         environment_path: String,
         binary_path: String,
         app_version: String,
+        stream_assistant_responses: bool,
     ) -> AppResult<Self> {
         let mut command = Command::new(&binary_path);
         command
@@ -251,6 +257,7 @@ impl RuntimeSession {
             app,
             environment_id,
             app_version,
+            stream_assistant_responses,
             SessionTransport {
                 writer: Box::new(stdin),
                 reader: stdout,
@@ -266,6 +273,7 @@ impl RuntimeSession {
         environment_id: String,
         _environment_path: String,
         app_version: String,
+        stream_assistant_responses: bool,
         writer: W,
         reader: R,
     ) -> AppResult<Self>
@@ -277,6 +285,7 @@ impl RuntimeSession {
             None,
             environment_id,
             app_version,
+            stream_assistant_responses,
             SessionTransport {
                 writer: Box::new(writer),
                 reader,
@@ -314,6 +323,7 @@ impl RuntimeSession {
         app: Option<AppHandle>,
         environment_id: String,
         app_version: String,
+        stream_assistant_responses: bool,
         transport: SessionTransport<R, E>,
     ) -> AppResult<Self>
     where
@@ -346,7 +356,10 @@ impl RuntimeSession {
         };
 
         if let Err(error) = session
-            .send_request("initialize", initialize_params(&app_version))
+            .send_request(
+                "initialize",
+                initialize_params(&app_version, stream_assistant_responses),
+            )
             .await
         {
             let _ = session.stop().await;
@@ -1976,7 +1989,7 @@ async fn handle_notification(
                 .await;
             }
         }
-        "item/agentMessage/delta" => {
+        AGENT_MESSAGE_DELTA_METHOD => {
             if let Ok(event) = serde_json::from_value::<ItemDeltaNotification>(notification.params)
             {
                 let maybe_snapshot = {
@@ -2591,9 +2604,7 @@ fn queue_snapshot_emit(app: AppHandle, snapshot: ThreadConversationSnapshot) {
                     sleep(SNAPSHOT_EMIT_DEBOUNCE).await;
                     let next_snapshot = {
                         let mut emits = emit_state.lock().await;
-                        emits
-                            .get_mut(&thread_id)
-                            .and_then(take_buffered_snapshot)
+                        emits.get_mut(&thread_id).and_then(take_buffered_snapshot)
                     };
 
                     if let Some(snapshot) = next_snapshot {
@@ -3024,7 +3035,10 @@ mod tests {
             },
         );
 
-        session.stop().await.expect("test session should stop cleanly");
+        session
+            .stop()
+            .await
+            .expect("test session should stop cleanly");
 
         assert!(
             !snapshot_emit_state().lock().await.contains_key("thread-1"),
@@ -3092,14 +3106,16 @@ mod tests {
             },
         );
         snapshot.status = ConversationStatus::Completed;
-        snapshot.items.push(ConversationItem::Message(ConversationMessageItem {
-            id: "assistant-1".to_string(),
-            turn_id: Some("turn-1".to_string()),
-            role: ConversationRole::Assistant,
-            text: "Done".to_string(),
-            images: None,
-            is_streaming: false,
-        }));
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "assistant-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                role: ConversationRole::Assistant,
+                text: "Done".to_string(),
+                images: None,
+                is_streaming: false,
+            }));
         snapshot
     }
 

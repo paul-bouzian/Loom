@@ -56,6 +56,7 @@ export function makeGlobalSettings(
     defaultServiceTier: null,
     collapseWorkActivity: true,
     desktopNotificationsEnabled: false,
+    streamAssistantResponses: true,
     shortcuts: {
       openSettings: "mod+comma",
       focusComposer: "mod+l",

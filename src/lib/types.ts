@@ -182,6 +182,7 @@ export type GlobalSettings = {
   defaultServiceTier?: ServiceTier | null;
   collapseWorkActivity: boolean;
   desktopNotificationsEnabled: boolean;
+  streamAssistantResponses: boolean;
   shortcuts: ShortcutSettings;
   openTargets: OpenTarget[];
   defaultOpenTargetId: string;
@@ -843,6 +844,7 @@ export type GlobalSettingsPatch = {
   defaultServiceTier?: ServiceTier | null;
   collapseWorkActivity?: boolean;
   desktopNotificationsEnabled?: boolean;
+  streamAssistantResponses?: boolean;
   shortcuts?: ShortcutSettingsPatch;
   openTargets?: OpenTarget[];
   defaultOpenTargetId?: string;

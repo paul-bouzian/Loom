@@ -431,6 +431,13 @@ function SettingsContent({
         onChange={(value) => onChange({ collapseWorkActivity: value })}
       />
       <SettingsToggle
+        disabled={disabled}
+        label="Stream assistant responses"
+        description="Stream assistant replies token by token in real time."
+        checked={settings.streamAssistantResponses}
+        onChange={(value) => onChange({ streamAssistantResponses: value })}
+      />
+      <SettingsToggle
         disabled={disabled || desktopNotificationsBusy}
         label="Desktop notifications"
         description="Show an OS notification when a chat finishes or needs input while the app is in the background."
