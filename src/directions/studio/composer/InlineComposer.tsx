@@ -171,7 +171,7 @@ export function InlineComposer({
   const hasAttachedImages = images.length > 0;
   const hasDraftContent = draft.trim().length > 0;
   let imageSupportNotice: string | null = null;
-  if (!imagesEnabled) {
+  if (!imagesEnabled && transportEnabled) {
     imageSupportNotice = modelImageSupportMessage(selectedModel);
     if (hasAttachedImages) {
       imageSupportNotice = `${imageSupportNotice} Remove the current images or switch to a model with image input.`;

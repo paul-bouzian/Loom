@@ -373,7 +373,11 @@ export function ThreadConversation({
         }
       />
       <div ref={timelineRef} className="tx-conversation__timeline">
-        {timelineEntries.length === 0 &&
+        {isConnecting ? (
+          <div className="tx-loading">
+            <div className="tx-loading__bar" />
+          </div>
+        ) : timelineEntries.length === 0 &&
         !shouldRenderPlanCard &&
         !hasTaskPlanContent &&
         transportReady ? (
