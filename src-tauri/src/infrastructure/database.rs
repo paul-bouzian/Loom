@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-use crate::app_identity::{AppStoragePaths, APP_DATABASE_FILE_NAME, LEGACY_APP_DATABASE_FILE_NAME};
+use crate::app_identity::{
+    AppStoragePaths, APP_DATABASE_FILE_NAME, LEGACY_APP_DATABASE_FILE_NAMES,
+};
 use crate::domain::conversation::{
     ComposerDraftMentionBinding, ConversationComposerDraft, ConversationImageAttachment,
 };
@@ -25,7 +27,7 @@ impl AppDatabase {
         let database = Self { db_path };
         database.migrate()?;
         database.normalize_workspace_paths(
-            &storage_paths.legacy_app_home_dir,
+            &storage_paths.legacy_app_home_dirs,
             &storage_paths.app_home_dir,
         )?;
         Ok(database)
@@ -284,61 +286,64 @@ impl AppDatabase {
 
     fn normalize_workspace_paths(
         &self,
-        legacy_app_home_dir: &Path,
+        legacy_app_home_dirs: &[PathBuf],
         app_home_dir: &Path,
     ) -> AppResult<()> {
-        if legacy_app_home_dir == app_home_dir {
-            return Ok(());
-        }
-
-        let legacy = legacy_app_home_dir.to_string_lossy().to_string();
-        let current = app_home_dir.to_string_lossy().to_string();
         let connection = self.open()?;
-        connection.execute(
-            "UPDATE projects SET root_path = REPLACE(root_path, ?1, ?2) WHERE INSTR(root_path, ?1) > 0",
-            [&legacy, &current],
-        )?;
-        connection.execute(
-            "UPDATE environments SET path = REPLACE(path, ?1, ?2) WHERE INSTR(path, ?1) > 0",
-            [&legacy, &current],
-        )?;
-        let thread_drafts = {
-            let mut statement = connection.prepare(
-                "
-                SELECT id, composer_draft_json
-                FROM threads
-                WHERE composer_draft_json IS NOT NULL
-                  AND INSTR(composer_draft_json, ?1) > 0
-                ",
-            )?;
-            let drafts = statement
-                .query_map([&legacy], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            drafts
-        };
+        let current = app_home_dir.to_string_lossy().to_string();
 
-        for (thread_id, draft_json) in thread_drafts {
-            let draft = serde_json::from_str::<ConversationComposerDraft>(&draft_json)
-                .map_err(|error| {
-                    AppError::Runtime(format!(
-                        "Failed to deserialize persisted composer draft for thread {thread_id}: {error}",
-                    ))
-                })?;
-            let normalized_draft = normalize_composer_draft_paths(draft, &legacy, &current);
+        for legacy_app_home_dir in legacy_app_home_dirs {
+            if legacy_app_home_dir == app_home_dir {
+                continue;
+            }
+
+            let legacy = legacy_app_home_dir.to_string_lossy().to_string();
             connection.execute(
-                "
-                UPDATE threads
-                SET composer_draft_json = ?1
-                WHERE id = ?2
-                ",
-                rusqlite::params![
-                    serde_json::to_string(&normalized_draft)
-                        .map_err(|error| AppError::Runtime(error.to_string()))?,
-                    thread_id,
-                ],
+                "UPDATE projects SET root_path = REPLACE(root_path, ?1, ?2) WHERE INSTR(root_path, ?1) > 0",
+                [&legacy, &current],
             )?;
+            connection.execute(
+                "UPDATE environments SET path = REPLACE(path, ?1, ?2) WHERE INSTR(path, ?1) > 0",
+                [&legacy, &current],
+            )?;
+            let thread_drafts = {
+                let mut statement = connection.prepare(
+                    "
+                    SELECT id, composer_draft_json
+                    FROM threads
+                    WHERE composer_draft_json IS NOT NULL
+                      AND INSTR(composer_draft_json, ?1) > 0
+                    ",
+                )?;
+                let drafts = statement
+                    .query_map([&legacy], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                drafts
+            };
+
+            for (thread_id, draft_json) in thread_drafts {
+                let draft = serde_json::from_str::<ConversationComposerDraft>(&draft_json)
+                    .map_err(|error| {
+                        AppError::Runtime(format!(
+                            "Failed to deserialize persisted composer draft for thread {thread_id}: {error}",
+                        ))
+                    })?;
+                let normalized_draft = normalize_composer_draft_paths(draft, &legacy, &current);
+                connection.execute(
+                    "
+                    UPDATE threads
+                    SET composer_draft_json = ?1
+                    WHERE id = ?2
+                    ",
+                    rusqlite::params![
+                        serde_json::to_string(&normalized_draft)
+                            .map_err(|error| AppError::Runtime(error.to_string()))?,
+                        thread_id,
+                    ],
+                )?;
+            }
         }
         Ok(())
     }
@@ -388,12 +393,57 @@ fn rewrite_legacy_home_prefix(path: &str, legacy_home: &str, current_home: &str)
 }
 
 fn migrate_legacy_database_file(db_dir: &Path) -> AppResult<()> {
-    let legacy_db_path = db_dir.join(LEGACY_APP_DATABASE_FILE_NAME);
     let db_path = db_dir.join(APP_DATABASE_FILE_NAME);
-    if !db_path.exists() && legacy_db_path.exists() {
+    if db_path.exists() {
+        return Ok(());
+    }
+
+    let mut existing_legacy_paths = LEGACY_APP_DATABASE_FILE_NAMES
+        .iter()
+        .map(|name| db_dir.join(name))
+        .filter(|path: &PathBuf| path.exists())
+        .collect::<Vec<_>>();
+
+    existing_legacy_paths.sort_by_key(|path| {
+        LEGACY_APP_DATABASE_FILE_NAMES
+            .iter()
+            .position(|candidate| path.file_name().and_then(|name| name.to_str()) == Some(*candidate))
+            .unwrap_or(LEGACY_APP_DATABASE_FILE_NAMES.len())
+    });
+
+    if let Some(legacy_db_path) = existing_legacy_paths.first().cloned() {
         std::fs::rename(legacy_db_path, db_path)?;
     }
+
+    for legacy_db_path in existing_legacy_paths.into_iter().skip(1) {
+        std::fs::rename(
+            &legacy_db_path,
+            legacy_database_backup_path(&legacy_db_path),
+        )?;
+    }
+
     Ok(())
+}
+
+fn legacy_database_backup_path(legacy_db_path: &Path) -> PathBuf {
+    let file_name = legacy_db_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("legacy.sqlite3");
+    let mut index = 0usize;
+
+    loop {
+        let suffix = if index == 0 {
+            ".backup".to_string()
+        } else {
+            format!(".backup.{index}")
+        };
+        let candidate = legacy_db_path.with_file_name(format!("{file_name}{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        index += 1;
+    }
 }
 
 #[cfg(test)]
@@ -409,9 +459,9 @@ mod tests {
 
     #[test]
     fn migrate_v1_projects_adds_workspace_order_columns() {
-        let root = std::env::temp_dir().join(format!("loom-db-test-{}", Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("skein-db-test-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).expect("test directory should exist");
-        let db_path = root.join("loom.sqlite3");
+        let db_path = root.join("skein.sqlite3");
         let connection = Connection::open(&db_path).expect("db should open");
         connection
             .execute_batch(
@@ -530,9 +580,9 @@ mod tests {
 
     #[test]
     fn migrate_v2_projects_adds_workspace_order_columns() {
-        let root = std::env::temp_dir().join(format!("loom-db-test-{}", Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("skein-db-test-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).expect("test directory should exist");
-        let db_path = root.join("loom.sqlite3");
+        let db_path = root.join("skein.sqlite3");
         let connection = Connection::open(&db_path).expect("db should open");
         connection
             .execute_batch(
@@ -630,9 +680,9 @@ mod tests {
 
     #[test]
     fn migrate_v3_preserves_legacy_project_order_when_timestamps_differ() {
-        let root = std::env::temp_dir().join(format!("loom-db-test-{}", Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("skein-db-test-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).expect("test directory should exist");
-        let db_path = root.join("loom.sqlite3");
+        let db_path = root.join("skein.sqlite3");
         let connection = Connection::open(&db_path).expect("db should open");
         connection
             .execute_batch(
@@ -739,9 +789,9 @@ mod tests {
 
     #[test]
     fn migrate_v4_adds_thread_composer_draft_storage() {
-        let root = std::env::temp_dir().join(format!("loom-db-test-{}", Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("skein-db-test-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).expect("test directory should exist");
-        let db_path = root.join("loom.sqlite3");
+        let db_path = root.join("skein.sqlite3");
         let connection = Connection::open(&db_path).expect("db should open");
         connection
             .execute_batch(
@@ -822,7 +872,7 @@ mod tests {
 
     #[test]
     fn migrate_legacy_database_file_renames_the_old_database_name() {
-        let root = std::env::temp_dir().join(format!("loom-db-rename-{}", Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("skein-db-rename-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).expect("test directory should exist");
         let legacy_db_path = root.join("threadex.sqlite3");
         Connection::open(&legacy_db_path).expect("legacy db should open");
@@ -830,16 +880,57 @@ mod tests {
         migrate_legacy_database_file(&root).expect("legacy db rename should succeed");
 
         assert!(!legacy_db_path.exists());
-        assert!(root.join("loom.sqlite3").exists());
+        assert!(root.join("skein.sqlite3").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrate_legacy_database_file_renames_the_previous_release_database_name() {
+        let root =
+            std::env::temp_dir().join(format!("skein-db-rename-previous-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("test directory should exist");
+        let legacy_db_path = root.join("loom.sqlite3");
+        Connection::open(&legacy_db_path).expect("legacy db should open");
+
+        migrate_legacy_database_file(&root).expect("legacy db rename should succeed");
+
+        assert!(!legacy_db_path.exists());
+        assert!(root.join("skein.sqlite3").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrate_legacy_database_file_prefers_previous_release_and_backs_up_older_names() {
+        let root = std::env::temp_dir().join(format!("skein-db-rename-multi-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("test directory should exist");
+        let previous_release_db_path = root.join("loom.sqlite3");
+        let oldest_release_db_path = root.join("threadex.sqlite3");
+        std::fs::write(&previous_release_db_path, b"loom").expect("loom db should write");
+        std::fs::write(&oldest_release_db_path, b"threadex").expect("threadex db should write");
+
+        migrate_legacy_database_file(&root).expect("legacy db rename should succeed");
+
+        assert_eq!(
+            std::fs::read(root.join("skein.sqlite3")).expect("canonical db should read"),
+            b"loom"
+        );
+        assert_eq!(
+            std::fs::read(root.join("threadex.sqlite3.backup")).expect("backup db should read"),
+            b"threadex"
+        );
+        assert!(!previous_release_db_path.exists());
+        assert!(!oldest_release_db_path.exists());
 
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn normalize_workspace_paths_rewrites_legacy_home_prefixes() {
-        let root = std::env::temp_dir().join(format!("loom-db-paths-{}", Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("skein-db-paths-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).expect("test directory should exist");
-        let db_path = root.join("loom.sqlite3");
+        let db_path = root.join("skein.sqlite3");
         let database = AppDatabase::for_test(db_path).expect("db should initialize");
         let connection = database.open().expect("db should open");
         connection
@@ -852,8 +943,8 @@ mod tests {
                 ",
                 rusqlite::params![
                     "project-1",
-                    "Loom",
-                    "/Users/test/.threadex/worktrees/loom/project-root"
+                    "Skein",
+                    "/Users/test/.threadex/worktrees/skein/project-root"
                 ],
             )
             .expect("project should insert");
@@ -869,7 +960,7 @@ mod tests {
                     "env-1",
                     "project-1",
                     "feature",
-                    "/Users/test/.threadex/worktrees/loom/feature"
+                    "/Users/test/.threadex/worktrees/skein/feature"
                 ],
             )
             .expect("environment should insert");
@@ -889,13 +980,13 @@ mod tests {
                     serde_json::to_string(&ConversationComposerDraft {
                         text: "Keep this".to_string(),
                         images: vec![ConversationImageAttachment::LocalImage {
-                            path: "/Users/test/.threadex/worktrees/loom/feature/screenshot.png"
+                            path: "/Users/test/.threadex/worktrees/skein/feature/screenshot.png"
                                 .to_string(),
                         }],
                         mention_bindings: vec![ComposerDraftMentionBinding {
                             mention: "notes".to_string(),
                             kind: ComposerMentionBindingKind::Skill,
-                            path: "/Users/test/.threadex/worktrees/loom/feature/notes.md"
+                            path: "/Users/test/.threadex/worktrees/skein/feature/notes.md"
                                 .to_string(),
                             start: 0,
                             end: 6,
@@ -910,8 +1001,11 @@ mod tests {
 
         database
             .normalize_workspace_paths(
-                Path::new("/Users/test/.threadex"),
-                Path::new("/Users/test/.loom"),
+                &[
+                    Path::new("/Users/test/.threadex").to_path_buf(),
+                    Path::new("/Users/test/.loom").to_path_buf(),
+                ],
+                Path::new("/Users/test/.skein"),
             )
             .expect("path migration should succeed");
 
@@ -949,13 +1043,16 @@ mod tests {
 
         assert_eq!(
             project_root,
-            "/Users/test/.loom/worktrees/loom/project-root"
+            "/Users/test/.skein/worktrees/skein/project-root"
         );
-        assert_eq!(environment_path, "/Users/test/.loom/worktrees/loom/feature");
+        assert_eq!(
+            environment_path,
+            "/Users/test/.skein/worktrees/skein/feature"
+        );
         assert_eq!(
             draft.images,
             vec![ConversationImageAttachment::LocalImage {
-                path: "/Users/test/.loom/worktrees/loom/feature/screenshot.png".to_string(),
+                path: "/Users/test/.skein/worktrees/skein/feature/screenshot.png".to_string(),
             }]
         );
         assert_eq!(
@@ -963,7 +1060,7 @@ mod tests {
             vec![ComposerDraftMentionBinding {
                 mention: "notes".to_string(),
                 kind: ComposerMentionBindingKind::Skill,
-                path: "/Users/test/.loom/worktrees/loom/feature/notes.md".to_string(),
+                path: "/Users/test/.skein/worktrees/skein/feature/notes.md".to_string(),
                 start: 0,
                 end: 6,
             }]

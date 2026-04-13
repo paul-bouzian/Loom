@@ -323,7 +323,7 @@ fn write_log_header(
     shell: &ScriptShell,
     cwd: &Path,
 ) -> std::io::Result<()> {
-    writeln!(file, "Loom worktree script")?;
+    writeln!(file, "Skein worktree script")?;
     writeln!(
         file,
         "started_at={}",
@@ -345,20 +345,25 @@ fn write_log_header(
 }
 
 fn apply_script_environment(command: &mut Command, request: &WorktreeScriptRequest) {
-    command.env("LOOM_SCRIPT_TRIGGER", trigger_value(request.trigger));
-    command.env("LOOM_PROJECT_ID", &request.project_id);
-    command.env("LOOM_PROJECT_NAME", &request.project_name);
-    command.env(
-        "LOOM_PROJECT_ROOT",
-        request.project_root.to_string_lossy().to_string(),
-    );
-    command.env("LOOM_WORKTREE_ID", &request.worktree_id);
-    command.env("LOOM_WORKTREE_NAME", &request.worktree_name);
-    command.env("LOOM_WORKTREE_BRANCH", &request.worktree_branch);
-    command.env(
-        "LOOM_WORKTREE_PATH",
-        request.worktree_path.to_string_lossy().to_string(),
-    );
+    let script_trigger = trigger_value(request.trigger);
+    let project_root = request.project_root.to_string_lossy().to_string();
+    let worktree_path = request.worktree_path.to_string_lossy().to_string();
+
+    // Keep the legacy namespace available for one transition release because
+    // these scripts are persisted user settings and are not auto-migrated.
+    for prefix in ["SKEIN", "LOOM"] {
+        command.env(format!("{prefix}_SCRIPT_TRIGGER"), script_trigger);
+        command.env(format!("{prefix}_PROJECT_ID"), &request.project_id);
+        command.env(format!("{prefix}_PROJECT_NAME"), &request.project_name);
+        command.env(format!("{prefix}_PROJECT_ROOT"), &project_root);
+        command.env(format!("{prefix}_WORKTREE_ID"), &request.worktree_id);
+        command.env(format!("{prefix}_WORKTREE_NAME"), &request.worktree_name);
+        command.env(
+            format!("{prefix}_WORKTREE_BRANCH"),
+            &request.worktree_branch,
+        );
+        command.env(format!("{prefix}_WORKTREE_PATH"), &worktree_path);
+    }
 }
 
 fn append_log_footer(path: &Path, completion: &WorktreeScriptCompletion) -> std::io::Result<()> {
@@ -451,11 +456,13 @@ fn short_identifier(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        execution_directory, failure_message, normalize_script, resolve_script_shell,
-        timeout_message, trigger_value, WorktreeScriptRequest,
+        apply_script_environment, execution_directory, failure_message, normalize_script,
+        resolve_script_shell, timeout_message, trigger_value, WorktreeScriptRequest,
     };
     use crate::domain::workspace::WorktreeScriptTrigger;
+    use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::time::Duration;
 
     fn sample_request(trigger: WorktreeScriptTrigger) -> WorktreeScriptRequest {
@@ -463,7 +470,7 @@ mod tests {
             trigger,
             script: "echo hi".to_string(),
             project_id: "project-1".to_string(),
-            project_name: "Loom".to_string(),
+            project_name: "Skein".to_string(),
             project_root: PathBuf::from("/tmp/project"),
             worktree_id: "env-1".to_string(),
             worktree_name: "fuzzy-tiger".to_string(),
@@ -518,5 +525,61 @@ mod tests {
         );
         #[cfg(not(target_os = "windows"))]
         assert!(shell.path.is_absolute());
+    }
+
+    #[test]
+    fn apply_script_environment_sets_skein_and_legacy_variables() {
+        let request = sample_request(WorktreeScriptTrigger::Setup);
+        let mut command = Command::new("env");
+
+        apply_script_environment(&mut command, &request);
+
+        let envs = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().to_string(),
+                    value
+                        .expect("script env vars should be assigned")
+                        .to_string_lossy()
+                        .to_string(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        for prefix in ["SKEIN", "LOOM"] {
+            assert_eq!(
+                envs.get(&format!("{prefix}_SCRIPT_TRIGGER")),
+                Some(&"setup".to_string())
+            );
+            assert_eq!(
+                envs.get(&format!("{prefix}_PROJECT_ID")),
+                Some(&request.project_id)
+            );
+            assert_eq!(
+                envs.get(&format!("{prefix}_PROJECT_NAME")),
+                Some(&request.project_name)
+            );
+            assert_eq!(
+                envs.get(&format!("{prefix}_PROJECT_ROOT")),
+                Some(&request.project_root.to_string_lossy().to_string())
+            );
+            assert_eq!(
+                envs.get(&format!("{prefix}_WORKTREE_ID")),
+                Some(&request.worktree_id)
+            );
+            assert_eq!(
+                envs.get(&format!("{prefix}_WORKTREE_NAME")),
+                Some(&request.worktree_name)
+            );
+            assert_eq!(
+                envs.get(&format!("{prefix}_WORKTREE_BRANCH")),
+                Some(&request.worktree_branch)
+            );
+            assert_eq!(
+                envs.get(&format!("{prefix}_WORKTREE_PATH")),
+                Some(&request.worktree_path.to_string_lossy().to_string())
+            );
+        }
     }
 }

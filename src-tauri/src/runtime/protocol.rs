@@ -1,3 +1,4 @@
+use crate::app_identity::APP_NAME;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 
@@ -614,7 +615,7 @@ pub fn parse_incoming_message(line: &str) -> AppResult<IncomingMessage> {
 pub fn initialize_params(version: &str) -> Value {
     json!(InitializeParams {
         client_info: ClientInfo {
-            name: "Loom".to_string(),
+            name: APP_NAME.to_string(),
             version: version.to_string(),
         },
         capabilities: InitializeCapabilities {
@@ -1226,7 +1227,7 @@ pub fn normalize_item(turn_id: Option<&str>, value: &Value) -> Option<Conversati
             turn_id,
             tone: ConversationTone::Info,
             title: "Unsupported item".to_string(),
-            body: format!("Loom recorded the `{other}` item without a dedicated renderer."),
+            body: format!("{APP_NAME} recorded the `{other}` item without a dedicated renderer."),
         })),
     }
 }
@@ -1394,8 +1395,9 @@ pub fn normalize_server_interaction(
                     item_id,
                     title: "Interactive request not supported yet".to_string(),
                     message: format!(
-                        "`{}` is visible in Loom, but responding to it is part of the next milestone.",
-                        request.method
+                        "`{}` is visible in {}, but responding to it is part of the next milestone.",
+                        request.method,
+                        APP_NAME
                     ),
                 },
             ))
@@ -2333,7 +2335,7 @@ mod tests {
                             "placeholder": "/prompts:debug(\"boom\")"
                         }]
                     },
-                    { "type": "skill", "name": "loom-standards", "path": "/tmp/skill" },
+                    { "type": "skill", "name": "skein-standards", "path": "/tmp/skill" },
                     { "type": "mention", "name": "github", "path": "app://github" }
                 ]
             }),
