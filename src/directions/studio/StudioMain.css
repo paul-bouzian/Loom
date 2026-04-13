@@ -89,7 +89,7 @@
   background: var(--tx-bg-raised);
   border-top: 1px solid var(--tx-border-subtle);
   overflow: hidden;
-  transition: height 250ms cubic-bezier(0.22, 1, 0.36, 1), border-color 250ms ease;
+  transition: height 250ms var(--tx-ease-spring), border-color 250ms ease;
 }
 
 .studio-main__terminal--hidden {

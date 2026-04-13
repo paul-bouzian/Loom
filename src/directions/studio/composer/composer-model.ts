@@ -13,6 +13,7 @@ const SPACE_APPEND_STOP = /[\s,.;:!?)}\]>"'`]/;
 function formatSlugLabel(slug: string): string {
   return slug
     .split(/[-_:]+/)
+    .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 }

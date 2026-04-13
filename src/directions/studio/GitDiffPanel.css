@@ -36,6 +36,12 @@
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .git-diff-panel {
+    animation: none;
+  }
+}
+
 .git-diff-panel__header {
   display: flex;
   align-items: center;
