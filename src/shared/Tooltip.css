@@ -7,6 +7,8 @@
   position: fixed;
   z-index: 99998;
   --tx-tooltip-viewport-margin: 12px;
+  box-sizing: border-box;
+
   max-width: min(240px, calc(100vw - (var(--tx-tooltip-viewport-margin) * 2)));
   padding: 5px 10px;
   border-radius: var(--tx-radius-sm);

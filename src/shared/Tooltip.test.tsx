@@ -4,9 +4,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Tooltip } from "./Tooltip";
 
+const ORIGINAL_VIEWPORT = {
+  width: window.innerWidth,
+  height: window.innerHeight,
+};
+
 describe("Tooltip", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    setViewportSize(ORIGINAL_VIEWPORT.width, ORIGINAL_VIEWPORT.height);
   });
 
   it("keeps the tooltip fully visible near the left viewport edge", async () => {
@@ -69,6 +75,46 @@ describe("Tooltip", () => {
       });
     });
   });
+
+  it("recomputes its position when the reposition key changes while open", async () => {
+    setViewportSize(320, 240);
+    let anchorRect = createRect({ left: 150, top: 100, width: 40, height: 20 });
+    mockTooltipLayout({
+      getAnchorRect: () => anchorRect,
+      tooltipRect: createRect({ left: 0, top: 0, width: 140, height: 32 }),
+    });
+
+    const { rerender } = render(
+      <Tooltip content="Fast mode" delay={0} repositionKey="initial">
+        <button type="button">Trigger</button>
+      </Tooltip>,
+    );
+    const user = userEvent.setup();
+
+    await user.hover(screen.getByRole("button", { name: "Trigger" }));
+
+    const tooltip = await screen.findByRole("tooltip");
+    await waitFor(() => {
+      expect(tooltip).toHaveStyle({
+        left: "100px",
+        top: "62px",
+      });
+    });
+
+    anchorRect = createRect({ left: 24, top: 100, width: 24, height: 24 });
+    rerender(
+      <Tooltip content="Fast mode" delay={0} repositionKey="updated">
+        <button type="button">Trigger</button>
+      </Tooltip>,
+    );
+
+    await waitFor(() => {
+      expect(tooltip).toHaveStyle({
+        left: "12px",
+        top: "62px",
+      });
+    });
+  });
 });
 
 function setViewportSize(width: number, height: number) {
@@ -86,16 +132,18 @@ function setViewportSize(width: number, height: number) {
 
 function mockTooltipLayout({
   anchorRect,
+  getAnchorRect,
   tooltipRect,
 }: {
-  anchorRect: DOMRectReadOnly;
+  anchorRect?: DOMRectReadOnly;
+  getAnchorRect?: () => DOMRectReadOnly;
   tooltipRect: DOMRectReadOnly;
 }) {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
     this: HTMLElement,
   ) {
     if (this.classList.contains("tx-tooltip-anchor")) {
-      return anchorRect;
+      return getAnchorRect ? getAnchorRect() : anchorRect!;
     }
     if (this.classList.contains("tx-tooltip")) {
       return tooltipRect;

@@ -10,9 +10,16 @@ type Props = {
   children: ReactNode;
   side?: "top" | "bottom";
   delay?: number;
+  repositionKey?: unknown;
 };
 
-export function Tooltip({ content, children, side = "top", delay = 200 }: Props) {
+export function Tooltip({
+  content,
+  children,
+  side = "top",
+  delay = 200,
+  repositionKey,
+}: Props) {
   const [visible, setVisible] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const anchorRef = useRef<HTMLSpanElement | null>(null);
@@ -23,7 +30,7 @@ export function Tooltip({ content, children, side = "top", delay = 200 }: Props)
     open: visible,
     preferredSide: side,
     gapPx: 6,
-    repositionKey: content,
+    repositionKey: repositionKey ?? content,
   });
 
   useEffect(() => {
