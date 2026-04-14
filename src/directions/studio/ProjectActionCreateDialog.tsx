@@ -45,6 +45,7 @@ export function ProjectActionCreateDialog({
   const dialogRef = useRef<HTMLElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const savingRef = useRef(saving);
+  const onCloseRef = useRef(onClose);
   const projectId = project?.id ?? null;
 
   useEffect(() => {
@@ -61,6 +62,10 @@ export function ProjectActionCreateDialog({
   useEffect(() => {
     savingRef.current = saving;
   }, [saving]);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open || !projectId) {
@@ -86,7 +91,7 @@ export function ProjectActionCreateDialog({
         }
 
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
       });
     }
 
@@ -102,7 +107,7 @@ export function ProjectActionCreateDialog({
         previousFocusRef.current.focus();
       }
     };
-  }, [onClose, open, projectId]);
+  }, [open, projectId]);
 
   const issues = useMemo(() => {
     if (!project) {

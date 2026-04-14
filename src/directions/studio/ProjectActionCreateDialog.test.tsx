@@ -40,12 +40,13 @@ describe("ProjectActionCreateDialog", () => {
     await user.click(labelInput);
     expect(labelInput).toHaveFocus();
 
+    const refreshedOnClose = vi.fn();
     rerender(
       <ProjectActionCreateDialog
         open
         project={makeProject({ id: "project-1", name: "Skein" })}
         shortcutSettings={{}}
-        onClose={onClose}
+        onClose={refreshedOnClose}
       />,
     );
 
@@ -55,6 +56,8 @@ describe("ProjectActionCreateDialog", () => {
       expect(labelInput).toHaveFocus();
     });
 
+    expect(onClose).not.toHaveBeenCalled();
+    expect(refreshedOnClose).not.toHaveBeenCalled();
     opener.remove();
   });
 
