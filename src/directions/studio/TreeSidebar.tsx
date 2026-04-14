@@ -171,7 +171,12 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   async function handleCreateThreadForEnvironment(environmentId: string) {
     resetMessages();
     try {
-      await createThreadForEnvironment(environmentId);
+      const created = await createThreadForEnvironment(environmentId);
+      if (!created) {
+        setActionError(
+          "Thread created, but the workspace failed to refresh. Reload to see it.",
+        );
+      }
     } catch (cause: unknown) {
       setActionError(actionErrorMessage(cause, "Failed to create thread"));
     }
@@ -314,7 +319,11 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   async function handleArchiveThreadFromMenu(threadId: string) {
     setContextMenu(null);
     resetMessages();
-    await archiveThreadWithConfirmation(threadId);
+    try {
+      await archiveThreadWithConfirmation(threadId);
+    } catch (cause: unknown) {
+      setActionError(actionErrorMessage(cause, "Failed to archive thread"));
+    }
   }
 
   async function handleRemoveProject(projectId: string, projectName: string) {
