@@ -247,10 +247,7 @@ function isKnownEnvironment(
   knownEnvironmentIds: string[],
   environmentId: string,
 ) {
-  return (
-    knownEnvironmentIds.length === 0 ||
-    knownEnvironmentIds.includes(environmentId)
-  );
+  return knownEnvironmentIds.includes(environmentId);
 }
 
 async function killTerminalSession(ptyId: string) {
@@ -534,16 +531,17 @@ export const useTerminalStore = create<TerminalState>((set, get) => {
     },
 
     activateTab: (environmentId, id) => {
-      const existing = get().byEnv[environmentId];
-      if (!existing) return;
       set((state) => ({
-        byEnv: {
-          ...state.byEnv,
-          [environmentId]: {
-            ...existing,
-            activeTabId: id,
-          },
-        },
+        byEnv:
+          environmentId in state.byEnv
+            ? {
+                ...state.byEnv,
+                [environmentId]: {
+                  ...slotForEnvironment(state.byEnv, environmentId),
+                  activeTabId: id,
+                },
+              }
+            : state.byEnv,
       }));
     },
 

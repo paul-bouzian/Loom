@@ -54,7 +54,7 @@ beforeEach(() => {
   });
   useTerminalStore.setState({
     byEnv: {},
-    knownEnvironmentIds: [],
+    knownEnvironmentIds: [ENV_A, ENV_B],
   });
   let counter = 0;
   mockedBridge.spawnTerminal.mockImplementation(async ({ environmentId }) => {
@@ -232,6 +232,23 @@ describe("terminal-store", () => {
 
     useTerminalStore.getState().activateTab(ENV_A, a1);
     expect(slotForA().activeTabId).toBe(a1);
+  });
+
+  it("activateTab preserves the current tab state for the environment", async () => {
+    const actionTabId = await useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+    if (!actionTabId) {
+      throw new Error("expected action tab id");
+    }
+
+    useTerminalStore.getState().markExited("pty-1");
+    useTerminalStore.getState().activateTab(ENV_A, actionTabId);
+
+    expect(slotForA().tabs[0]?.exited).toBe(true);
+    expect(slotForA().activeTabId).toBe(actionTabId);
   });
 
   it("setHeight clamps below MIN_HEIGHT and above 0.8 * window.innerHeight", () => {
@@ -563,6 +580,58 @@ describe("terminal-store", () => {
     await expect(openPromise).resolves.toBeNull();
     expect(mockedBridge.killTerminal).toHaveBeenCalledWith({
       ptyId: "pty-pending",
+    });
+    expect(useTerminalStore.getState().byEnv[ENV_A]).toBeUndefined();
+  });
+
+  it("kills the PTY if all environments disappear while openTab is in flight", async () => {
+    let resolveSpawn: (value: { ptyId: string; cwd: string }) => void = () => {};
+    const pendingSpawn = new Promise<{ ptyId: string; cwd: string }>((resolve) => {
+      resolveSpawn = resolve;
+    });
+    mockedBridge.spawnTerminal.mockImplementationOnce(() => pendingSpawn);
+    useTerminalStore.getState().reconcileEnvironments([ENV_A]);
+
+    const openPromise = useTerminalStore.getState().openTab(ENV_A);
+    useTerminalStore.getState().reconcileEnvironments([]);
+    resolveSpawn({ ptyId: "pty-empty", cwd: `/path/to/${ENV_A}` });
+
+    await expect(openPromise).resolves.toBeNull();
+    expect(mockedBridge.killTerminal).toHaveBeenCalledWith({
+      ptyId: "pty-empty",
+    });
+    expect(useTerminalStore.getState().byEnv[ENV_A]).toBeUndefined();
+  });
+
+  it("kills the PTY if all environments disappear while an action tab is launching", async () => {
+    let resolveRun: (
+      value: Awaited<ReturnType<typeof bridge.runProjectAction>>,
+    ) => void = () => {};
+    const pendingRun = new Promise<Awaited<ReturnType<typeof bridge.runProjectAction>>>(
+      (resolve) => {
+        resolveRun = resolve;
+      },
+    );
+    mockedBridge.runProjectAction.mockImplementationOnce(() => pendingRun);
+    useTerminalStore.getState().reconcileEnvironments([ENV_A]);
+
+    const openPromise = useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+    useTerminalStore.getState().reconcileEnvironments([]);
+    resolveRun({
+      ptyId: "pty-action-empty",
+      cwd: `/path/to/${ENV_A}`,
+      actionId: "dev",
+      actionLabel: "Dev",
+      actionIcon: "play",
+    });
+
+    await expect(openPromise).resolves.toBeNull();
+    expect(mockedBridge.killTerminal).toHaveBeenCalledWith({
+      ptyId: "pty-action-empty",
     });
     expect(useTerminalStore.getState().byEnv[ENV_A]).toBeUndefined();
   });
