@@ -50,7 +50,19 @@ enum RuntimeReadTarget {
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeUsageUpdate {
     pub environment_id: String,
+    pub environment_path: String,
+    pub codex_binary_path: Option<String>,
     pub rate_limits: Value,
+}
+
+impl RuntimeUsageUpdate {
+    fn confirmation_fallback(&self) -> UsageConfirmationFallback {
+        UsageConfirmationFallback {
+            environment_id: self.environment_id.clone(),
+            environment_path: self.environment_path.clone(),
+            codex_binary_path: self.codex_binary_path.clone(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -680,6 +692,7 @@ fn spawn_usage_update_task(
 ) {
     tauri::async_runtime::spawn(async move {
         while let Some(update) = usage_update_rx.recv().await {
+            let confirmation_fallback = update.confirmation_fallback();
             let apply_result = match apply_account_usage_patch(
                 &account_usage,
                 update.rate_limits,
@@ -704,7 +717,7 @@ fn spawn_usage_update_task(
                 &registry,
                 &account_usage,
                 apply_result.confirmation_requested,
-                None,
+                Some(confirmation_fallback),
             );
         }
     });
@@ -749,11 +762,6 @@ async fn apply_account_usage_patch_struct(
     let mut usage = account_usage.lock().await;
     let previous = usage.snapshot.clone();
     let merge_result = merge_account_usage_snapshot(previous.as_ref(), &patch);
-    if previous.is_none() && usage_snapshot_is_empty(&merge_result.snapshot) {
-        return Err(AppError::Runtime(
-            "Codex usage update did not produce a usable snapshot.".to_string(),
-        ));
-    }
 
     let changed = previous.as_ref() != Some(&merge_result.snapshot);
     usage.snapshot = Some(merge_result.snapshot.clone());
@@ -872,15 +880,12 @@ async fn read_usage_confirmation_snapshot(
 async fn latest_running_usage_source(
     registry: &Arc<Mutex<RuntimeRegistry>>,
 ) -> Option<(String, Arc<RuntimeSession>)> {
-    let mut registry = registry.lock().await;
-    let environment_id = registry
+    let registry = registry.lock().await;
+    registry
         .running
         .iter()
         .max_by_key(|(_, runtime)| runtime.last_activity_at)
-        .map(|(environment_id, _)| environment_id.clone())?;
-    let runtime = registry.running.get_mut(&environment_id)?;
-    runtime.last_activity_at = Utc::now();
-    Some((environment_id, runtime.session.clone()))
+        .map(|(environment_id, runtime)| (environment_id.clone(), runtime.session.clone()))
 }
 
 fn emit_account_usage_event(
@@ -1111,6 +1116,7 @@ fn usage_window_context(snapshot: &CodexRateLimitSnapshot) -> UsageWindowContext
     }
 }
 
+#[cfg(test)]
 fn usage_snapshot_is_empty(snapshot: &CodexRateLimitSnapshot) -> bool {
     snapshot.credits.is_none()
         && snapshot.limit_id.is_none()
@@ -1285,7 +1291,7 @@ mod tests {
         resolve_binary_path, should_stop_idle_runtime_candidate, touch_running_runtime,
         usage_snapshot_is_empty, usage_snapshot_patch_from_snapshot, AccountUsageState,
         AppServerAuthStatus, CodexRateLimitSnapshotPatch, RunningRuntime, RuntimeReadTarget,
-        RuntimeRegistry, UsageUpdateOrigin,
+        RuntimeRegistry, RuntimeUsageUpdate, UsageUpdateOrigin,
     };
     use crate::domain::conversation::{
         ConversationComposerSettings, ConversationMessageItem, ConversationRole,
@@ -1926,6 +1932,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apply_account_usage_snapshot_accepts_an_empty_initial_snapshot() {
+        let account_usage = Arc::new(Mutex::new(AccountUsageState::default()));
+        let result = apply_account_usage_snapshot(
+            &account_usage,
+            make_rate_limit_snapshot(None, None, None),
+            UsageUpdateOrigin::ManualRead,
+        )
+        .await
+        .expect("empty initial snapshot should apply");
+
+        assert!(result.changed);
+        assert!(usage_snapshot_is_empty(&result.snapshot));
+        assert!(account_usage
+            .lock()
+            .await
+            .snapshot
+            .as_ref()
+            .is_some_and(usage_snapshot_is_empty));
+    }
+
+    #[tokio::test]
     async fn repeated_ambiguous_regressions_only_request_one_confirmation() {
         let account_usage = Arc::new(Mutex::new(AccountUsageState::default()));
         apply_account_usage_snapshot(
@@ -1992,6 +2019,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn runtime_usage_update_preserves_confirmation_fallback_context() {
+        let update = RuntimeUsageUpdate {
+            environment_id: "env-1".to_string(),
+            environment_path: "/tmp/skein".to_string(),
+            codex_binary_path: Some("/opt/homebrew/bin/codex".to_string()),
+            rate_limits: json!({}),
+        };
+
+        let fallback = update.confirmation_fallback();
+
+        assert_eq!(fallback.environment_id, "env-1");
+        assert_eq!(fallback.environment_path, "/tmp/skein");
+        assert_eq!(
+            fallback.codex_binary_path.as_deref(),
+            Some("/opt/homebrew/bin/codex")
+        );
+    }
+
     #[tokio::test]
     async fn latest_running_usage_source_prefers_the_most_recent_runtime() {
         let older = Utc
@@ -2026,6 +2072,41 @@ mod tests {
             .expect("latest runtime should be selected");
 
         assert_eq!(selected.0, "env-new");
+    }
+
+    #[tokio::test]
+    async fn latest_running_usage_source_does_not_touch_last_activity() {
+        let activity_at = Utc
+            .with_ymd_and_hms(2026, 4, 12, 10, 5, 0)
+            .single()
+            .expect("valid timestamp");
+        let mut registry = RuntimeRegistry::default();
+        registry.running.insert(
+            "env-1".to_string(),
+            RunningRuntime {
+                session: Arc::new(RuntimeSession::from_snapshot_for_test(
+                    make_completed_snapshot(),
+                )),
+                status: make_runtime_status("env-1"),
+                last_activity_at: activity_at,
+            },
+        );
+        let registry = Arc::new(Mutex::new(registry));
+
+        let selected = latest_running_usage_source(&registry)
+            .await
+            .expect("latest runtime should be selected");
+
+        assert_eq!(selected.0, "env-1");
+        assert_eq!(
+            registry
+                .lock()
+                .await
+                .running
+                .get("env-1")
+                .map(|runtime| runtime.last_activity_at),
+            Some(activity_at)
+        );
     }
 
     #[derive(Clone, Debug)]

@@ -190,6 +190,12 @@ pub struct AppServerAuthStatus {
     pub requires_openai_auth: Option<bool>,
 }
 
+#[derive(Debug, Clone)]
+struct UsageUpdateContext {
+    environment_path: String,
+    codex_binary_path: Option<String>,
+}
+
 pub struct RuntimeSession {
     app: Option<AppHandle>,
     environment_id: String,
@@ -275,6 +281,10 @@ impl RuntimeSession {
         Self::from_transport(
             app,
             environment_id,
+            UsageUpdateContext {
+                environment_path: environment_path.clone(),
+                codex_binary_path: Some(binary_path.clone()),
+            },
             app_version,
             stream_assistant_responses,
             usage_updates,
@@ -291,7 +301,7 @@ impl RuntimeSession {
     #[cfg(test)]
     pub(crate) async fn from_test_transport<R, W>(
         environment_id: String,
-        _environment_path: String,
+        environment_path: String,
         app_version: String,
         stream_assistant_responses: bool,
         writer: W,
@@ -304,6 +314,10 @@ impl RuntimeSession {
         Self::from_transport(
             None,
             environment_id,
+            UsageUpdateContext {
+                environment_path,
+                codex_binary_path: None,
+            },
             app_version,
             stream_assistant_responses,
             None,
@@ -344,6 +358,7 @@ impl RuntimeSession {
     async fn from_transport<R, E>(
         app: Option<AppHandle>,
         environment_id: String,
+        usage_update_context: UsageUpdateContext,
         app_version: String,
         stream_assistant_responses: bool,
         usage_updates: Option<mpsc::UnboundedSender<RuntimeUsageUpdate>>,
@@ -363,6 +378,7 @@ impl RuntimeSession {
         let stdout_task = spawn_stdout_task(
             app.clone(),
             environment_id.clone(),
+            usage_update_context,
             pending.clone(),
             state.clone(),
             usage_updates,
@@ -1605,6 +1621,7 @@ impl RuntimeSession {
 fn spawn_stdout_task<R>(
     app: Option<AppHandle>,
     environment_id: String,
+    usage_update_context: UsageUpdateContext,
     pending: PendingRequestMap,
     state: Arc<Mutex<SessionState>>,
     usage_updates: Option<mpsc::UnboundedSender<RuntimeUsageUpdate>>,
@@ -1634,6 +1651,8 @@ where
                             &app,
                             &state,
                             &environment_id,
+                            &usage_update_context.environment_path,
+                            usage_update_context.codex_binary_path.as_deref(),
                             &usage_updates,
                             notification,
                         )
@@ -1716,6 +1735,8 @@ async fn handle_notification(
     app: &Option<AppHandle>,
     state: &Arc<Mutex<SessionState>>,
     environment_id: &str,
+    environment_path: &str,
+    codex_binary_path: Option<&str>,
     usage_updates: &Option<mpsc::UnboundedSender<RuntimeUsageUpdate>>,
     notification: crate::runtime::protocol::ServerNotificationEnvelope,
 ) {
@@ -2172,7 +2193,13 @@ async fn handle_notification(
             }
         }
         "account/rateLimits/updated" => {
-            emit_usage_update_from_params(usage_updates, environment_id, &notification.params);
+            emit_usage_update_from_params(
+                usage_updates,
+                environment_id,
+                environment_path,
+                codex_binary_path,
+                &notification.params,
+            );
         }
         "error" => {
             if let Ok(event) = serde_json::from_value::<ErrorNotification>(notification.params) {
@@ -2737,12 +2764,16 @@ impl ConversationItemSnapshotExt for ConversationItem {
 fn emit_usage_update_from_params(
     usage_updates: &Option<mpsc::UnboundedSender<RuntimeUsageUpdate>>,
     environment_id: &str,
+    environment_path: &str,
+    codex_binary_path: Option<&str>,
     params: &Value,
 ) {
     let Some(usage_updates) = usage_updates.as_ref() else {
         return;
     };
-    let Some(update) = usage_update_payload(environment_id, params) else {
+    let Some(update) =
+        usage_update_payload(environment_id, environment_path, codex_binary_path, params)
+    else {
         return;
     };
     if let Err(error) = usage_updates.send(update) {
@@ -2750,10 +2781,17 @@ fn emit_usage_update_from_params(
     }
 }
 
-fn usage_update_payload(environment_id: &str, params: &Value) -> Option<RuntimeUsageUpdate> {
+fn usage_update_payload(
+    environment_id: &str,
+    environment_path: &str,
+    codex_binary_path: Option<&str>,
+    params: &Value,
+) -> Option<RuntimeUsageUpdate> {
     let rate_limits = params.get("rateLimits")?.clone();
     Some(RuntimeUsageUpdate {
         environment_id: environment_id.to_string(),
+        environment_path: environment_path.to_string(),
+        codex_binary_path: codex_binary_path.map(str::to_string),
         rate_limits,
     })
 }
@@ -3223,6 +3261,8 @@ mod tests {
             &None,
             &state,
             "env-1",
+            "/tmp/skein",
+            Some("/opt/homebrew/bin/codex"),
             &None,
             crate::runtime::protocol::ServerNotificationEnvelope {
                 method: "item/started".to_string(),
@@ -3389,6 +3429,8 @@ mod tests {
     fn usage_update_payload_preserves_partial_rate_limit_updates() {
         let payload = usage_update_payload(
             "env-1",
+            "/tmp/skein",
+            Some("/opt/homebrew/bin/codex"),
             &serde_json::json!({
                 "rateLimits": {
                     "primary": {
@@ -3400,6 +3442,11 @@ mod tests {
         .expect("rate limits payload should be emitted");
 
         assert_eq!(payload.environment_id, "env-1");
+        assert_eq!(payload.environment_path, "/tmp/skein");
+        assert_eq!(
+            payload.codex_binary_path.as_deref(),
+            Some("/opt/homebrew/bin/codex")
+        );
         assert_eq!(
             payload.rate_limits["primary"]["resetsAt"],
             serde_json::json!(1_775_306_400)
@@ -3410,7 +3457,13 @@ mod tests {
 
     #[test]
     fn usage_update_payload_requires_rate_limits_object() {
-        assert!(usage_update_payload("env-1", &serde_json::json!({})).is_none());
+        assert!(usage_update_payload(
+            "env-1",
+            "/tmp/skein",
+            Some("/opt/homebrew/bin/codex"),
+            &serde_json::json!({})
+        )
+        .is_none());
     }
 
     #[tokio::test]
@@ -3455,6 +3508,8 @@ mod tests {
             &None,
             &state,
             "env-1",
+            "/tmp/skein",
+            Some("/opt/homebrew/bin/codex"),
             &None,
             crate::runtime::protocol::ServerNotificationEnvelope {
                 method: "item/reasoning/summaryTextDelta".to_string(),
@@ -3471,6 +3526,8 @@ mod tests {
             &None,
             &state,
             "env-1",
+            "/tmp/skein",
+            Some("/opt/homebrew/bin/codex"),
             &None,
             crate::runtime::protocol::ServerNotificationEnvelope {
                 method: "item/commandExecution/outputDelta".to_string(),
