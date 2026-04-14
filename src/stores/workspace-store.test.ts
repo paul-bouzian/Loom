@@ -2,7 +2,7 @@ import { act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as bridge from "../lib/bridge";
-import type { WorkspaceEventPayload } from "../lib/types";
+import type { ProjectManualAction, WorkspaceEventPayload } from "../lib/types";
 import {
   makeEnvironment,
   makeGlobalSettings,
@@ -682,41 +682,63 @@ describe("workspace store", () => {
   });
 
   it("returns a warning when project settings save succeeds but refresh fails", async () => {
+    const expectedManualActions: ProjectManualAction[] = [
+      {
+        id: "dev",
+        label: "Dev",
+        icon: "play",
+        script: "bun run dev",
+        shortcut: null,
+      },
+    ];
+    const pullRequest = {
+      number: 66,
+      title: "studio: add inline project action creation from the toolbar",
+      url: "https://github.com/paul-bouzian/Skein/pull/66",
+      state: "open" as const,
+    };
     mockedBridge.updateProjectSettings.mockResolvedValue(
       makeProject({
         settings: {
           worktreeSetupScript: undefined,
           worktreeTeardownScript: undefined,
-          manualActions: [
-            {
-              id: "dev",
-              label: "Dev",
-              icon: "play",
-              script: "bun run dev",
-              shortcut: null,
-            },
-          ],
+          manualActions: expectedManualActions,
         },
+        environments: [
+          makeEnvironment({
+            runtime: {
+              environmentId: "env-1",
+              state: "stopped",
+              pid: undefined,
+              binaryPath: undefined,
+              startedAt: undefined,
+              lastExitCode: 1,
+            },
+            pullRequest: undefined,
+          }),
+        ],
       }),
     );
     useWorkspaceStore.setState((state) => ({
       ...state,
-      snapshot: makeWorkspaceSnapshot(),
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                pullRequest,
+              }),
+            ],
+          }),
+        ],
+      }),
       refreshSnapshot: vi.fn(async () => false),
     }));
 
     const result = await useWorkspaceStore.getState().updateProjectSettings("project-1", {
       worktreeSetupScript: null,
       worktreeTeardownScript: null,
-      manualActions: [
-        {
-          id: "dev",
-          label: "Dev",
-          icon: "play",
-          script: "bun run dev",
-          shortcut: null,
-        },
-      ],
+      manualActions: expectedManualActions,
     });
 
     expect(result).toEqual({
@@ -729,18 +751,35 @@ describe("workspace store", () => {
         settings: {
           worktreeSetupScript: undefined,
           worktreeTeardownScript: undefined,
-          manualActions: [
-            {
-              id: "dev",
-              label: "Dev",
-              icon: "play",
-              script: "bun run dev",
-              shortcut: null,
-            },
-          ],
+          manualActions: expectedManualActions,
         },
+        environments: [
+          makeEnvironment({
+            runtime: {
+              environmentId: "env-1",
+              state: "stopped",
+              pid: undefined,
+              binaryPath: undefined,
+              startedAt: undefined,
+              lastExitCode: 1,
+            },
+            pullRequest: undefined,
+          }),
+        ],
       }),
     });
+    expect(
+      useWorkspaceStore.getState().snapshot?.projects[0]?.settings.manualActions,
+    ).toEqual(expectedManualActions);
+    expect(
+      useWorkspaceStore.getState().snapshot?.projects[0]?.environments[0]?.runtime.state,
+    ).toBe("running");
+    expect(
+      useWorkspaceStore.getState().snapshot?.projects[0]?.environments[0]?.pullRequest,
+    ).toEqual(pullRequest);
+    expect(useWorkspaceStore.getState().error).toBe(
+      "Project settings were saved, but the workspace snapshot could not be refreshed.",
+    );
   });
 
   it("debounces workspace refreshes when workspace events arrive in a burst", async () => {

@@ -44,6 +44,7 @@ export function ProjectActionFields({
                 className={`settings-project-action__icon-btn ${
                   selected ? "settings-project-action__icon-btn--selected" : ""
                 }`}
+                aria-pressed={selected}
                 disabled={disabled}
                 onClick={() => onUpdate({ ...action, icon: option.id })}
               >
@@ -107,7 +108,7 @@ export function ProjectActionFields({
             onFocus={onCaptureStart}
             onBlur={onCaptureEnd}
             onKeyDown={(event) => {
-              if (event.key === "Tab" && !event.shiftKey) {
+              if (event.key === "Tab") {
                 onCaptureEnd();
                 return;
               }

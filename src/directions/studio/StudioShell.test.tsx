@@ -30,19 +30,28 @@ const storageState = new Map<string, string>();
 vi.mock("./StudioMain", () => ({
   StudioMain: ({
     onOpenActionCreateDialog,
+    inspectorOpen,
+    onToggleInspector,
   }: {
     onOpenActionCreateDialog: () => void;
+    inspectorOpen: boolean;
+    onToggleInspector: () => void;
   }) => (
-    <div data-testid="studio-main">
+     <div data-testid="studio-main">
       <button type="button" onClick={onOpenActionCreateDialog}>
         Open action dialog
       </button>
-    </div>
-  ),
+       <button type="button" onClick={onToggleInspector}>
+         {inspectorOpen ? "Hide inspector" : "Show inspector"}
+       </button>
+     </div>
+   ),
 }));
 
 vi.mock("./InspectorPanel", () => ({
-  InspectorPanel: () => <div data-testid="inspector-panel" />,
+  InspectorPanel: ({ collapsed = false }: { collapsed?: boolean }) => (
+    <div data-testid="inspector-panel" data-collapsed={String(collapsed)} />
+  ),
 }));
 
 vi.mock("./GitDiffPanel", () => ({
@@ -263,6 +272,59 @@ describe("StudioShell", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+  });
+
+  it("starts with the review panel closed and opens it from the toolbar toggle", async () => {
+    render(<StudioShell />);
+
+    expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Show inspector" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show inspector" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+        "data-collapsed",
+        "false",
+      );
+    });
+    expect(screen.getByRole("button", { name: "Hide inspector" })).toBeInTheDocument();
+  });
+
+  it("toggles the review panel with the global shortcut", async () => {
+    render(<StudioShell />);
+
+    expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+
+    fireEvent.keyDown(window, {
+      key: "g",
+      ...primaryModifier(),
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+        "data-collapsed",
+        "false",
+      );
+    });
+
+    fireEvent.keyDown(window, {
+      key: "g",
+      ...primaryModifier(),
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+        "data-collapsed",
+        "true",
+      );
     });
   });
 
@@ -946,6 +1008,50 @@ describe("StudioShell", () => {
         shortcut: null,
       }),
     ]);
+  });
+
+  it("moves focus into the action dialog and restores it when the dialog closes", async () => {
+    render(<StudioShell />);
+
+    const opener = screen.getByRole("button", { name: "Open action dialog" });
+    await userEvent.click(opener);
+
+    const dialog = screen.getByRole("dialog", { name: "Add Action" });
+    await waitFor(() => {
+      expect(dialog).toHaveFocus();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(opener).toHaveFocus();
+    });
+  });
+
+  it("treats icon selection and shift-tab shortcut navigation accessibly", async () => {
+    const user = userEvent.setup();
+
+    render(<StudioShell />);
+
+    await user.click(screen.getByRole("button", { name: "Open action dialog" }));
+    const iconButtons = screen.getAllByRole("button").filter((button) =>
+      button.className.includes("settings-project-action__icon-btn"),
+    );
+
+    expect(iconButtons[0]).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(iconButtons[1]).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    const shortcutInput = screen.getByLabelText("Project action shortcut");
+    await user.click(shortcutInput);
+    await user.tab({ shift: true });
+
+    expect((shortcutInput as HTMLInputElement).value).toBe("Not set");
+    expect(screen.getByRole("button", { name: "Stop" })).toHaveFocus();
   });
 
   it("blocks studio action creation when the shortcut conflicts with global settings", async () => {

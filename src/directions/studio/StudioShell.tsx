@@ -46,7 +46,7 @@ function readTheme(): Theme {
 
 export function StudioShell() {
   const [projectsSidebarOpen, setProjectsSidebarOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [actionCreateProjectId, setActionCreateProjectId] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(readTheme);

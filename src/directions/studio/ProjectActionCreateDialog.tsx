@@ -1,5 +1,5 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { ProjectRecord, ShortcutSettings } from "../../lib/types";
@@ -33,6 +33,8 @@ export function ProjectActionCreateDialog({
   const [capturingShortcut, setCapturingShortcut] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -51,6 +53,8 @@ export function ProjectActionCreateDialog({
     }
 
     const previousOverflow = document.body.style.overflow;
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape" || saving) {
@@ -69,9 +73,15 @@ export function ProjectActionCreateDialog({
 
     document.body.style.overflow = "hidden";
     window.addEventListener("keydown", handleKeyDown);
+    queueMicrotask(() => {
+      dialogRef.current?.focus();
+    });
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
+      if (previousFocusRef.current?.isConnected) {
+        previousFocusRef.current.focus();
+      }
     };
   }, [onClose, open, saving]);
 
@@ -135,10 +145,12 @@ export function ProjectActionCreateDialog({
   return createPortal(
     <div className="project-action-create-dialog__backdrop" onClick={() => !saving && onClose()}>
       <section
+        ref={dialogRef}
         className="project-action-create-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="project-action-create-dialog-title"
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="project-action-create-dialog__header">

@@ -193,7 +193,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         project = await bridge.updateProjectSettings({ projectId, patch });
       },
       applySnapshot: (snapshot) =>
-        project ? replaceProjectInSnapshot(snapshot, project) : snapshot,
+        project ? mergeProjectSettingsIntoSnapshot(snapshot, project) : snapshot,
       writeFailureMessage: "Failed to save project settings",
       refreshFailureMessage:
         "Project settings were saved, but the workspace snapshot could not be refreshed.",
@@ -733,7 +733,7 @@ function setProjectSidebarCollapsedInSnapshot(
     : snapshot;
 }
 
-function replaceProjectInSnapshot(
+function mergeProjectSettingsIntoSnapshot(
   snapshot: WorkspaceSnapshot,
   project: ProjectRecord,
 ) {
@@ -744,7 +744,11 @@ function replaceProjectInSnapshot(
     }
 
     changed = true;
-    return project;
+    return {
+      ...candidate,
+      settings: project.settings,
+      updatedAt: project.updatedAt,
+    };
   });
 
   return changed
