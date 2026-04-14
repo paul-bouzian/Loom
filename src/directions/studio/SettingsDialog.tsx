@@ -6,8 +6,8 @@ import {
 } from "@tauri-apps/plugin-notification";
 
 import * as bridge from "../../lib/bridge";
-import type { GlobalSettingsPatch } from "../../lib/types";
 import { CodexSettingsTab } from "./CodexSettingsTab";
+import type { GlobalSettingsPatch, ProjectSettingsPatch } from "../../lib/types";
 import { ProjectSettingsTab } from "./ProjectSettingsTab";
 import { OpenInSettingsTab } from "./OpenInSettingsTab";
 import { ShortcutsSettingsTab } from "./ShortcutsSettingsTab";
@@ -197,10 +197,7 @@ export function SettingsDialog({ open, onClose }: Props) {
 
   async function handleProjectSave(
     projectId: string,
-    patch: {
-      worktreeSetupScript?: string | null;
-      worktreeTeardownScript?: string | null;
-    },
+    patch: ProjectSettingsPatch,
   ) {
     setActionError(null);
 
@@ -360,6 +357,7 @@ export function SettingsDialog({ open, onClose }: Props) {
               <ProjectSettingsTab
                 projects={projects}
                 selectedProjectId={selectedProjectId}
+                shortcutSettings={settings?.shortcuts ?? {}}
                 onSave={handleProjectSave}
               />
             ) : (
