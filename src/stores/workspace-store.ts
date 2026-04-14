@@ -905,17 +905,28 @@ function pickNeighborSlot(
 }
 
 /**
- * Compacts slots so that no "hole" sits above or to the left of a filled slot.
- * Empty rows are pulled up; within each row, the left cell is filled first.
- * Preserves the caller's relative row/col shape whenever the current layout
- * is already canonical.
+ * Normalize the slot map so it represents a canonical grid. The invariant
+ * we enforce is:
+ *
+ * - If any pane exists at all, `topLeft` is filled (the top row is never
+ *   empty while bottom has panes).
+ * - Within each row, filled cells shift to the left (no hole to the left of
+ *   a filled pane inside the same row).
+ *
+ * We deliberately allow `topRight === null` while `bottomRight !== null`:
+ * that arrangement represents a "1 pane at top (spans full width) + 2 panes
+ * split at the bottom" layout — `topLeft`'s `colSpan` is 2 when `topRight`
+ * is null, so the render covers the whole top row with no visual hole.
+ * Pulling `bottomRight` up to `topRight` would force a different 3-pane
+ * shape ("2 top split + 1 bottom span") and make panes jump vertically
+ * when a corner is closed, which is not what the user asks for with close.
  */
 function compactSlots(
   slots: Record<SlotKey, PaneSelection | null>,
 ): Record<SlotKey, PaneSelection | null> {
   let { topLeft: TL, topRight: TR, bottomLeft: BL, bottomRight: BR } = slots;
 
-  // Promote bottom row to top if top row is entirely empty.
+  // Promote the bottom row to the top when the top row is entirely empty.
   if (TL === null && TR === null && (BL !== null || BR !== null)) {
     TL = BL;
     TR = BR;
@@ -923,13 +934,11 @@ function compactSlots(
     BR = null;
   }
 
-  // Within the top row, shift the filled cell to TL when TL is empty.
+  // Within each row, shift the filled cell to the left cell when empty.
   if (TL === null && TR !== null) {
     TL = TR;
     TR = null;
   }
-
-  // Within the bottom row, shift the filled cell to BL when BL is empty.
   if (BL === null && BR !== null) {
     BL = BR;
     BR = null;
