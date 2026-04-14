@@ -44,6 +44,7 @@ export function ProjectActionCreateDialog({
   const [saveError, setSaveError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const savingRef = useRef(saving);
   const projectId = project?.id ?? null;
 
   useEffect(() => {
@@ -58,7 +59,11 @@ export function ProjectActionCreateDialog({
   }, [open, projectId]);
 
   useEffect(() => {
-    if (!open || !project) {
+    savingRef.current = saving;
+  }, [saving]);
+
+  useEffect(() => {
+    if (!open || !projectId) {
       return undefined;
     }
 
@@ -71,7 +76,7 @@ export function ProjectActionCreateDialog({
         trapDialogFocus(event, dialogRef.current);
         return;
       }
-      if (event.key !== "Escape" || saving) {
+      if (event.key !== "Escape" || savingRef.current) {
         return;
       }
 
@@ -97,7 +102,7 @@ export function ProjectActionCreateDialog({
         previousFocusRef.current.focus();
       }
     };
-  }, [onClose, open, project, saving]);
+  }, [onClose, open, projectId]);
 
   const issues = useMemo(() => {
     if (!project) {
@@ -131,29 +136,38 @@ export function ProjectActionCreateDialog({
 
     setSaving(true);
     setSaveError(null);
+    let shouldClose = false;
 
-    const result = await updateProjectSettings(currentProject.id, {
-      manualActions: [
-        ...(currentProject.settings.manualActions ?? []),
-        normalizeProjectActionDraft(draft),
-      ],
-    });
-
-    setSaving(false);
-    if (!result.ok) {
-      setSaveError(result.errorMessage ?? "Failed to save project settings");
-      return;
-    }
-    if (result.warningMessage) {
-      await message(result.warningMessage, {
-        title: "Project action",
-        kind: "warning",
+    try {
+      const result = await updateProjectSettings(currentProject.id, {
+        manualActions: [
+          ...(currentProject.settings.manualActions ?? []),
+          normalizeProjectActionDraft(draft),
+        ],
       });
-      onClose();
+
+      if (!result.ok) {
+        setSaveError(result.errorMessage ?? "Failed to save project settings");
+        return;
+      }
+      if (result.warningMessage) {
+        await message(result.warningMessage, {
+          title: "Project action",
+          kind: "warning",
+        });
+      }
+
+      shouldClose = true;
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Failed to save project settings");
       return;
+    } finally {
+      setSaving(false);
     }
 
-    onClose();
+    if (shouldClose) {
+      onClose();
+    }
   }
 
   return createPortal(

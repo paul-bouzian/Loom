@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeProject } from "../../test/fixtures/conversation";
+import { useWorkspaceStore } from "../../stores/workspace-store";
 import { ProjectActionCreateDialog } from "./ProjectActionCreateDialog";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -10,9 +11,19 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 describe("ProjectActionCreateDialog", () => {
-  it("keeps the draft intact when the backing project refreshes with the same id", async () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useWorkspaceStore.setState(useWorkspaceStore.getInitialState(), true);
+  });
+
+  it("keeps the draft intact and preserves focus when the backing project refreshes with the same id", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
+    const opener = document.createElement("button");
+    opener.type = "button";
+    opener.textContent = "Open";
+    document.body.appendChild(opener);
+    opener.focus();
     const initialProject = makeProject({ id: "project-1", name: "Skein" });
     const { rerender } = render(
       <ProjectActionCreateDialog
@@ -23,8 +34,11 @@ describe("ProjectActionCreateDialog", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Label"), "Dev");
+    const labelInput = screen.getByLabelText("Label");
+    await user.type(labelInput, "Dev");
     await user.type(screen.getByLabelText("Script"), "bun run dev");
+    await user.click(labelInput);
+    expect(labelInput).toHaveFocus();
 
     rerender(
       <ProjectActionCreateDialog
@@ -35,8 +49,13 @@ describe("ProjectActionCreateDialog", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Label")).toHaveValue("Dev");
+    expect(labelInput).toHaveValue("Dev");
     expect(screen.getByLabelText("Script")).toHaveValue("bun run dev");
+    await waitFor(() => {
+      expect(labelInput).toHaveFocus();
+    });
+
+    opener.remove();
   });
 
   it("cleans up focus and body scroll lock when the backing project disappears", async () => {
@@ -79,5 +98,37 @@ describe("ProjectActionCreateDialog", () => {
     expect(onClose).not.toHaveBeenCalled();
 
     opener.remove();
+  });
+
+  it("recovers when saving the action rejects", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const updateProjectSettings = vi.fn().mockRejectedValue(new Error("Save exploded"));
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      updateProjectSettings,
+    }));
+
+    render(
+      <ProjectActionCreateDialog
+        open
+        project={makeProject({ id: "project-1", name: "Skein" })}
+        shortcutSettings={{}}
+        onClose={onClose}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Label"), "Dev");
+    await user.type(screen.getByLabelText("Script"), "bun run dev");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Save exploded")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Add Action" })).toBeInTheDocument();
+    expect(updateProjectSettings).toHaveBeenCalledTimes(1);
   });
 });
