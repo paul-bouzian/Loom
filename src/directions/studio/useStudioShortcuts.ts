@@ -240,7 +240,9 @@ export function useStudioShortcuts({
       if (
         matchesShortcut(
           event,
-          shortcuts.splitActiveThread ?? DEFAULT_SPLIT_ACTIVE_THREAD,
+          shortcuts.splitActiveThread === undefined
+            ? DEFAULT_SPLIT_ACTIVE_THREAD
+            : shortcuts.splitActiveThread,
         )
       ) {
         event.preventDefault();
@@ -254,7 +256,9 @@ export function useStudioShortcuts({
       if (
         matchesShortcut(
           event,
-          shortcuts.closeFocusedPane ?? DEFAULT_CLOSE_FOCUSED_PANE,
+          shortcuts.closeFocusedPane === undefined
+            ? DEFAULT_CLOSE_FOCUSED_PANE
+            : shortcuts.closeFocusedPane,
         )
       ) {
         event.preventDefault();

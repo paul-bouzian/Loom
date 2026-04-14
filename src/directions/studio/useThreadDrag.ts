@@ -38,6 +38,9 @@ export function useThreadDrag(
 
   function handlePointerDown(event: ReactPointerEvent<HTMLElement>) {
     if (event.button !== 0) return;
+    // Reset the suppression flag so a prior cancelled drag doesn't swallow the
+    // next real click on this row.
+    suppressClickRef.current = false;
     sessionRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -68,7 +71,7 @@ export function useThreadDrag(
       .updatePointer(event.clientX, event.clientY, plan);
   }
 
-  function handlePointerEnd(event: ReactPointerEvent<HTMLElement>) {
+  function handlePointerUp(event: ReactPointerEvent<HTMLElement>) {
     const session = sessionRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
     sessionRef.current = null;
@@ -85,6 +88,18 @@ export function useThreadDrag(
     }
   }
 
+  function handlePointerCancel(event: ReactPointerEvent<HTMLElement>) {
+    const session = sessionRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    sessionRef.current = null;
+    releaseCapture(event);
+    // Cancelled drags must not commit whatever plan happened to be hovered —
+    // only tear down the drag state so the thread stays where it was.
+    if (session.activated) {
+      useThreadDragStore.getState().end();
+    }
+  }
+
   function handleClick() {
     if (suppressClickRef.current) {
       suppressClickRef.current = false;
@@ -96,8 +111,8 @@ export function useThreadDrag(
   return {
     onPointerDown: handlePointerDown,
     onPointerMove: handlePointerMove,
-    onPointerUp: handlePointerEnd,
-    onPointerCancel: handlePointerEnd,
+    onPointerUp: handlePointerUp,
+    onPointerCancel: handlePointerCancel,
     onClick: handleClick,
   };
 }

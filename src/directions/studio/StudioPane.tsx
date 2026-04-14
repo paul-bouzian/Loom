@@ -74,8 +74,20 @@ export function StudioPane({
     <section
       className={modifierClasses}
       data-pane-id={paneId}
-      onPointerDownCapture={() => {
-        if (!isFocused) focusPane(paneId);
+      onPointerDownCapture={(event) => {
+        if (isFocused) return;
+        // Skip focus when the user is hitting the close button or the
+        // ConversationMeta close icon — otherwise we'd retarget focus
+        // onto this pane for a single frame before it gets closed.
+        if (
+          event.target instanceof Element &&
+          event.target.closest(
+            ".studio-main__pane-close, .tx-conversation__close",
+          )
+        ) {
+          return;
+        }
+        focusPane(paneId);
       }}
     >
       <div className="studio-main__pane-scroll">{content}</div>

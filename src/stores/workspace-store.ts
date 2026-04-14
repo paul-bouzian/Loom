@@ -459,9 +459,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           focusedSlot: "topLeft",
         });
       }
+      // When `newSelection` is null (id === null or unresolved project), we
+      // clear the slot rather than inserting a placeholder selection — a
+      // partial pane would still count as occupied and confuse the layout.
       const slots = {
         ...state.layout.slots,
-        [target]: newSelection ?? { projectId: id, environmentId: null, threadId: null },
+        [target]: newSelection,
       };
       return withLayout({ ...state.layout, slots });
     }),
@@ -897,48 +900,36 @@ function pickNeighborSlot(
 
 /**
  * Compacts slots so that no "hole" sits above or to the left of a filled slot.
- * Preserves relative row/col positions: TL > TR > BL > BR order.
+ * Empty rows are pulled up; within each row, the left cell is filled first.
+ * Preserves the caller's relative row/col shape whenever the current layout
+ * is already canonical.
  */
 function compactSlots(
   slots: Record<SlotKey, PaneSelection | null>,
 ): Record<SlotKey, PaneSelection | null> {
-  const filled = SLOT_KEYS
-    .map((key) => ({ key, value: slots[key] }))
-    .filter((entry): entry is { key: SlotKey; value: PaneSelection } =>
-      entry.value !== null,
-    );
-  const count = filled.length;
+  let { topLeft: TL, topRight: TR, bottomLeft: BL, bottomRight: BR } = slots;
 
-  if (count === 0) return { ...EMPTY_SLOTS };
-  if (count === 1) {
-    return { ...EMPTY_SLOTS, topLeft: filled[0]!.value };
+  // Promote bottom row to top if top row is entirely empty.
+  if (TL === null && TR === null && (BL !== null || BR !== null)) {
+    TL = BL;
+    TR = BR;
+    BL = null;
+    BR = null;
   }
-  if (count === 2) {
-    // Maintain orientation: if both are in the same row, keep them in TL+TR.
-    // If both in same col, keep TL+BL. Otherwise prefer TL+TR.
-    const keys = filled.map((entry) => entry.key);
-    const sameRow =
-      (keys[0] === "topLeft" && keys[1] === "topRight") ||
-      (keys[0] === "bottomLeft" && keys[1] === "bottomRight");
-    const sameCol =
-      (keys[0] === "topLeft" && keys[1] === "bottomLeft") ||
-      (keys[0] === "topRight" && keys[1] === "bottomRight");
-    if (sameCol && !sameRow) {
-      return {
-        ...EMPTY_SLOTS,
-        topLeft: filled[0]!.value,
-        bottomLeft: filled[1]!.value,
-      };
-    }
-    return {
-      ...EMPTY_SLOTS,
-      topLeft: filled[0]!.value,
-      topRight: filled[1]!.value,
-    };
+
+  // Within the top row, shift the filled cell to TL when TL is empty.
+  if (TL === null && TR !== null) {
+    TL = TR;
+    TR = null;
   }
-  // count === 3: shape is already canonical (produced by applySlotDrop or
-  // applyDropPlan); keep it as-is.
-  return slots;
+
+  // Within the bottom row, shift the filled cell to BL when BL is empty.
+  if (BL === null && BR !== null) {
+    BL = BR;
+    BR = null;
+  }
+
+  return { topLeft: TL, topRight: TR, bottomLeft: BL, bottomRight: BR };
 }
 
 function resolveThreadSelection(
@@ -958,7 +949,6 @@ function reconcileLayout(
   snapshot: WorkspaceSnapshot,
   layout: WorkspaceLayout,
 ): WorkspaceLayout {
-  let anyChanged = false;
   const nextSlots: Record<SlotKey, PaneSelection | null> = {
     ...EMPTY_SLOTS,
   };
@@ -968,18 +958,12 @@ function reconcileLayout(
       nextSlots[key] = null;
       continue;
     }
-    const reconciled = reconcilePaneSelection(snapshot, selection);
-    nextSlots[key] = reconciled;
-    if (
-      !reconciled ||
-      reconciled.projectId !== selection.projectId ||
-      reconciled.environmentId !== selection.environmentId ||
-      reconciled.threadId !== selection.threadId
-    ) {
-      anyChanged = true;
-    }
+    nextSlots[key] = reconcilePaneSelection(snapshot, selection);
   }
-  const compacted = anyChanged ? compactSlots(nextSlots) : nextSlots;
+  // Always canonicalize: a persisted or legacy layout may contain
+  // non-canonical holes (e.g. TR filled without TL) that would leak into
+  // slot-identity logic otherwise.
+  const compacted = compactSlots(nextSlots);
   const focusedStillFilled = layout.focusedSlot
     ? compacted[layout.focusedSlot] !== null
     : false;
@@ -1431,7 +1415,11 @@ function coercePaneSelection(value: unknown): PaneSelection | null {
   return result;
 }
 
-let persistedLayoutPrev: WorkspaceLayout | null = null;
+// Seed with the current layout so the subscribe doesn't treat the very first
+// unrelated state update (e.g. `loadingState`) as a layout change and schedule
+// a write of INITIAL_LAYOUT before `initialize()` has had a chance to read the
+// persisted copy.
+let persistedLayoutPrev: WorkspaceLayout = useWorkspaceStore.getState().layout;
 useWorkspaceStore.subscribe((state) => {
   if (state.layout !== persistedLayoutPrev) {
     persistedLayoutPrev = state.layout;

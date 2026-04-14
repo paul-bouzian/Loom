@@ -546,7 +546,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
         createPortal(
           <div
             className="tree-sidebar__context-menu tx-dropdown-menu"
-            style={resolveContextMenuPosition(contextMenu)}
+            style={resolveContextMenuPosition(contextMenu, contextMenu.kind)}
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}
           >
@@ -761,9 +761,12 @@ function buildEnvironmentContextMenuState(
 
 function resolveContextMenuPosition(
   contextMenu: Pick<ContextMenuState, "x" | "y">,
+  kind: ContextMenuState["kind"],
 ) {
   const menuWidth = 220;
-  const menuHeight = 56;
+  // Each .tx-dropdown-option is ~40px tall (incl. padding). Project and
+  // environment menus have one action, thread menus have two.
+  const menuHeight = kind === "thread" ? 88 : 48;
   const margin = 12;
 
   return {
