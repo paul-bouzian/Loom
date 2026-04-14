@@ -24,10 +24,14 @@ import type {
   ProjectRecord,
   ThreadConversationSnapshot,
 } from "../../lib/types";
+import { SidebarThreadRow } from "./SidebarThreadRow";
 import { SidebarUsagePanel } from "./SidebarUsagePanel";
 import { SidebarUtilityActions } from "./SidebarUtilityActions";
 import type { Theme } from "./StudioShell";
-import { createManagedWorktreeForSelection } from "./studioActions";
+import {
+  archiveThreadWithConfirmation,
+  createManagedWorktreeForSelection,
+} from "./studioActions";
 import {
   environmentItemClassName,
   projectGroupClassName,
@@ -44,7 +48,7 @@ type Props = {
 };
 
 type ContextMenuState = {
-  kind: "project" | "environment";
+  kind: "project" | "environment" | "thread";
   projectId?: string;
   projectName?: string;
   environmentId?: string;
@@ -53,6 +57,8 @@ type ContextMenuState = {
   path?: string;
   activeThreadCount?: number;
   archivedThreadCount?: number;
+  threadId?: string;
+  threadTitle?: string;
   x: number;
   y: number;
 };
@@ -77,6 +83,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   );
   const selectProject = useWorkspaceStore((s) => s.selectProject);
   const selectEnvironment = useWorkspaceStore((s) => s.selectEnvironment);
+  const selectThread = useWorkspaceStore((s) => s.selectThread);
   const latestScriptFailure = useWorktreeScriptStore(
     (state) => state.latestFailure,
   );
@@ -148,6 +155,22 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   function handleEnvironmentSelect(environmentId: string) {
     resetMessages();
     selectEnvironment(environmentId);
+  }
+
+  function handleThreadSelect(threadId: string) {
+    resetMessages();
+    selectThread(threadId);
+  }
+
+  function handleOpenThreadInOtherPane(threadId: string) {
+    resetMessages();
+    useWorkspaceStore.getState().openThreadInOtherPane(threadId);
+  }
+
+  async function handleArchiveThreadFromMenu(threadId: string) {
+    setContextMenu(null);
+    resetMessages();
+    await archiveThreadWithConfirmation(threadId);
   }
 
   async function handleRemoveProject(projectId: string, projectName: string) {
@@ -396,68 +419,114 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
                 </div>
                 {!project.sidebarCollapsed && (
                   <div className="project-group__environments">
-                    {orderedWorktreeEnvironments(project).map((environment) => (
-                      <div
-                        key={environment.id}
-                        ref={registerEnvironmentItem(project.id, environment.id)}
-                        className={environmentItemClassName(
-                          environment,
-                          selectedEnvironmentId,
-                          dragState,
-                        )}
-                        style={environmentDragStyle(project.id, environment.id)}
-                        onPointerDown={(event) =>
-                          handleWorktreePointerDown(
-                            event,
-                            project,
-                            environment.id,
-                          )
-                        }
-                        onClick={(event) => {
-                          if (event.detail > 0 && shouldSuppressClick()) return;
-                          handleEnvironmentSelect(environment.id);
-                        }}
-                        onContextMenu={(event) => {
-                          event.preventDefault();
-                          handleEnvironmentSelect(environment.id);
-                          setContextMenu(
-                            buildEnvironmentContextMenuState(
-                              environment,
-                              event.clientX,
-                              event.clientY,
-                            ),
-                          );
-                        }}
-                      >
-                        <span className="environment-item__icon-slot">
-                          {renderPullRequestControl(environment)}
-                        </span>
-                        <button
-                          type="button"
-                          className="environment-item"
-                          onKeyDown={(event) =>
-                            void handleWorktreeKeyboardReorder(
-                              event,
-                              project,
+                    {orderedWorktreeEnvironments(project).map((environment) => {
+                      const activeThreads = environment.threads
+                        .filter((thread) => thread.status === "active")
+                        .sort(
+                          (a, b) =>
+                            Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
+                        );
+                      return (
+                        <div key={environment.id} className="environment-entry">
+                          <div
+                            ref={registerEnvironmentItem(
+                              project.id,
                               environment.id,
-                            )
-                          }
-                        >
-                          <span className="environment-item__primary">
-                            <span className="environment-item__name-row">
-                              <span className="environment-item__name">
-                                {environment.name}
-                              </span>
+                            )}
+                            className={environmentItemClassName(
+                              environment,
+                              selectedEnvironmentId,
+                              dragState,
+                            )}
+                            style={environmentDragStyle(
+                              project.id,
+                              environment.id,
+                            )}
+                            onPointerDown={(event) =>
+                              handleWorktreePointerDown(
+                                event,
+                                project,
+                                environment.id,
+                              )
+                            }
+                            onClick={(event) => {
+                              if (event.detail > 0 && shouldSuppressClick())
+                                return;
+                              handleEnvironmentSelect(environment.id);
+                            }}
+                            onContextMenu={(event) => {
+                              event.preventDefault();
+                              handleEnvironmentSelect(environment.id);
+                              setContextMenu(
+                                buildEnvironmentContextMenuState(
+                                  environment,
+                                  event.clientX,
+                                  event.clientY,
+                                ),
+                              );
+                            }}
+                          >
+                            <span className="environment-item__icon-slot">
+                              {renderPullRequestControl(environment)}
                             </span>
-                          </span>
-                          <span className="environment-item__secondary">
-                            <EnvironmentConversationIndicator
-                              environment={environment}
-                            />
-                          </span>
-                        </button>
-                      </div>
-                    ))}
+                            <button
+                              type="button"
+                              className="environment-item"
+                              onKeyDown={(event) =>
+                                void handleWorktreeKeyboardReorder(
+                                  event,
+                                  project,
+                                  environment.id,
+                                )
+                              }
+                            >
+                              <span className="environment-item__primary">
+                                <span className="environment-item__name-row">
+                                  <span className="environment-item__name">
+                                    {environment.name}
+                                  </span>
+                                </span>
+                              </span>
+                              <span className="environment-item__secondary">
+                                <EnvironmentConversationIndicator
+                                  environment={environment}
+                                />
+                              </span>
+                            </button>
+                          </div>
+                          {activeThreads.length > 0 && (
+                            <ul className="environment-thread-list">
+                              {activeThreads.map((thread) => (
+                                <li
+                                  key={thread.id}
+                                  className="environment-thread-list__item"
+                                >
+                                  <SidebarThreadRow
+                                    thread={thread}
+                                    onSelect={() =>
+                                      handleThreadSelect(thread.id)
+                                    }
+                                    onOpenInOtherPane={() =>
+                                      handleOpenThreadInOtherPane(thread.id)
+                                    }
+                                    onContextMenu={(event) => {
+                                      event.preventDefault();
+                                      setContextMenu({
+                                        kind: "thread",
+                                        threadId: thread.id,
+                                        threadTitle: thread.title,
+                                        x: event.clientX,
+                                        y: event.clientY,
+                                      });
+                                    }}
+                                  />
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </section>
@@ -494,7 +563,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
               >
                 {`Remove from ${APP_NAME}`}
               </button>
-            ) : (
+            ) : contextMenu.kind === "environment" ? (
               <button
                 type="button"
                 className="tree-sidebar__context-item tx-dropdown-option tree-sidebar__context-item--danger"
@@ -502,6 +571,32 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
               >
                 Delete worktree
               </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="tree-sidebar__context-item tx-dropdown-option"
+                  onClick={() => {
+                    setContextMenu(null);
+                    if (contextMenu.threadId) {
+                      handleOpenThreadInOtherPane(contextMenu.threadId);
+                    }
+                  }}
+                >
+                  Open in other pane
+                </button>
+                <button
+                  type="button"
+                  className="tree-sidebar__context-item tx-dropdown-option tree-sidebar__context-item--danger"
+                  onClick={() => {
+                    if (contextMenu.threadId) {
+                      void handleArchiveThreadFromMenu(contextMenu.threadId);
+                    }
+                  }}
+                >
+                  Archive thread
+                </button>
+              </>
             )}
           </div>,
           document.body,
