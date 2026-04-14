@@ -98,10 +98,13 @@
 
 .open-environment-control__option--selected {
   background: var(--tx-bg-hover);
+}
+
+.open-environment-control__option--selected .open-environment-control__option-label {
   color: var(--tx-accent);
 }
 
-.open-environment-control__option--selected:hover {
+.open-environment-control__option--selected:hover .open-environment-control__option-label {
   color: var(--tx-accent-hover);
 }
 

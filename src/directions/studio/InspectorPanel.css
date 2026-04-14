@@ -321,7 +321,7 @@
   border-color: transparent;
 }
 
-.inspector-file-row--selected .inspector-file-row__select {
+.inspector-file-row--selected .inspector-file-row__path {
   color: var(--tx-accent);
 }
 
