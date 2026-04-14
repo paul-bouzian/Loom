@@ -1007,6 +1007,16 @@ fn merge_usage_window(
         };
     }
 
+    let metadata_advanced_without_usage = previous.is_some()
+        && patch.used_percent.is_none()
+        && patch_advances_usage_window(previous, patch);
+    if metadata_advanced_without_usage {
+        return WindowMergeResult {
+            window: None,
+            regression_detected: false,
+        };
+    }
+
     let regression_detected = previous
         .zip(previous_context)
         .is_some_and(|(current, context)| {
@@ -1066,6 +1076,28 @@ where
     previous
         .zip(next)
         .is_none_or(|(previous, next)| previous == next)
+}
+
+fn patch_advances_usage_window(
+    previous: Option<&CodexRateLimitWindow>,
+    patch: &CodexRateLimitWindowPatch,
+) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+
+    metadata_field_advanced(previous.resets_at, patch.resets_at)
+        || metadata_field_advanced(previous.window_duration_mins, patch.window_duration_mins)
+}
+
+fn metadata_field_advanced<T>(previous: Option<T>, patch: Option<Option<T>>) -> bool
+where
+    T: PartialEq + Copy,
+{
+    matches!(
+        (previous, patch),
+        (Some(previous), Some(Some(next))) if next != previous
+    )
 }
 
 fn usage_window_context(snapshot: &CodexRateLimitSnapshot) -> UsageWindowContext<'_> {
@@ -1645,22 +1677,18 @@ mod tests {
     }
 
     #[test]
-    fn merge_account_usage_snapshot_keeps_metadata_only_window_updates() {
+    fn merge_account_usage_snapshot_keeps_metadata_only_window_enrichment() {
         let previous = make_rate_limit_snapshot(
             Some(CodexPlanType::Pro),
-            Some(make_rate_limit_window(64, Some(1_775_306_400), Some(300))),
-            Some(make_rate_limit_window(
-                22,
-                Some(1_775_910_400),
-                Some(10_080),
-            )),
+            Some(make_rate_limit_window(64, Some(1_775_306_400), None)),
+            Some(make_rate_limit_window(22, Some(1_775_910_400), None)),
         );
         let patch = serde_json::from_value::<CodexRateLimitSnapshotPatch>(json!({
             "primary": {
-                "resetsAt": 1_775_324_400
+                "windowDurationMins": 300
             },
             "secondary": {
-                "windowDurationMins": 20_160
+                "resetsAt": 1_775_910_400
             }
         }))
         .expect("metadata-only patch should decode");
@@ -1681,8 +1709,8 @@ mod tests {
                 .snapshot
                 .primary
                 .as_ref()
-                .and_then(|window| window.resets_at),
-            Some(1_775_324_400)
+                .and_then(|window| window.window_duration_mins),
+            Some(300)
         );
         assert_eq!(
             merged
@@ -1697,9 +1725,75 @@ mod tests {
                 .snapshot
                 .secondary
                 .as_ref()
-                .and_then(|window| window.window_duration_mins),
-            Some(20_160)
+                .and_then(|window| window.resets_at),
+            Some(1_775_910_400)
         );
+    }
+
+    #[tokio::test]
+    async fn metadata_only_window_reset_does_not_pin_previous_usage() {
+        let account_usage = Arc::new(Mutex::new(AccountUsageState::default()));
+        apply_account_usage_snapshot(
+            &account_usage,
+            make_rate_limit_snapshot(
+                Some(CodexPlanType::Pro),
+                Some(make_rate_limit_window(64, Some(1_775_306_400), Some(300))),
+                Some(make_rate_limit_window(
+                    22,
+                    Some(1_775_910_400),
+                    Some(10_080),
+                )),
+            ),
+            UsageUpdateOrigin::ManualRead,
+        )
+        .await
+        .expect("initial snapshot should apply");
+
+        let reset_only = apply_account_usage_patch(
+            &account_usage,
+            json!({
+                "primary": {
+                    "resetsAt": 1_775_324_400
+                }
+            }),
+            UsageUpdateOrigin::LiveNotification,
+        )
+        .await
+        .expect("metadata-only reset patch should apply");
+
+        assert!(reset_only.snapshot.primary.is_none());
+        assert_eq!(
+            reset_only
+                .snapshot
+                .secondary
+                .as_ref()
+                .map(|window| window.used_percent),
+            Some(22)
+        );
+
+        let actual_usage = apply_account_usage_patch(
+            &account_usage,
+            json!({
+                "primary": {
+                    "usedPercent": 3,
+                    "resetsAt": 1_775_324_400,
+                    "windowDurationMins": 300
+                }
+            }),
+            UsageUpdateOrigin::LiveNotification,
+        )
+        .await
+        .expect("follow-up usage patch should apply");
+
+        assert_eq!(
+            actual_usage
+                .snapshot
+                .primary
+                .as_ref()
+                .map(|window| window.used_percent),
+            Some(3)
+        );
+        assert!(!actual_usage.confirmation_requested);
     }
 
     #[tokio::test]
