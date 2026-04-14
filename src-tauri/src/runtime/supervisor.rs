@@ -978,6 +978,18 @@ fn merge_usage_window(
         ),
     };
 
+    let stale_window_detected = previous
+        .zip(previous_context)
+        .is_some_and(|(current, context)| {
+            is_stale_usage_window(context, current, next_context, &next)
+        });
+    if stale_window_detected {
+        return WindowMergeResult {
+            window: previous.cloned(),
+            regression_detected: false,
+        };
+    }
+
     let regression_detected = previous
         .zip(previous_context)
         .is_some_and(|(current, context)| {
@@ -1003,11 +1015,31 @@ fn same_usage_window(
     next_context: UsageWindowContext<'_>,
     next: &CodexRateLimitWindow,
 ) -> bool {
+    same_usage_limit(previous_context, next_context)
+        && previous.resets_at == next.resets_at
+        && previous.window_duration_mins == next.window_duration_mins
+}
+
+fn is_stale_usage_window(
+    previous_context: UsageWindowContext<'_>,
+    previous: &CodexRateLimitWindow,
+    next_context: UsageWindowContext<'_>,
+    next: &CodexRateLimitWindow,
+) -> bool {
+    same_usage_limit(previous_context, next_context)
+        && previous
+            .resets_at
+            .zip(next.resets_at)
+            .is_some_and(|(previous_reset, next_reset)| next_reset < previous_reset)
+}
+
+fn same_usage_limit(
+    previous_context: UsageWindowContext<'_>,
+    next_context: UsageWindowContext<'_>,
+) -> bool {
     previous_context.plan_type == next_context.plan_type
         && previous_context.limit_id == next_context.limit_id
         && previous_context.limit_name == next_context.limit_name
-        && previous.resets_at == next.resets_at
-        && previous.window_duration_mins == next.window_duration_mins
 }
 
 fn usage_window_context(snapshot: &CodexRateLimitSnapshot) -> UsageWindowContext<'_> {
@@ -1529,6 +1561,30 @@ mod tests {
                 .map(|window| window.used_percent),
             Some(5)
         );
+    }
+
+    #[test]
+    fn merge_account_usage_snapshot_rejects_stale_prior_window_snapshots() {
+        let previous = make_rate_limit_snapshot(
+            Some(CodexPlanType::Pro),
+            Some(make_rate_limit_window(3, Some(1_775_324_400), Some(300))),
+            Some(make_rate_limit_window(5, Some(1_776_515_200), Some(10_080))),
+        );
+        let patch = usage_snapshot_patch_from_snapshot(make_rate_limit_snapshot(
+            Some(CodexPlanType::Pro),
+            Some(make_rate_limit_window(97, Some(1_775_306_400), Some(300))),
+            Some(make_rate_limit_window(
+                41,
+                Some(1_775_910_400),
+                Some(10_080),
+            )),
+        ));
+
+        let merged = merge_account_usage_snapshot(Some(&previous), &patch);
+
+        assert!(!merged.regression_detected);
+        assert_eq!(merged.snapshot.primary, previous.primary);
+        assert_eq!(merged.snapshot.secondary, previous.secondary);
     }
 
     #[test]
