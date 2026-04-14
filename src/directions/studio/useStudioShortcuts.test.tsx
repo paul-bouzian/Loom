@@ -1,10 +1,11 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { isMacPlatform } from "../../lib/shortcuts";
 import {
   capabilitiesFixture,
   makeConversationSnapshot,
+  makeProject,
   makeProposedPlan,
   makeWorkspaceSnapshot,
 } from "../../test/fixtures/conversation";
@@ -21,6 +22,7 @@ vi.mock("../../lib/bridge", () => ({
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: vi.fn(),
+  message: vi.fn(),
 }));
 
 type HarnessProps = {
@@ -216,5 +218,132 @@ describe("useStudioShortcuts", () => {
     });
 
     expect(useConversationStore.getState().composerByThreadId["thread-1"]).toBeUndefined();
+  });
+
+  it("launches a project action from its shortcut in the selected environment", () => {
+    const openActionTab = vi.fn(async () => "action-tab");
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            settings: {
+              worktreeSetupScript: undefined,
+              worktreeTeardownScript: undefined,
+              manualActions: [
+                {
+                  id: "dev",
+                  label: "Dev",
+                  icon: "play",
+                  script: "bun run dev",
+                  shortcut: "mod+shift+d",
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    }));
+    useTerminalStore.setState({ openActionTab });
+
+    render(<Harness />);
+
+    fireEvent.keyDown(window, {
+      key: "D",
+      shiftKey: true,
+      ...primaryModifier(),
+    });
+
+    expect(openActionTab).toHaveBeenCalledWith("env-1", {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+      script: "bun run dev",
+      shortcut: "mod+shift+d",
+    });
+  });
+
+  it("keeps core shortcuts ahead of conflicting project action shortcuts", () => {
+    const openActionTab = vi.fn(async () => "action-tab");
+    const toggleVisible = vi.fn();
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            settings: {
+              worktreeSetupScript: undefined,
+              worktreeTeardownScript: undefined,
+              manualActions: [
+                {
+                  id: "dev",
+                  label: "Dev",
+                  icon: "play",
+                  script: "bun run dev",
+                  shortcut: "mod+j",
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    }));
+    useTerminalStore.setState({ openActionTab, toggleVisible });
+
+    render(<Harness />);
+
+    fireEvent.keyDown(window, {
+      key: "J",
+      ...primaryModifier(),
+    });
+
+    expect(toggleVisible).toHaveBeenCalledTimes(1);
+    expect(openActionTab).not.toHaveBeenCalled();
+  });
+
+  it("shows a warning when a project action shortcut cannot open a terminal tab", async () => {
+    const openActionTab = vi.fn(async () => null);
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            settings: {
+              worktreeSetupScript: undefined,
+              worktreeTeardownScript: undefined,
+              manualActions: [
+                {
+                  id: "dev",
+                  label: "Dev",
+                  icon: "play",
+                  script: "bun run dev",
+                  shortcut: "mod+shift+d",
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    }));
+    useTerminalStore.setState({ openActionTab });
+
+    render(<Harness />);
+
+    fireEvent.keyDown(window, {
+      key: "D",
+      shiftKey: true,
+      ...primaryModifier(),
+    });
+
+    const { message } = await import("@tauri-apps/plugin-dialog");
+    await waitFor(() => {
+      expect(message).toHaveBeenCalledWith(
+        "Maximum 10 terminals are open in this environment.",
+        {
+          title: "Project action",
+          kind: "warning",
+        },
+      );
+    });
   });
 });

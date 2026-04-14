@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, Mutex};
 use tracing::warn;
@@ -108,6 +108,13 @@ struct UsageMergeResult {
 struct WindowMergeResult {
     window: Option<CodexRateLimitWindow>,
     regression_detected: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexUsageEventPayload<'a> {
+    environment_id: &'a str,
+    rate_limits: &'a CodexRateLimitSnapshot,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -673,14 +680,18 @@ fn spawn_usage_update_task(
 ) {
     tauri::async_runtime::spawn(async move {
         while let Some(update) = usage_update_rx.recv().await {
-            let Ok(apply_result) = apply_account_usage_patch(
+            let apply_result = match apply_account_usage_patch(
                 &account_usage,
                 update.rate_limits,
                 UsageUpdateOrigin::LiveNotification,
             )
             .await
-            else {
-                continue;
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    warn!("dropping invalid Codex usage update: {error}");
+                    continue;
+                }
             };
 
             if apply_result.changed {
@@ -738,7 +749,7 @@ async fn apply_account_usage_patch_struct(
     let mut usage = account_usage.lock().await;
     let previous = usage.snapshot.clone();
     let merge_result = merge_account_usage_snapshot(previous.as_ref(), &patch);
-    if usage_snapshot_is_empty(&merge_result.snapshot) {
+    if previous.is_none() && usage_snapshot_is_empty(&merge_result.snapshot) {
         return Err(AppError::Runtime(
             "Codex usage update did not produce a usable snapshot.".to_string(),
         ));
@@ -828,8 +839,14 @@ async fn read_usage_confirmation_snapshot(
     fallback: Option<UsageConfirmationFallback>,
 ) -> AppResult<Option<(String, CodexRateLimitSnapshot)>> {
     if let Some((environment_id, session)) = latest_running_usage_source(registry).await {
-        let snapshot = session.read_account_rate_limits().await?;
-        return Ok(Some((environment_id, snapshot)));
+        match session.read_account_rate_limits().await {
+            Ok(snapshot) => return Ok(Some((environment_id, snapshot))),
+            Err(error) => {
+                warn!(
+                    "failed to read confirmation usage from running runtime {environment_id}: {error}"
+                );
+            }
+        }
     }
 
     let Some(fallback) = fallback else {
@@ -873,10 +890,10 @@ fn emit_account_usage_event(
 ) {
     if let Err(error) = app.emit(
         CODEX_USAGE_EVENT_NAME,
-        json!({
-            "environmentId": environment_id,
-            "rateLimits": snapshot,
-        }),
+        CodexUsageEventPayload {
+            environment_id,
+            rate_limits: snapshot,
+        },
     ) {
         warn!("failed to emit codex usage snapshot: {error}");
     }
@@ -1037,9 +1054,18 @@ fn same_usage_limit(
     previous_context: UsageWindowContext<'_>,
     next_context: UsageWindowContext<'_>,
 ) -> bool {
-    previous_context.plan_type == next_context.plan_type
-        && previous_context.limit_id == next_context.limit_id
-        && previous_context.limit_name == next_context.limit_name
+    compatible_usage_limit_field(previous_context.plan_type, next_context.plan_type)
+        && compatible_usage_limit_field(previous_context.limit_id, next_context.limit_id)
+        && compatible_usage_limit_field(previous_context.limit_name, next_context.limit_name)
+}
+
+fn compatible_usage_limit_field<T>(previous: Option<&T>, next: Option<&T>) -> bool
+where
+    T: PartialEq + ?Sized,
+{
+    previous
+        .zip(next)
+        .is_none_or(|(previous, next)| previous == next)
 }
 
 fn usage_window_context(snapshot: &CodexRateLimitSnapshot) -> UsageWindowContext<'_> {
@@ -1222,9 +1248,9 @@ mod tests {
         collect_idle_runtime_candidates, finish_headless_read, latest_running_usage_source,
         merge_account_usage_snapshot, read_account_from_target, read_auth_status_from_target,
         resolve_binary_path, should_stop_idle_runtime_candidate, touch_running_runtime,
-        usage_snapshot_patch_from_snapshot, AccountUsageState, AppServerAuthStatus,
-        CodexRateLimitSnapshotPatch, RunningRuntime, RuntimeReadTarget, RuntimeRegistry,
-        UsageUpdateOrigin,
+        usage_snapshot_is_empty, usage_snapshot_patch_from_snapshot, AccountUsageState,
+        AppServerAuthStatus, CodexRateLimitSnapshotPatch, RunningRuntime, RuntimeReadTarget,
+        RuntimeRegistry, UsageUpdateOrigin,
     };
     use crate::domain::conversation::{
         ConversationComposerSettings, ConversationMessageItem, ConversationRole,
@@ -1588,6 +1614,37 @@ mod tests {
     }
 
     #[test]
+    fn merge_account_usage_snapshot_rejects_regression_when_limit_metadata_is_later_populated() {
+        let previous = make_rate_limit_snapshot(
+            Some(CodexPlanType::Pro),
+            Some(make_rate_limit_window(64, Some(1_775_306_400), Some(300))),
+            None,
+        );
+        let patch = serde_json::from_value::<CodexRateLimitSnapshotPatch>(json!({
+            "limitName": "Pro",
+            "primary": {
+                "usedPercent": 18,
+                "resetsAt": 1_775_306_400,
+                "windowDurationMins": 300
+            }
+        }))
+        .expect("same-window patch with new metadata should decode");
+
+        let merged = merge_account_usage_snapshot(Some(&previous), &patch);
+
+        assert!(merged.regression_detected);
+        assert_eq!(merged.snapshot.limit_name.as_deref(), Some("Pro"));
+        assert_eq!(
+            merged
+                .snapshot
+                .primary
+                .as_ref()
+                .map(|window| window.used_percent),
+            Some(64)
+        );
+    }
+
+    #[test]
     fn merge_account_usage_snapshot_keeps_metadata_only_window_updates() {
         let previous = make_rate_limit_snapshot(
             Some(CodexPlanType::Pro),
@@ -1684,6 +1741,50 @@ mod tests {
                 .map(|window| window.used_percent),
             Some(22)
         );
+    }
+
+    #[tokio::test]
+    async fn apply_account_usage_patch_allows_clearing_the_entire_snapshot() {
+        let account_usage = Arc::new(Mutex::new(AccountUsageState::default()));
+        apply_account_usage_snapshot(
+            &account_usage,
+            make_rate_limit_snapshot(
+                Some(CodexPlanType::Pro),
+                Some(make_rate_limit_window(64, Some(1_775_306_400), Some(300))),
+                Some(make_rate_limit_window(
+                    22,
+                    Some(1_775_910_400),
+                    Some(10_080),
+                )),
+            ),
+            UsageUpdateOrigin::ManualRead,
+        )
+        .await
+        .expect("initial snapshot should apply");
+
+        let result = apply_account_usage_patch(
+            &account_usage,
+            json!({
+                "planType": null,
+                "limitId": null,
+                "limitName": null,
+                "credits": null,
+                "primary": null,
+                "secondary": null
+            }),
+            UsageUpdateOrigin::LiveNotification,
+        )
+        .await
+        .expect("explicit clear patch should apply");
+
+        assert!(result.changed);
+        assert!(usage_snapshot_is_empty(&result.snapshot));
+        assert!(account_usage
+            .lock()
+            .await
+            .snapshot
+            .as_ref()
+            .is_some_and(usage_snapshot_is_empty));
     }
 
     #[tokio::test]
