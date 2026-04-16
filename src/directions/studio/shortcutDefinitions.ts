@@ -65,12 +65,6 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     description: "Move to the previous active thread in the selected environment.",
   },
   {
-    action: "newWorktree",
-    group: "Navigation",
-    label: "New worktree",
-    description: "Create a managed worktree for the current project.",
-  },
-  {
     action: "nextEnvironment",
     group: "Navigation",
     label: "Next environment",
