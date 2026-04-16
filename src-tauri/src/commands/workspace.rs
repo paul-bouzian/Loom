@@ -13,8 +13,8 @@ use crate::domain::workspace::{
 };
 use crate::error::{AppError, CommandError};
 use crate::services::workspace::{
-    AddProjectRequest, ArchiveThreadRequest, CreateThreadRequest, RenameProjectRequest,
-    RenameThreadRequest, ReorderProjectsRequest, ReorderWorktreeEnvironmentsRequest,
+    AddProjectRequest, ArchiveThreadRequest, CreateManagedWorktreeRequest, CreateThreadRequest,
+    RenameProjectRequest, RenameThreadRequest, ReorderProjectsRequest,
     RunProjectActionRequest, SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest,
 };
 use crate::services::worktree_scripts::{skein_context_environment, SkeinContextInput};
@@ -140,14 +140,6 @@ pub fn reorder_projects(
 }
 
 #[tauri::command]
-pub fn reorder_worktree_environments(
-    input: ReorderWorktreeEnvironmentsRequest,
-    state: State<'_, AppState>,
-) -> Result<(), CommandError> {
-    Ok(state.workspace.reorder_worktree_environments(input)?)
-}
-
-#[tauri::command]
 pub fn set_project_sidebar_collapsed(
     input: SetProjectSidebarCollapsedRequest,
     state: State<'_, AppState>,
@@ -182,12 +174,31 @@ pub async fn remove_project(
 
 #[tauri::command]
 pub fn create_managed_worktree(
-    project_id: String,
+    mut input: CreateManagedWorktreeRequest,
     state: State<'_, AppState>,
 ) -> Result<ManagedWorktreeCreateResult, CommandError> {
-    let result = state.workspace.create_managed_worktree(&project_id)?;
+    input.project_id = normalized_project_id(&input.project_id)?.to_string();
+    let result = state.workspace.create_managed_worktree(input)?;
     state.pull_requests.refresh_now();
     Ok(result)
+}
+
+#[tauri::command]
+pub fn list_project_branches(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, CommandError> {
+    Ok(state
+        .workspace
+        .list_project_branches(normalized_project_id(&project_id)?)?)
+}
+
+fn normalized_project_id(project_id: &str) -> Result<&str, CommandError> {
+    let trimmed = project_id.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation("Project id cannot be empty.".to_string()).into());
+    }
+    Ok(trimmed)
 }
 
 #[tauri::command]

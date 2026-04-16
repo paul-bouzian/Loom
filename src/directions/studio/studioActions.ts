@@ -1,9 +1,21 @@
 import { confirm } from "@tauri-apps/plugin-dialog";
 
 import * as bridge from "../../lib/bridge";
-import type { EnvironmentRecord, WorkspaceSnapshot } from "../../lib/types";
+import type {
+  ComposerMentionBindingInput,
+  ConversationComposerSettings,
+  ConversationImageAttachment,
+  EnvironmentRecord,
+  ThreadRecord,
+  WorkspaceSnapshot,
+} from "../../lib/types";
+import { useConversationStore } from "../../stores/conversation-store";
 import { useVoiceSessionStore } from "../../stores/voice-session-store";
-import { useWorkspaceStore } from "../../stores/workspace-store";
+import {
+  useWorkspaceStore,
+  type SlotKey,
+} from "../../stores/workspace-store";
+import type { EnvSelection } from "./draft/EnvironmentSelector";
 
 export async function createThreadForSelection() {
   const environment = selectedEnvironment();
@@ -23,19 +35,174 @@ export async function createThreadForEnvironment(environmentId: string) {
   return true;
 }
 
-export async function createManagedWorktreeForSelection() {
-  const projectId = selectedProjectId();
-  if (!projectId) {
-    return false;
+export function openThreadDraftForProject(
+  projectId: string,
+  slot?: SlotKey,
+): SlotKey | null {
+  return useWorkspaceStore.getState().openThreadDraft(projectId, slot);
+}
+
+export type SendThreadDraftInput = {
+  paneId: SlotKey;
+  projectId: string;
+  selection: EnvSelection;
+  text: string;
+  images?: ConversationImageAttachment[];
+  mentionBindings?: ComposerMentionBindingInput[];
+  composer?: ConversationComposerSettings | null;
+};
+
+export type SendThreadDraftResult =
+  | { ok: true; thread: ThreadRecord }
+  | { ok: false; error: string };
+
+export async function sendThreadDraft(
+  input: SendThreadDraftInput,
+): Promise<SendThreadDraftResult> {
+  const { paneId, projectId, selection, text, composer } = input;
+  const images = input.images ?? [];
+  const mentionBindings = input.mentionBindings ?? [];
+  if (text.trim().length === 0 && images.length === 0) {
+    return { ok: false, error: "Message is empty" };
   }
 
-  const result = await bridge.createManagedWorktree(projectId);
-  const refreshed = await useWorkspaceStore.getState().refreshSnapshot();
-  if (!refreshed) {
-    return false;
+  let resolved: ResolvedDraftThread;
+  try {
+    resolved = await resolveDraftThread(projectId, selection);
+  } catch (cause: unknown) {
+    return {
+      ok: false,
+      error:
+        cause instanceof Error ? cause.message : "Failed to create thread",
+    };
   }
-  useWorkspaceStore.getState().selectThread(result.thread.id);
-  return true;
+  const { thread, environment } = resolved;
+
+  // Stage the new thread in the local snapshot so pane resolution works
+  // before `refreshSnapshot` completes. Without this, a slow refresh would
+  // leave the pane rendering the project overview instead of the thread.
+  mergeCreatedThreadIntoSnapshot(projectId, thread, environment);
+
+  // Refresh runs in the background. Earlier versions awaited it and
+  // surfaced failures as an error, which drove users to retry and
+  // accidentally create duplicate threads/worktrees — the backend
+  // already committed to the one we just got back.
+  void useWorkspaceStore.getState().refreshSnapshot();
+
+  // Seed the conversation store's composer with the draft picks so the
+  // first send carries the user's chosen model / effort / mode and the
+  // thread view stays consistent with what they configured in the draft.
+  if (composer) {
+    useConversationStore.setState((state) => ({
+      composerByThreadId: {
+        ...state.composerByThreadId,
+        [thread.id]: composer,
+      },
+    }));
+  }
+
+  // Hand the message off to ThreadConversation: it consumes the pending
+  // first message on mount and runs its own handleSend, which already wires
+  // up the optimistic user message and the FirstPromptNamingNotice spinner.
+  useConversationStore.getState().enqueuePendingFirstMessage(thread.id, {
+    text: text.trim(),
+    images,
+    mentionBindings,
+    composer: composer ?? null,
+  });
+
+  // Close the draft and switch the pane — ThreadConversation mounts and
+  // takes over from here.
+  useWorkspaceStore.getState().closeThreadDraft(paneId);
+  useWorkspaceStore.getState().setPaneSelection(paneId, {
+    projectId,
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+  });
+
+  return { ok: true, thread };
+}
+
+type ResolvedDraftThread = {
+  thread: ThreadRecord;
+  // Populated only for "new worktree" flows, where the backend returns the
+  // freshly-created environment alongside the thread.
+  environment?: EnvironmentRecord;
+};
+
+async function resolveDraftThread(
+  projectId: string,
+  selection: EnvSelection,
+): Promise<ResolvedDraftThread> {
+  if (selection.kind === "new") {
+    const trimmedName = selection.name.trim();
+    const baseBranch = selection.baseBranch.trim();
+    const result = await bridge.createManagedWorktree(projectId, {
+      // Leaving baseBranch empty lets the backend fall back to
+      // resolve_base_reference (remote/upstream), which is how the legacy
+      // standalone flow worked and matters for detached-HEAD repos.
+      ...(baseBranch.length > 0 ? { baseBranch } : {}),
+      ...(trimmedName.length > 0 ? { name: trimmedName } : {}),
+    });
+    return { thread: result.thread, environment: result.environment };
+  }
+
+  if (selection.kind === "existing") {
+    const thread = await bridge.createThread({
+      environmentId: selection.environmentId,
+    });
+    return { thread };
+  }
+
+  const localEnv = findLocalEnvironment(projectId);
+  if (!localEnv) {
+    throw new Error("No local environment found for this project.");
+  }
+  const thread = await bridge.createThread({ environmentId: localEnv.id });
+  return { thread };
+}
+
+// Merges a freshly-created thread (and optionally its new worktree
+// environment) into the local snapshot so UI that depends on snapshot lookup
+// (pane resolution, sidebar, etc.) sees it immediately. The next successful
+// `refreshSnapshot` call will overwrite this with the backend's canonical
+// view; this is only a stopgap so the user is not blocked when a refresh
+// fails transiently.
+function mergeCreatedThreadIntoSnapshot(
+  projectId: string,
+  thread: ThreadRecord,
+  environment: EnvironmentRecord | undefined,
+): void {
+  useWorkspaceStore.setState((state) => {
+    if (!state.snapshot) return state;
+    const nextProjects = state.snapshot.projects.map((project) => {
+      if (project.id !== projectId) return project;
+      let environments = project.environments;
+      if (
+        environment &&
+        !environments.some((candidate) => candidate.id === environment.id)
+      ) {
+        environments = [...environments, environment];
+      }
+      environments = environments.map((env) => {
+        if (env.id !== thread.environmentId) return env;
+        if (env.threads.some((candidate) => candidate.id === thread.id)) {
+          return env;
+        }
+        return { ...env, threads: [...env.threads, thread] };
+      });
+      return { ...project, environments };
+    });
+    return { snapshot: { ...state.snapshot, projects: nextProjects } };
+  });
+}
+
+function findLocalEnvironment(projectId: string): EnvironmentRecord | null {
+  const snapshot = useWorkspaceStore.getState().snapshot;
+  const project = snapshot?.projects.find(
+    (candidate) => candidate.id === projectId,
+  );
+  return project?.environments.find((env) => env.kind === "local") ?? null;
 }
 
 export async function archiveThreadWithConfirmation(threadId: string) {
@@ -61,10 +228,60 @@ export async function archiveThreadWithConfirmation(threadId: string) {
     return false;
   }
 
+  const archivedEnvironmentId = latestTarget.environment.id;
+  const archivedEnvironmentKind = latestTarget.environment.kind;
+
   await bridge.archiveThread({ threadId: latestTarget.thread.id });
   useWorkspaceStore.getState().removeThread(latestTarget.thread.id);
   const refreshed = await useWorkspaceStore.getState().refreshSnapshot();
+
+  if (refreshed && archivedEnvironmentKind !== "local") {
+    await maybePromptDeleteEmptyWorktree(archivedEnvironmentId);
+  }
+
   return refreshed;
+}
+
+async function maybePromptDeleteEmptyWorktree(environmentId: string) {
+  const targetEnv = findEnvironmentById(environmentId);
+  if (!targetEnv || targetEnv.kind === "local") return;
+  const stillHasActiveThread = targetEnv.threads.some(
+    (thread) => thread.status === "active",
+  );
+  if (stillHasActiveThread) return;
+
+  const approved = await confirm(
+    `The worktree "${targetEnv.name}" has no more active threads. Delete it?`,
+    {
+      title: "Delete empty worktree",
+      kind: "warning",
+      okLabel: "Delete",
+      cancelLabel: "Keep",
+    },
+  );
+  if (!approved) return;
+
+  try {
+    await bridge.deleteWorktreeEnvironment(environmentId);
+    await useWorkspaceStore.getState().refreshSnapshot();
+  } catch {
+    // A failure to delete the worktree is not worth surfacing a duplicate
+    // notice here; the user can retry from the chip menu.
+  }
+}
+
+function findEnvironmentById(
+  environmentId: string,
+): EnvironmentRecord | null {
+  const snapshot = useWorkspaceStore.getState().snapshot;
+  if (!snapshot) return null;
+  for (const project of snapshot.projects) {
+    const match = project.environments.find(
+      (env) => env.id === environmentId,
+    );
+    if (match) return match;
+  }
+  return null;
 }
 
 export function selectAdjacentThread(direction: "next" | "previous") {
@@ -135,20 +352,6 @@ function selectedEnvironment() {
   );
 }
 
-function selectedProjectId() {
-  const state = useWorkspaceStore.getState();
-  if (state.selectedProjectId) {
-    return state.selectedProjectId;
-  }
-  if (state.snapshot && state.selectedEnvironmentId) {
-    for (const project of state.snapshot.projects) {
-      if (project.environments.some((environment) => environment.id === state.selectedEnvironmentId)) {
-        return project.id;
-      }
-    }
-  }
-  return null;
-}
 
 function findThread(snapshot: WorkspaceSnapshot | null, threadId: string) {
   if (!snapshot) {

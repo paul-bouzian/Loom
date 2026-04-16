@@ -8,7 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { EnvironmentRecord, ProjectRecord } from "../../lib/types";
+import type { ProjectRecord } from "../../lib/types";
 import {
   listsMatch,
   moveItemToIndex,
@@ -25,13 +25,21 @@ type ReorderMutationResult = {
 type UseTreeSidebarReorderOptions = {
   projects: ProjectRecord[];
   reorderProjects: (projectIds: string[]) => Promise<ReorderMutationResult>;
-  reorderWorktreeEnvironments: (
-    projectId: string,
-    environmentIds: string[],
-  ) => Promise<ReorderMutationResult>;
   resetMessages: () => void;
   setActionError: (message: string) => void;
 };
+
+// Worktree reorder was dropped along with the old env-row UI. Worktree
+// pointer / keyboard paths inside the hook still exist but are never
+// invoked — they resolve through this no-op so removing the caller
+// doesn't drag a larger refactor into this PR.
+const noopReorderWorktreeEnvironments: (
+  projectId: string,
+  environmentIds: string[],
+) => Promise<ReorderMutationResult> = async () => ({
+  ok: true,
+  warningMessage: null,
+});
 
 type PointerDragSessionBase = {
   sessionId: number;
@@ -89,10 +97,10 @@ type DragVisualState =
 export function useTreeSidebarReorder({
   projects,
   reorderProjects,
-  reorderWorktreeEnvironments,
   resetMessages,
   setActionError,
 }: UseTreeSidebarReorderOptions) {
+  const reorderWorktreeEnvironments = noopReorderWorktreeEnvironments;
   const [dragState, setDragState] = useState<SidebarDragState | null>(null);
   const [previewProjectIds, setPreviewProjectIds] = useState<string[] | null>(
     null,
@@ -596,25 +604,6 @@ export function projectGroupClassName(
     project.id === selectedProjectId ? "project-group--selected" : null,
     dragState?.kind === "project" && dragState.projectId === project.id
       ? "project-group--dragging"
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
-export function environmentItemClassName(
-  environment: EnvironmentRecord,
-  selectedEnvironmentId: string | null,
-  dragState: SidebarDragState | null,
-) {
-  return [
-    "environment-item-shell",
-    selectedEnvironmentId === environment.id
-      ? "environment-item-shell--selected"
-      : null,
-    dragState?.kind === "environment" &&
-    dragState.environmentId === environment.id
-      ? "environment-item-shell--dragging"
       : null,
   ]
     .filter(Boolean)

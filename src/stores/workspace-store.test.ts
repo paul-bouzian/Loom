@@ -24,7 +24,6 @@ vi.mock("../lib/bridge", () => ({
   updateGlobalSettings: vi.fn(),
   updateProjectSettings: vi.fn(),
   reorderProjects: vi.fn(),
-  reorderWorktreeEnvironments: vi.fn(),
   setProjectSidebarCollapsed: vi.fn(),
 }));
 
@@ -166,7 +165,7 @@ describe("workspace store", () => {
     expect(state.selectedThreadId).toBeNull();
   });
 
-  it("falls back to the local environment when a selected worktree disappears on refresh", async () => {
+  it("closes panes whose selected worktree disappears on refresh", async () => {
     useTerminalStore.setState({
       knownEnvironmentIds: ["env-local", "env-worktree"],
       byEnv: {
@@ -253,11 +252,101 @@ describe("workspace store", () => {
 
     await useWorkspaceStore.getState().refreshSnapshot();
 
+    // The pane pointed at env-worktree / thread-worktree — both gone. We
+    // must not silently redirect to env-local, otherwise a user who
+    // deleted a worktree is stuck with a pane locked onto the project's
+    // local env in split view.
     const state = useWorkspaceStore.getState();
-    expect(state.selectedProjectId).toBe("project-1");
-    expect(state.selectedEnvironmentId).toBe("env-local");
-    expect(state.selectedThreadId).toBe("thread-local");
+    expect(state.layout.slots.topLeft).toBeNull();
+    expect(state.selectedProjectId).toBeNull();
+    expect(state.selectedEnvironmentId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
     expect(useTerminalStore.getState().byEnv["env-worktree"]).toBeUndefined();
+  });
+
+  it("closes every split pane tied to a deleted worktree", async () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                id: "env-local",
+                kind: "local",
+                isDefault: true,
+                threads: [
+                  makeThread({ id: "thread-local", environmentId: "env-local" }),
+                ],
+              }),
+              makeEnvironment({
+                id: "env-worktree",
+                kind: "managedWorktree",
+                isDefault: false,
+                threads: [
+                  makeThread({
+                    id: "thread-worktree-a",
+                    environmentId: "env-worktree",
+                  }),
+                  makeThread({
+                    id: "thread-worktree-b",
+                    environmentId: "env-worktree",
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+      layout: {
+        slots: {
+          topLeft: {
+            projectId: "project-1",
+            environmentId: "env-worktree",
+            threadId: "thread-worktree-a",
+          },
+          topRight: {
+            projectId: "project-1",
+            environmentId: "env-worktree",
+            threadId: "thread-worktree-b",
+          },
+          bottomLeft: null,
+          bottomRight: null,
+        },
+        focusedSlot: "topLeft",
+        rowRatio: 0.5,
+        colRatio: 0.5,
+      },
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-worktree",
+      selectedThreadId: "thread-worktree-a",
+    }));
+    mockedBridge.getWorkspaceSnapshot.mockResolvedValue(
+      makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                id: "env-local",
+                kind: "local",
+                isDefault: true,
+                threads: [
+                  makeThread({ id: "thread-local", environmentId: "env-local" }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+
+    await useWorkspaceStore.getState().refreshSnapshot();
+
+    const state = useWorkspaceStore.getState();
+    expect(state.layout.slots.topLeft).toBeNull();
+    expect(state.layout.slots.topRight).toBeNull();
+    expect(state.layout.focusedSlot).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
   });
 
   it("returns false and stores an error when refresh fails", async () => {
@@ -280,22 +369,6 @@ describe("workspace store", () => {
           projectIds: ["project-2", "project-1"],
         }),
       reject: () => mockedBridge.reorderProjects.mockRejectedValueOnce(new Error("project reorder failed")),
-    },
-    {
-      label: "reorderWorktreeEnvironments",
-      run: () =>
-        useWorkspaceStore
-          .getState()
-          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
-      assertBridgeCall: () =>
-        expect(mockedBridge.reorderWorktreeEnvironments).toHaveBeenCalledWith({
-          projectId: "project-1",
-          environmentIds: ["env-2", "env-1"],
-        }),
-      reject: () =>
-        mockedBridge.reorderWorktreeEnvironments.mockRejectedValueOnce(
-          new Error("worktree reorder failed"),
-        ),
     },
     {
       label: "setProjectSidebarCollapsed",
@@ -346,18 +419,6 @@ describe("workspace store", () => {
           new Error("project reorder failed"),
         ),
       expectedError: "project reorder failed",
-    },
-    {
-      label: "reorderWorktreeEnvironments",
-      run: () =>
-        useWorkspaceStore
-          .getState()
-          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
-      reject: () =>
-        mockedBridge.reorderWorktreeEnvironments.mockRejectedValueOnce(
-          new Error("worktree reorder failed"),
-        ),
-      expectedError: "worktree reorder failed",
     },
     {
       label: "setProjectSidebarCollapsed",
@@ -411,48 +472,6 @@ describe("workspace store", () => {
         expect(
           useWorkspaceStore.getState().snapshot?.projects.map((project) => project.id),
         ).toEqual(["project-2", "project-1"]),
-    },
-    {
-      label: "reorderWorktreeEnvironments",
-      setupSnapshot: () =>
-        makeWorkspaceSnapshot({
-          projects: [
-            makeProject({
-              id: "project-1",
-              environments: [
-                makeEnvironment({
-                  id: "env-local",
-                  projectId: "project-1",
-                  kind: "local",
-                  isDefault: true,
-                }),
-                makeEnvironment({
-                  id: "env-1",
-                  projectId: "project-1",
-                  kind: "managedWorktree",
-                  isDefault: false,
-                }),
-                makeEnvironment({
-                  id: "env-2",
-                  projectId: "project-1",
-                  kind: "managedWorktree",
-                  isDefault: false,
-                }),
-              ],
-            }),
-          ],
-        }),
-      run: () =>
-        useWorkspaceStore
-          .getState()
-          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
-      expectedWarning: "Worktree order saved, but the workspace failed to refresh.",
-      assertSnapshot: () =>
-        expect(
-          useWorkspaceStore.getState().snapshot?.projects[0]?.environments.map(
-            (environment) => environment.id,
-          ),
-        ).toEqual(["env-local", "env-2", "env-1"]),
     },
     {
       label: "setProjectSidebarCollapsed",
@@ -1041,6 +1060,42 @@ describe("workspace store — grid 2x2 panes", () => {
     expect(slots().topRight).toBeNull();
   });
 
+  it("reconcile preserves focus when compaction moves the focused pane", async () => {
+    const snapshot = seedTwoThreadWorkspace();
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      layout: {
+        slots: {
+          topLeft: {
+            projectId: "project-a",
+            environmentId: "env-a",
+            threadId: "thread-a-1",
+          },
+          topRight: null,
+          bottomLeft: null,
+          bottomRight: {
+            projectId: "project-b",
+            environmentId: "env-b",
+            threadId: "thread-b-1",
+          },
+        },
+        focusedSlot: "bottomRight",
+        rowRatio: 0.5,
+        colRatio: 0.5,
+      },
+      selectedProjectId: "project-b",
+      selectedEnvironmentId: "env-b",
+      selectedThreadId: "thread-b-1",
+    }));
+    mockedBridge.getWorkspaceSnapshot.mockResolvedValue(snapshot);
+
+    await useWorkspaceStore.getState().refreshSnapshot();
+
+    expect(slots().bottomLeft?.threadId).toBe("thread-b-1");
+    expect(useWorkspaceStore.getState().layout.focusedSlot).toBe("bottomLeft");
+    expect(useWorkspaceStore.getState().selectedThreadId).toBe("thread-b-1");
+  });
+
   it("selectThread routes to the focused slot", () => {
     seedTwoThreadWorkspace();
     useWorkspaceStore.getState().dropThreadInDirection("right", "thread-a-1");
@@ -1051,5 +1106,173 @@ describe("workspace store — grid 2x2 panes", () => {
 
     expect(slots().topLeft?.threadId).toBe("thread-a-1");
     expect(slots().topRight?.threadId).toBe("thread-a-2");
+  });
+
+  describe("thread draft state", () => {
+    function drafts() {
+      return useWorkspaceStore.getState().draftBySlot;
+    }
+
+    it("openThreadDraft seeds topLeft when the layout is empty", () => {
+      seedTwoThreadWorkspace();
+
+      const slot = useWorkspaceStore
+        .getState()
+        .openThreadDraft("project-a");
+
+      expect(slot).toBe("topLeft");
+      expect(drafts().topLeft).toEqual({ projectId: "project-a" });
+      expect(slots().topLeft).toEqual({
+        projectId: "project-a",
+        environmentId: null,
+        threadId: null,
+      });
+      expect(useWorkspaceStore.getState().layout.focusedSlot).toBe("topLeft");
+    });
+
+    it("openThreadDraft reuses the currently focused slot", () => {
+      seedTwoThreadWorkspace();
+      useWorkspaceStore.getState().dropThreadInDirection("right", "thread-a-1");
+      useWorkspaceStore.getState().dropThreadInDirection("right", "thread-b-1");
+
+      const slot = useWorkspaceStore
+        .getState()
+        .openThreadDraft("project-a");
+
+      expect(slot).toBe("topRight");
+      expect(drafts().topRight?.projectId).toBe("project-a");
+      expect(slots().topRight?.threadId).toBeNull();
+    });
+
+    it("refreshSnapshot remaps draft slots when layout reconciliation compacts panes", async () => {
+      const snapshot = seedTwoThreadWorkspace();
+      useWorkspaceStore.setState((state) => ({
+        ...state,
+        layout: {
+          slots: {
+            topLeft: null,
+            topRight: {
+              projectId: "project-a",
+              environmentId: null,
+              threadId: null,
+            },
+            bottomLeft: null,
+            bottomRight: null,
+          },
+          focusedSlot: "topRight",
+          rowRatio: 0.5,
+          colRatio: 0.5,
+        },
+        draftBySlot: {
+          topRight: { projectId: "project-a" },
+        },
+      }));
+      mockedBridge.getWorkspaceSnapshot.mockResolvedValue(snapshot);
+
+      await useWorkspaceStore.getState().refreshSnapshot();
+
+      expect(slots().topLeft).toEqual({
+        projectId: "project-a",
+        environmentId: null,
+        threadId: null,
+      });
+      expect(slots().topRight).toBeNull();
+      expect(drafts().topLeft).toEqual({ projectId: "project-a" });
+      expect(drafts().topRight).toBeUndefined();
+      expect(useWorkspaceStore.getState().layout.focusedSlot).toBe("topLeft");
+    });
+
+    it("refreshSnapshot closes a draft pane when its project disappears", async () => {
+      seedTwoThreadWorkspace();
+      useWorkspaceStore.setState((state) => ({
+        ...state,
+        layout: {
+          slots: {
+            topLeft: {
+              projectId: "project-a",
+              environmentId: null,
+              threadId: null,
+            },
+            topRight: null,
+            bottomLeft: null,
+            bottomRight: null,
+          },
+          focusedSlot: "topLeft",
+          rowRatio: 0.5,
+          colRatio: 0.5,
+        },
+        draftBySlot: {
+          topLeft: { projectId: "project-a" },
+        },
+        selectedProjectId: "project-a",
+        selectedEnvironmentId: null,
+        selectedThreadId: null,
+      }));
+      mockedBridge.getWorkspaceSnapshot.mockResolvedValue(
+        makeWorkspaceSnapshot({
+          projects: [
+            makeProject({
+              id: "project-b",
+              name: "Project B",
+              environments: [
+                makeEnvironment({
+                  id: "env-b",
+                  projectId: "project-b",
+                  threads: [makeThread({ id: "thread-b-1", environmentId: "env-b" })],
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+
+      await useWorkspaceStore.getState().refreshSnapshot();
+
+      expect(slots().topLeft).toBeNull();
+      expect(drafts().topLeft).toBeUndefined();
+      expect(useWorkspaceStore.getState().layout.focusedSlot).toBeNull();
+      expect(useWorkspaceStore.getState().selectedProjectId).toBeNull();
+    });
+
+    it("selectThread clears the draft for the focused slot", () => {
+      seedTwoThreadWorkspace();
+      useWorkspaceStore.getState().openThreadDraft("project-a");
+      expect(drafts().topLeft).toBeDefined();
+
+      useWorkspaceStore.getState().selectThread("thread-a-1");
+
+      expect(drafts().topLeft).toBeUndefined();
+      expect(slots().topLeft?.threadId).toBe("thread-a-1");
+    });
+
+    it("selectProject clears the draft in the focused slot", () => {
+      seedTwoThreadWorkspace();
+      useWorkspaceStore.getState().openThreadDraft("project-a");
+
+      useWorkspaceStore.getState().selectProject("project-b");
+
+      expect(drafts().topLeft).toBeUndefined();
+    });
+
+    it("closePane removes the draft entry for that slot", () => {
+      seedTwoThreadWorkspace();
+      useWorkspaceStore.getState().openThreadDraft("project-a");
+
+      useWorkspaceStore.getState().closePane("topLeft");
+
+      expect(drafts().topLeft).toBeUndefined();
+      expect(slots().topLeft).toBeNull();
+    });
+
+    it("closeThreadDraft removes only the targeted slot's draft", () => {
+      seedTwoThreadWorkspace();
+      useWorkspaceStore.getState().openThreadDraft("project-a", "topLeft");
+      useWorkspaceStore.getState().openThreadDraft("project-b", "topRight");
+
+      useWorkspaceStore.getState().closeThreadDraft("topRight");
+
+      expect(drafts().topRight).toBeUndefined();
+      expect(drafts().topLeft?.projectId).toBe("project-a");
+    });
   });
 });

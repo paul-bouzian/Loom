@@ -25,7 +25,9 @@ import {
   selectConversationError,
   selectConversationHydration,
   selectConversationSnapshot,
+  selectPendingFirstMessage,
   useConversationStore,
+  type PendingFirstMessage,
 } from "../../stores/conversation-store";
 import { ConversationInteractionPanel } from "./ConversationInteractionPanel";
 import { ConversationBanner, ConversationItemRow } from "./ConversationItemRow";
@@ -82,6 +84,16 @@ export function ThreadConversation({
     (state) => state.respondToUserInputRequest,
   );
   const submitPlanDecision = useConversationStore((state) => state.submitPlanDecision);
+  const pendingFirstMessage = useConversationStore(
+    selectPendingFirstMessage(thread.id),
+  );
+  const consumePendingFirstMessage = useConversationStore(
+    (state) => state.consumePendingFirstMessage,
+  );
+  const enqueuePendingFirstMessage = useConversationStore(
+    (state) => state.enqueuePendingFirstMessage,
+  );
+  const pendingFirstMessageRetryRef = useRef(false);
   const [isPreparingWorktreeName, setIsPreparingWorktreeName] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -103,6 +115,7 @@ export function ThreadConversation({
   useEffect(() => {
     submitGenerationRef.current += 1;
     submitInFlightRef.current = false;
+    pendingFirstMessageRetryRef.current = false;
     setIsPreparingWorktreeName(false);
     setIsSubmitting(false);
   }, [thread.id]);
@@ -315,6 +328,73 @@ export function ThreadConversation({
       });
     });
   }
+
+  // When the pane switches from a draft composer to a freshly-created
+  // thread, `sendThreadDraft` stashes the user's first message in the
+  // conversation store. Once this thread is fully hydrated we replay it
+  // through the same path a normal first-message send would take — this
+  // seeds the optimistic user message and lights up the "Naming the
+  // branch and worktree" spinner for auto-renamed worktrees.
+  useEffect(() => {
+    if (!transportReady) return;
+    if (!pendingFirstMessage) return;
+    if (submitInFlightRef.current) return;
+
+    const payload = consumePendingFirstMessage(thread.id);
+    if (!payload) return;
+
+    const submitGeneration = beginSubmitCycle();
+    if (shouldShowFirstPromptNamingNotice(environment, thread, payload.text)) {
+      setIsPreparingWorktreeName(true);
+    }
+    void sendMessage(
+      thread.id,
+      payload.text,
+      payload.images,
+      payload.mentionBindings,
+    )
+      .then((sent) => {
+        if (sent) return;
+        handleFailedReplay(payload);
+      })
+      .catch(() => {
+        handleFailedReplay(payload);
+      })
+      .finally(() => {
+        finishSubmitCycle(submitGeneration);
+      });
+
+    function handleFailedReplay(retryPayload: PendingFirstMessage) {
+      // First failure: put the payload back into the pending slot so the
+      // effect retries once (transient hydration / network hiccups).
+      if (!pendingFirstMessageRetryRef.current) {
+        pendingFirstMessageRetryRef.current = true;
+        enqueuePendingFirstMessage(thread.id, retryPayload);
+        return;
+      }
+      // Second failure: the replay path has given up. Restore text and
+      // images into the thread's regular composer draft so the user still
+      // sees their message and can send it manually. Mention bindings
+      // carry only the send-time input shape (no positions), so they are
+      // not re-injected into the draft — the user re-types any @-mention.
+      updateDraft(thread.id, {
+        text: retryPayload.text,
+        images: retryPayload.images,
+      });
+    }
+    // `environment` and `thread` are read snapshots of props; we only need
+    // their identity (id). `beginSubmitCycle` / `finishSubmitCycle` /
+    // `setIsPreparingWorktreeName` are stable on the component instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    transportReady,
+    pendingFirstMessage,
+    consumePendingFirstMessage,
+    enqueuePendingFirstMessage,
+    sendMessage,
+    environment.id,
+    thread.id,
+  ]);
 
   async function handleSend(
     text: string,
