@@ -174,10 +174,10 @@ pub async fn remove_project(
 
 #[tauri::command]
 pub fn create_managed_worktree(
-    input: CreateManagedWorktreeRequest,
+    mut input: CreateManagedWorktreeRequest,
     state: State<'_, AppState>,
 ) -> Result<ManagedWorktreeCreateResult, CommandError> {
-    validate_non_blank_project_id(&input.project_id)?;
+    input.project_id = normalized_project_id(&input.project_id)?.to_string();
     let result = state.workspace.create_managed_worktree(input)?;
     state.pull_requests.refresh_now();
     Ok(result)
@@ -188,15 +188,17 @@ pub fn list_project_branches(
     project_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, CommandError> {
-    validate_non_blank_project_id(&project_id)?;
-    Ok(state.workspace.list_project_branches(project_id.trim())?)
+    Ok(state
+        .workspace
+        .list_project_branches(normalized_project_id(&project_id)?)?)
 }
 
-fn validate_non_blank_project_id(project_id: &str) -> Result<(), CommandError> {
-    if project_id.trim().is_empty() {
+fn normalized_project_id(project_id: &str) -> Result<&str, CommandError> {
+    let trimmed = project_id.trim();
+    if trimmed.is_empty() {
         return Err(AppError::Validation("Project id cannot be empty.".to_string()).into());
     }
-    Ok(())
+    Ok(trimmed)
 }
 
 #[tauri::command]

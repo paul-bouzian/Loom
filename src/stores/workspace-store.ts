@@ -40,6 +40,10 @@ type WorkspaceStateUpdate =
   | ((state: WorkspaceState) => Partial<WorkspaceState> | WorkspaceState);
 
 type WorkspaceSetter = (partial: WorkspaceStateUpdate) => void;
+type ReconciledLayout = {
+  layout: WorkspaceLayout;
+  drafts: Partial<Record<SlotKey, ThreadDraftState>>;
+};
 const WORKSPACE_REFRESH_DEBOUNCE_MS = 200;
 
 export type SlotKey = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
@@ -186,11 +190,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const persistedLayout = readPersistedLayout();
       set((state) => {
         const base = persistedLayout ?? state.layout;
+        const reconciled = reconcileLayout(snapshot, base, state.draftBySlot);
         return {
           bootstrapStatus,
           snapshot,
           loadingState: "ready",
-          ...withLayout(reconcileLayout(snapshot, base, state.draftBySlot)),
+          ...withReconciledLayout(reconciled),
         };
       });
     } catch (cause: unknown) {
@@ -236,10 +241,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       const snapshot = await bridge.getWorkspaceSnapshot();
       useTerminalStore.getState().syncWorkspaceSnapshot(snapshot);
-      set((state) => ({
-        snapshot,
-        ...withLayout(reconcileLayout(snapshot, state.layout, state.draftBySlot)),
-      }));
+      set((state) => {
+        const reconciled = reconcileLayout(snapshot, state.layout, state.draftBySlot);
+        return {
+          snapshot,
+          ...withReconciledLayout(reconciled),
+        };
+      });
       return true;
     } catch (cause: unknown) {
       const message =
@@ -305,11 +313,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       }
 
       removed = true;
+      const reconciled = reconcileLayout(nextSnapshot, state.layout, state.draftBySlot);
       return {
         snapshot: nextSnapshot,
-        ...withLayout(
-          reconcileLayout(nextSnapshot, state.layout, state.draftBySlot),
-        ),
+        ...withReconciledLayout(reconciled),
       };
     });
     return removed;
@@ -860,6 +867,13 @@ function withLayout(layout: WorkspaceLayout) {
   };
 }
 
+function withReconciledLayout(reconciled: ReconciledLayout) {
+  return {
+    ...withLayout(reconciled.layout),
+    draftBySlot: reconciled.drafts,
+  };
+}
+
 export function countPanes(
   slots: Record<SlotKey, PaneSelection | null>,
 ): number {
@@ -1017,13 +1031,7 @@ function pickNeighborSlot(
  * shape ("2 top split + 1 bottom span") and make panes jump vertically
  * when a corner is closed, which is not what the user asks for with close.
  */
-function compactSlots(
-  slots: Record<SlotKey, PaneSelection | null>,
-): Record<SlotKey, PaneSelection | null> {
-  return compactSlotsAndDrafts(slots, {}).slots;
-}
-
-// Compacts slots the same way compactSlots does, and remaps draft entries so
+// Compacts slots while remapping draft entries so
 // each draft follows its pane selection's new position. Drafts whose source
 // slot stays in place are preserved; drafts in now-empty slots are dropped.
 function compactSlotsAndDrafts(
@@ -1094,7 +1102,7 @@ function reconcileLayout(
   snapshot: WorkspaceSnapshot,
   layout: WorkspaceLayout,
   draftBySlot: Partial<Record<SlotKey, ThreadDraftState>>,
-): WorkspaceLayout {
+): ReconciledLayout {
   const nextSlots: Record<SlotKey, PaneSelection | null> = {
     ...EMPTY_SLOTS,
   };
@@ -1117,7 +1125,10 @@ function reconcileLayout(
   // Always canonicalize: a persisted or legacy layout may contain
   // non-canonical holes (e.g. TR filled without TL) that would leak into
   // slot-identity logic otherwise.
-  const compacted = compactSlots(nextSlots);
+  const { slots: compacted, drafts: remappedDrafts } = compactSlotsAndDrafts(
+    nextSlots,
+    draftBySlot,
+  );
   const focusedStillFilled = layout.focusedSlot
     ? compacted[layout.focusedSlot] !== null
     : false;
@@ -1125,9 +1136,12 @@ function reconcileLayout(
     ? layout.focusedSlot
     : firstFilledSlot(compacted);
   return {
-    ...layout,
-    slots: compacted,
-    focusedSlot,
+    layout: {
+      ...layout,
+      slots: compacted,
+      focusedSlot,
+    },
+    drafts: remappedDrafts,
   };
 }
 
@@ -1336,12 +1350,11 @@ function applySnapshotMutation(
       return { error: null };
     }
 
+    const reconciled = reconcileLayout(nextSnapshot, state.layout, state.draftBySlot);
     return {
       snapshot: nextSnapshot,
       error: null,
-      ...withLayout(
-        reconcileLayout(nextSnapshot, state.layout, state.draftBySlot),
-      ),
+      ...withReconciledLayout(reconciled),
     };
   });
 }

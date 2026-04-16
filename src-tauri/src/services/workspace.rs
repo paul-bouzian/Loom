@@ -603,13 +603,9 @@ impl WorkspaceService {
             }
             trimmed.to_string()
         } else {
-            git::current_branch(&project.root_path)?
-                .or_else(|| git::resolve_base_reference(&project.root_path, None))
-                .ok_or_else(|| {
-                    AppError::Git(
-                        "Unable to determine a base branch for this project.".to_string(),
-                    )
-                })?
+            git::resolve_base_reference(&project.root_path, None).ok_or_else(|| {
+                AppError::Git("Unable to determine a base branch for this project.".to_string())
+            })?
         };
 
         let candidate = if let Some(provided_name) = input.name.as_deref() {
@@ -2860,6 +2856,41 @@ mod tests {
                 "expected Validation error for name {bad_name:?}, got {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn create_managed_worktree_uses_inferred_base_reference_instead_of_head_branch() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("base-reference-repo"))
+            .expect("repo");
+        git::run_git(&repo.path, ["checkout", "-b", "feature-stack"])
+            .expect("feature branch should be created");
+        fs::write(repo.path.join("feature-only.txt"), "feature branch commit\n")
+            .expect("feature-only marker should be written");
+        git::run_git(&repo.path, ["add", "feature-only.txt"]).expect("file should be staged");
+        git::run_git(&repo.path, ["commit", "-m", "Feature branch commit"])
+            .expect("feature commit should succeed");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+
+        let result = harness
+            .service
+            .create_managed_worktree(CreateManagedWorktreeRequest::for_project(&project.id))
+            .expect("worktree should be created from the inferred base branch");
+
+        assert_eq!(result.environment.base_branch.as_deref(), Some("main"));
+        assert!(
+            !Path::new(&result.environment.path)
+                .join("feature-only.txt")
+                .exists(),
+            "managed worktree should be created from the inferred base branch, not the current feature branch"
+        );
     }
 
     #[test]

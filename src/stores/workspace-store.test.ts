@@ -1018,6 +1018,44 @@ describe("workspace store — grid 2x2 panes", () => {
       expect(slots().topRight?.threadId).toBeNull();
     });
 
+    it("refreshSnapshot remaps draft slots when layout reconciliation compacts panes", async () => {
+      const snapshot = seedTwoThreadWorkspace();
+      useWorkspaceStore.setState((state) => ({
+        ...state,
+        layout: {
+          slots: {
+            topLeft: null,
+            topRight: {
+              projectId: "project-a",
+              environmentId: null,
+              threadId: null,
+            },
+            bottomLeft: null,
+            bottomRight: null,
+          },
+          focusedSlot: "topRight",
+          rowRatio: 0.5,
+          colRatio: 0.5,
+        },
+        draftBySlot: {
+          topRight: { projectId: "project-a" },
+        },
+      }));
+      mockedBridge.getWorkspaceSnapshot.mockResolvedValue(snapshot);
+
+      await useWorkspaceStore.getState().refreshSnapshot();
+
+      expect(slots().topLeft).toEqual({
+        projectId: "project-a",
+        environmentId: null,
+        threadId: null,
+      });
+      expect(slots().topRight).toBeNull();
+      expect(drafts().topLeft).toEqual({ projectId: "project-a" });
+      expect(drafts().topRight).toBeUndefined();
+      expect(useWorkspaceStore.getState().layout.focusedSlot).toBe("topLeft");
+    });
+
     it("selectThread clears the draft for the focused slot", () => {
       seedTwoThreadWorkspace();
       useWorkspaceStore.getState().openThreadDraft("project-a");

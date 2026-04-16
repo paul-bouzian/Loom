@@ -427,6 +427,121 @@ describe("TreeSidebar", () => {
     expect(mockedBridge.deleteWorktreeEnvironment).not.toHaveBeenCalled();
   });
 
+  it("keeps empty worktrees visible and routes their branch menu through the placeholder row", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                id: "env-local",
+                kind: "local",
+                isDefault: true,
+                threads: [],
+              }),
+              makeEnvironment({
+                id: "env-worktree",
+                kind: "managedWorktree",
+                name: "add-themes",
+                gitBranch: "add-themes",
+                path: "/Users/test/.skein/worktrees/skein/add-themes",
+                pullRequest: {
+                  number: 17,
+                  title: "Add themes",
+                  url: "https://github.com/acme/skein/pull/17",
+                  state: "open",
+                },
+                threads: [
+                  makeThread({
+                    id: "thread-archived",
+                    environmentId: "env-worktree",
+                    status: "archived",
+                    archivedAt: "2026-04-04T10:00:00Z",
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    }));
+
+    renderSidebar();
+
+    const placeholder = screen.getByRole("button", {
+      name: "Start thread in add-themes",
+    });
+    expect(placeholder).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "add-themes" })).toBeInTheDocument();
+
+    fireEvent.contextMenu(placeholder);
+
+    expect(
+      screen.getByRole("button", { name: "New thread in add-themes" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open pull request" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Delete worktree" }),
+    ).toBeInTheDocument();
+  });
+
+  it("sorts flattened worktree threads globally by most recent activity", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                id: "env-local",
+                kind: "local",
+                isDefault: true,
+                threads: [],
+              }),
+              makeEnvironment({
+                id: "env-worktree-older",
+                kind: "managedWorktree",
+                name: "older-branch",
+                gitBranch: "older-branch",
+                threads: [
+                  makeThread({
+                    id: "thread-older",
+                    environmentId: "env-worktree-older",
+                    title: "Older task",
+                    updatedAt: "2026-04-03T08:00:00Z",
+                  }),
+                ],
+              }),
+              makeEnvironment({
+                id: "env-worktree-newer",
+                kind: "managedWorktree",
+                name: "newer-branch",
+                gitBranch: "newer-branch",
+                threads: [
+                  makeThread({
+                    id: "thread-newer",
+                    environmentId: "env-worktree-newer",
+                    title: "Newer task",
+                    updatedAt: "2026-04-03T09:00:00Z",
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    }));
+
+    const { container } = renderSidebar();
+
+    expect(
+      textContentList(container.querySelectorAll(".tree-sidebar__thread-title")),
+    ).toEqual(["Newer task", "Older task"]);
+  });
+
   it.skip("shows a waiting indicator on a worktree when any active thread awaits action", () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
