@@ -165,7 +165,7 @@ describe("workspace store", () => {
     expect(state.selectedThreadId).toBeNull();
   });
 
-  it("falls back to the local environment when a selected worktree disappears on refresh", async () => {
+  it("closes panes whose selected worktree disappears on refresh", async () => {
     useTerminalStore.setState({
       knownEnvironmentIds: ["env-local", "env-worktree"],
       byEnv: {
@@ -252,11 +252,101 @@ describe("workspace store", () => {
 
     await useWorkspaceStore.getState().refreshSnapshot();
 
+    // The pane pointed at env-worktree / thread-worktree — both gone. We
+    // must not silently redirect to env-local, otherwise a user who
+    // deleted a worktree is stuck with a pane locked onto the project's
+    // local env in split view.
     const state = useWorkspaceStore.getState();
-    expect(state.selectedProjectId).toBe("project-1");
-    expect(state.selectedEnvironmentId).toBe("env-local");
-    expect(state.selectedThreadId).toBe("thread-local");
+    expect(state.layout.slots.topLeft).toBeNull();
+    expect(state.selectedProjectId).toBeNull();
+    expect(state.selectedEnvironmentId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
     expect(useTerminalStore.getState().byEnv["env-worktree"]).toBeUndefined();
+  });
+
+  it("closes every split pane tied to a deleted worktree", async () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                id: "env-local",
+                kind: "local",
+                isDefault: true,
+                threads: [
+                  makeThread({ id: "thread-local", environmentId: "env-local" }),
+                ],
+              }),
+              makeEnvironment({
+                id: "env-worktree",
+                kind: "managedWorktree",
+                isDefault: false,
+                threads: [
+                  makeThread({
+                    id: "thread-worktree-a",
+                    environmentId: "env-worktree",
+                  }),
+                  makeThread({
+                    id: "thread-worktree-b",
+                    environmentId: "env-worktree",
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+      layout: {
+        slots: {
+          topLeft: {
+            projectId: "project-1",
+            environmentId: "env-worktree",
+            threadId: "thread-worktree-a",
+          },
+          topRight: {
+            projectId: "project-1",
+            environmentId: "env-worktree",
+            threadId: "thread-worktree-b",
+          },
+          bottomLeft: null,
+          bottomRight: null,
+        },
+        focusedSlot: "topLeft",
+        rowRatio: 0.5,
+        colRatio: 0.5,
+      },
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-worktree",
+      selectedThreadId: "thread-worktree-a",
+    }));
+    mockedBridge.getWorkspaceSnapshot.mockResolvedValue(
+      makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                id: "env-local",
+                kind: "local",
+                isDefault: true,
+                threads: [
+                  makeThread({ id: "thread-local", environmentId: "env-local" }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+
+    await useWorkspaceStore.getState().refreshSnapshot();
+
+    const state = useWorkspaceStore.getState();
+    expect(state.layout.slots.topLeft).toBeNull();
+    expect(state.layout.slots.topRight).toBeNull();
+    expect(state.layout.focusedSlot).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
   });
 
   it("returns false and stores an error when refresh fails", async () => {

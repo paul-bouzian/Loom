@@ -1152,14 +1152,51 @@ function reconcilePaneSelection(
   const selectedProject = findProject(snapshot, pane.projectId);
   const selectedEnvironment = findEnvironment(snapshot, pane.environmentId);
   const selectedThread = findThreadInWorkspace(snapshot, pane.threadId);
-  const fallbackEnvironment = selectedProject
-    ? findPrimaryEnvironment(selectedProject)
-    : null;
-  const fallbackThread = selectedEnvironment
-    ? findLatestActiveThread(selectedEnvironment.environment)
-    : fallbackEnvironment
-      ? findLatestActiveThread(fallbackEnvironment)
+
+  // Close the pane when the user's explicit pick is entirely gone and
+  // there is no legitimate neighbour to surface. Previously we redirected
+  // to the project's local env, which left orphan "Local" panes locked
+  // into the split view after a worktree deletion. The sibling-thread
+  // fallback below still handles the archive-one-thread flow (env alive).
+  if (
+    pane.threadId !== null &&
+    selectedThread === null &&
+    pane.environmentId !== null &&
+    selectedEnvironment === null
+  ) {
+    return null;
+  }
+  if (
+    pane.environmentId !== null &&
+    selectedEnvironment === null &&
+    selectedThread === null
+  ) {
+    return null;
+  }
+
+  // Sibling-thread fallback: thread pick is gone but its env still
+  // resolves → surface another active thread in that env so archiving a
+  // single thread does not blank the pane.
+  const siblingEnvironment =
+    pane.threadId !== null && selectedThread === null && selectedEnvironment
+      ? selectedEnvironment.environment
       : null;
+  const siblingThread = siblingEnvironment
+    ? findLatestActiveThread(siblingEnvironment)
+    : null;
+
+  // Primary-env fallback: project-only panes land on the project's
+  // primary env + its latest active thread.
+  const primaryEnvironment =
+    pane.environmentId === null && pane.threadId === null && selectedProject
+      ? findPrimaryEnvironment(selectedProject)
+      : null;
+  const primaryThread = primaryEnvironment
+    ? findLatestActiveThread(primaryEnvironment)
+    : null;
+
+  const fallbackEnvironment = siblingEnvironment ?? primaryEnvironment;
+  const fallbackThread = siblingThread ?? primaryThread;
 
   const projectId =
     selectedProject?.id ??
