@@ -25,7 +25,6 @@ vi.mock("../../lib/bridge", () => ({
   createManagedWorktree: vi.fn(),
   deleteWorktreeEnvironment: vi.fn(),
   reorderProjects: vi.fn(),
-  reorderWorktreeEnvironments: vi.fn(),
   setProjectSidebarCollapsed: vi.fn(),
 }));
 
@@ -65,7 +64,6 @@ beforeEach(() => {
   openUrlMock.mockResolvedValue(undefined);
   mockedBridge.ensureProjectCanBeRemoved.mockResolvedValue(undefined);
   mockedBridge.reorderProjects.mockResolvedValue(undefined);
-  mockedBridge.reorderWorktreeEnvironments.mockResolvedValue(undefined);
   mockedBridge.setProjectSidebarCollapsed.mockResolvedValue(undefined);
   useConversationStore.setState((state) => ({
     ...state,
@@ -837,32 +835,6 @@ describe("TreeSidebar", () => {
     expect(mockedBridge.reorderProjects).not.toHaveBeenCalled();
   });
 
-  it.skip("selects a worktree on a simple click without starting reorder", async () => {
-    useWorkspaceStore.setState((state) => ({
-      ...state,
-      snapshot: makeWorkspaceSnapshot({
-        projects: [makeProjectWithLocalAndWorktree()],
-      }),
-      selectedEnvironmentId: "env-local",
-      selectedThreadId: "thread-local",
-    }));
-
-    const { container } = renderSidebar();
-    const worktreeRows = container.querySelectorAll<HTMLElement>(
-      ".environment-item-shell",
-    );
-
-    await userEvent.click(worktreeRows[0]);
-
-    expect(useWorkspaceStore.getState().selectedEnvironmentId).toBe(
-      "env-worktree",
-    );
-    expect(useWorkspaceStore.getState().selectedThreadId).toBe(
-      "thread-worktree",
-    );
-    expect(mockedBridge.reorderWorktreeEnvironments).not.toHaveBeenCalled();
-  });
-
   it("keeps project clicks active when the pointer moves below the drag threshold", () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
@@ -1540,196 +1512,6 @@ describe("TreeSidebar", () => {
     await waitFor(() => {
       expect(mockedBridge.reorderProjects).toHaveBeenCalledWith({
         projectIds: ["project-b", "project-a"],
-      });
-    });
-  });
-
-  it.skip("reorders worktrees in preview before persisting the drop", async () => {
-    useWorkspaceStore.setState((state) => ({
-      ...state,
-      snapshot: makeWorkspaceSnapshot({
-        projects: [
-          makeProject({
-            environments: [
-              makeEnvironment({
-                id: "env-local",
-                kind: "local",
-                isDefault: true,
-              }),
-              makeEnvironment({
-                id: "env-alpha",
-                kind: "managedWorktree",
-                name: "alpha",
-                gitBranch: "alpha",
-              }),
-              makeEnvironment({
-                id: "env-beta",
-                kind: "managedWorktree",
-                name: "beta",
-                gitBranch: "beta",
-              }),
-            ],
-          }),
-        ],
-      }),
-    }));
-    const { container } = renderSidebar();
-    const worktreeRows = container.querySelectorAll<HTMLElement>(
-      ".environment-item-shell",
-    );
-    stubVerticalRects(Array.from(worktreeRows));
-
-    fireEvent.pointerDown(worktreeRows[1], {
-      button: 0,
-      buttons: 1,
-      clientX: 12,
-      clientY: 56,
-      isPrimary: true,
-      pointerId: 3,
-    });
-    fireEvent.pointerMove(window, {
-      buttons: 1,
-      clientX: 12,
-      clientY: 8,
-      isPrimary: true,
-      pointerId: 3,
-    });
-
-    await waitFor(() => {
-      expect(
-        textContentList(container.querySelectorAll(".environment-item__name")),
-      ).toEqual(["beta", "alpha"]);
-    });
-    expect(worktreeRows[1].style.transform).toContain("translate3d(");
-    expect(mockedBridge.reorderWorktreeEnvironments).not.toHaveBeenCalled();
-
-    fireEvent.pointerUp(window, {
-      clientX: 12,
-      clientY: 8,
-      isPrimary: true,
-      pointerId: 3,
-    });
-
-    await waitFor(() => {
-      expect(mockedBridge.reorderWorktreeEnvironments).toHaveBeenCalledWith({
-        projectId: "project-1",
-        environmentIds: ["env-beta", "env-alpha"],
-      });
-    });
-  });
-
-  it.skip("persists worktree reorder when released between rows", async () => {
-    useWorkspaceStore.setState((state) => ({
-      ...state,
-      snapshot: makeWorkspaceSnapshot({
-        projects: [
-          makeProject({
-            environments: [
-              makeEnvironment({
-                id: "env-local",
-                kind: "local",
-                isDefault: true,
-              }),
-              makeEnvironment({
-                id: "env-alpha",
-                kind: "managedWorktree",
-                name: "alpha",
-                gitBranch: "alpha",
-              }),
-              makeEnvironment({
-                id: "env-beta",
-                kind: "managedWorktree",
-                name: "beta",
-                gitBranch: "beta",
-              }),
-            ],
-          }),
-        ],
-      }),
-    }));
-    const { container } = renderSidebar();
-    const worktreeRows = container.querySelectorAll<HTMLElement>(
-      ".environment-item-shell",
-    );
-    const worktreeList = container.querySelector<HTMLElement>(
-      ".project-group__environments",
-    );
-    stubVerticalRects(Array.from(worktreeRows));
-
-    expect(worktreeList).not.toBeNull();
-
-    fireEvent.pointerDown(worktreeRows[1], {
-      button: 0,
-      buttons: 1,
-      clientX: 12,
-      clientY: 56,
-      isPrimary: true,
-      pointerId: 4,
-    });
-    fireEvent.pointerMove(window, {
-      buttons: 1,
-      clientX: 12,
-      clientY: 8,
-      isPrimary: true,
-      pointerId: 4,
-    });
-    fireEvent.pointerUp(window, {
-      clientX: 12,
-      clientY: 38,
-      isPrimary: true,
-      pointerId: 4,
-    });
-
-    await waitFor(() => {
-      expect(mockedBridge.reorderWorktreeEnvironments).toHaveBeenCalledWith({
-        projectId: "project-1",
-        environmentIds: ["env-beta", "env-alpha"],
-      });
-    });
-  });
-
-  it.skip("reorders worktrees from the worktree row keyboard fallback", async () => {
-    useWorkspaceStore.setState((state) => ({
-      ...state,
-      snapshot: makeWorkspaceSnapshot({
-        projects: [
-          makeProject({
-            environments: [
-              makeEnvironment({
-                id: "env-local",
-                kind: "local",
-                isDefault: true,
-              }),
-              makeEnvironment({
-                id: "env-alpha",
-                kind: "managedWorktree",
-                name: "alpha",
-                gitBranch: "alpha",
-              }),
-              makeEnvironment({
-                id: "env-beta",
-                kind: "managedWorktree",
-                name: "beta",
-                gitBranch: "beta",
-              }),
-            ],
-          }),
-        ],
-      }),
-    }));
-
-    const { container } = renderSidebar();
-
-    const worktreeRows =
-      container.querySelectorAll<HTMLButtonElement>(".environment-item");
-    fireEvent.keyDown(worktreeRows[1], {
-      key: "ArrowUp",
-    });
-
-    await waitFor(() => {
-      expect(mockedBridge.reorderWorktreeEnvironments).toHaveBeenCalledWith({
-        projectId: "project-1",
-        environmentIds: ["env-beta", "env-alpha"],
       });
     });
   });

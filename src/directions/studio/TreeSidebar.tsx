@@ -35,7 +35,6 @@ import { SidebarUtilityActions } from "./SidebarUtilityActions";
 import type { Theme } from "./StudioShell";
 import {
   archiveThreadWithConfirmation,
-  createManagedWorktreeForSelection,
   createThreadForEnvironment,
   openThreadDraftForProject,
 } from "./studioActions";
@@ -81,9 +80,6 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   const selectedProjectId = useWorkspaceStore((s) => s.selectedProjectId);
   const refreshSnapshot = useWorkspaceStore((s) => s.refreshSnapshot);
   const reorderProjects = useWorkspaceStore((s) => s.reorderProjects);
-  const reorderWorktreeEnvironments = useWorkspaceStore(
-    (s) => s.reorderWorktreeEnvironments,
-  );
   const setProjectSidebarCollapsed = useWorkspaceStore(
     (s) => s.setProjectSidebarCollapsed,
   );
@@ -98,14 +94,10 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   const { error, clearError, importProject, isImporting } = useProjectImport();
   const [actionError, setActionError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [creatingWorktreeProjectId, setCreatingWorktreeProjectId] = useState<
-    string | null
-  >(null);
   const notice = actionError ?? error;
   const {
     dragState,
     orderedProjects,
-    orderedWorktreeEnvironments,
     registerProjectItem,
     handleProjectPointerDown,
     handleProjectKeyboardReorder,
@@ -114,7 +106,6 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   } = useTreeSidebarReorder({
     projects,
     reorderProjects,
-    reorderWorktreeEnvironments,
     resetMessages,
     setActionError,
   });
@@ -186,7 +177,9 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
     const localEnvironment = project.environments.find(
       (candidate) => candidate.kind === "local",
     );
-    const worktreeEnvironments = orderedWorktreeEnvironments(project);
+    const worktreeEnvironments = project.environments.filter(
+      (environment) => environment.kind !== "local",
+    );
     const localThreads = localEnvironment
       ? localEnvironment.threads
           .filter((thread) => thread.status === "active")
@@ -337,19 +330,6 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
         return;
       }
       setActionError(actionErrorMessage(cause, "Failed to remove project"));
-    }
-  }
-
-  async function handleCreateManagedWorktree(projectId: string) {
-    setCreatingWorktreeProjectId(projectId);
-    try {
-      resetMessages();
-      selectProject(projectId);
-      await createManagedWorktreeForSelection();
-    } catch (cause: unknown) {
-      setActionError(actionErrorMessage(cause, "Failed to create worktree"));
-    } finally {
-      setCreatingWorktreeProjectId(null);
     }
   }
 
@@ -603,19 +583,6 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
                   }}
                 >
                   New thread
-                </button>
-                <button
-                  type="button"
-                  className="tree-sidebar__context-item tx-dropdown-option"
-                  disabled={creatingWorktreeProjectId === contextMenu.projectId}
-                  onClick={() => {
-                    setContextMenu(null);
-                    if (contextMenu.projectId) {
-                      void handleCreateManagedWorktree(contextMenu.projectId);
-                    }
-                  }}
-                >
-                  Create worktree (standalone)
                 </button>
                 <div className="tree-sidebar__context-separator" />
                 <button

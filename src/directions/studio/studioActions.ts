@@ -35,21 +35,6 @@ export async function createThreadForEnvironment(environmentId: string) {
   return true;
 }
 
-export async function createManagedWorktreeForSelection() {
-  const projectId = selectedProjectId();
-  if (!projectId) {
-    return false;
-  }
-
-  const result = await bridge.createManagedWorktree(projectId);
-  const refreshed = await useWorkspaceStore.getState().refreshSnapshot();
-  if (!refreshed) {
-    return false;
-  }
-  useWorkspaceStore.getState().selectThread(result.thread.id);
-  return true;
-}
-
 export function openThreadDraftForProject(
   projectId: string,
   slot?: SlotKey,
@@ -367,20 +352,6 @@ function selectedEnvironment() {
   );
 }
 
-function selectedProjectId() {
-  const state = useWorkspaceStore.getState();
-  if (state.selectedProjectId) {
-    return state.selectedProjectId;
-  }
-  if (state.snapshot && state.selectedEnvironmentId) {
-    for (const project of state.snapshot.projects) {
-      if (project.environments.some((environment) => environment.id === state.selectedEnvironmentId)) {
-        return project.id;
-      }
-    }
-  }
-  return null;
-}
 
 function findThread(snapshot: WorkspaceSnapshot | null, threadId: string) {
   if (!snapshot) {

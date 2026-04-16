@@ -917,11 +917,6 @@ export type ReorderProjectsRequest = {
   projectIds: string[];
 };
 
-export type ReorderWorktreeEnvironmentsRequest = {
-  projectId: string;
-  environmentIds: string[];
-};
-
 export type SetProjectSidebarCollapsedRequest = {
   projectId: string;
   collapsed: boolean;

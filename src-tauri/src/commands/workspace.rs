@@ -15,7 +15,6 @@ use crate::error::{AppError, CommandError};
 use crate::services::workspace::{
     AddProjectRequest, ArchiveThreadRequest, CreateManagedWorktreeRequest, CreateThreadRequest,
     RenameProjectRequest, RenameThreadRequest, ReorderProjectsRequest,
-    ReorderWorktreeEnvironmentsRequest,
     RunProjectActionRequest, SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest,
 };
 use crate::services::worktree_scripts::{skein_context_environment, SkeinContextInput};
@@ -138,14 +137,6 @@ pub fn reorder_projects(
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
     Ok(state.workspace.reorder_projects(input)?)
-}
-
-#[tauri::command]
-pub fn reorder_worktree_environments(
-    input: ReorderWorktreeEnvironmentsRequest,
-    state: State<'_, AppState>,
-) -> Result<(), CommandError> {
-    Ok(state.workspace.reorder_worktree_environments(input)?)
 }
 
 #[tauri::command]

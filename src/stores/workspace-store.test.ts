@@ -24,7 +24,6 @@ vi.mock("../lib/bridge", () => ({
   updateGlobalSettings: vi.fn(),
   updateProjectSettings: vi.fn(),
   reorderProjects: vi.fn(),
-  reorderWorktreeEnvironments: vi.fn(),
   setProjectSidebarCollapsed: vi.fn(),
 }));
 
@@ -282,22 +281,6 @@ describe("workspace store", () => {
       reject: () => mockedBridge.reorderProjects.mockRejectedValueOnce(new Error("project reorder failed")),
     },
     {
-      label: "reorderWorktreeEnvironments",
-      run: () =>
-        useWorkspaceStore
-          .getState()
-          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
-      assertBridgeCall: () =>
-        expect(mockedBridge.reorderWorktreeEnvironments).toHaveBeenCalledWith({
-          projectId: "project-1",
-          environmentIds: ["env-2", "env-1"],
-        }),
-      reject: () =>
-        mockedBridge.reorderWorktreeEnvironments.mockRejectedValueOnce(
-          new Error("worktree reorder failed"),
-        ),
-    },
-    {
       label: "setProjectSidebarCollapsed",
       run: () =>
         useWorkspaceStore
@@ -346,18 +329,6 @@ describe("workspace store", () => {
           new Error("project reorder failed"),
         ),
       expectedError: "project reorder failed",
-    },
-    {
-      label: "reorderWorktreeEnvironments",
-      run: () =>
-        useWorkspaceStore
-          .getState()
-          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
-      reject: () =>
-        mockedBridge.reorderWorktreeEnvironments.mockRejectedValueOnce(
-          new Error("worktree reorder failed"),
-        ),
-      expectedError: "worktree reorder failed",
     },
     {
       label: "setProjectSidebarCollapsed",
@@ -411,48 +382,6 @@ describe("workspace store", () => {
         expect(
           useWorkspaceStore.getState().snapshot?.projects.map((project) => project.id),
         ).toEqual(["project-2", "project-1"]),
-    },
-    {
-      label: "reorderWorktreeEnvironments",
-      setupSnapshot: () =>
-        makeWorkspaceSnapshot({
-          projects: [
-            makeProject({
-              id: "project-1",
-              environments: [
-                makeEnvironment({
-                  id: "env-local",
-                  projectId: "project-1",
-                  kind: "local",
-                  isDefault: true,
-                }),
-                makeEnvironment({
-                  id: "env-1",
-                  projectId: "project-1",
-                  kind: "managedWorktree",
-                  isDefault: false,
-                }),
-                makeEnvironment({
-                  id: "env-2",
-                  projectId: "project-1",
-                  kind: "managedWorktree",
-                  isDefault: false,
-                }),
-              ],
-            }),
-          ],
-        }),
-      run: () =>
-        useWorkspaceStore
-          .getState()
-          .reorderWorktreeEnvironments("project-1", ["env-2", "env-1"]),
-      expectedWarning: "Worktree order saved, but the workspace failed to refresh.",
-      assertSnapshot: () =>
-        expect(
-          useWorkspaceStore.getState().snapshot?.projects[0]?.environments.map(
-            (environment) => environment.id,
-          ),
-        ).toEqual(["env-local", "env-2", "env-1"]),
     },
     {
       label: "setProjectSidebarCollapsed",

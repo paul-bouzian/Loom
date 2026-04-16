@@ -117,10 +117,6 @@ type WorkspaceState = {
   ) => Promise<WorkspaceProjectMutationResult>;
   removeThread: (threadId: string) => boolean;
   reorderProjects: (projectIds: string[]) => Promise<WorkspaceMutationResult>;
-  reorderWorktreeEnvironments: (
-    projectId: string,
-    environmentIds: string[],
-  ) => Promise<WorkspaceMutationResult>;
   setProjectSidebarCollapsed: (
     projectId: string,
     collapsed: boolean,
@@ -327,22 +323,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       writeFailureMessage: "Failed to reorder projects",
       refreshFailureMessage:
         "Project order saved, but the workspace failed to refresh.",
-    });
-  },
-
-  reorderWorktreeEnvironments: async (projectId, environmentIds) => {
-    return runWorkspaceMutation(set, get, {
-      run: () =>
-        bridge.reorderWorktreeEnvironments({ projectId, environmentIds }),
-      applySnapshot: (snapshot) =>
-        reorderWorktreeEnvironmentsInSnapshot(
-          snapshot,
-          projectId,
-          environmentIds,
-        ),
-      writeFailureMessage: "Failed to reorder worktrees",
-      refreshFailureMessage:
-        "Worktree order saved, but the workspace failed to refresh.",
     });
   },
 
@@ -1379,46 +1359,6 @@ function reorderProjectsInSnapshot(
     ...snapshot,
     projects: nextProjects,
   };
-}
-
-function reorderWorktreeEnvironmentsInSnapshot(
-  snapshot: WorkspaceSnapshot,
-  projectId: string,
-  environmentIds: string[],
-) {
-  let changed = false;
-  const nextProjects = snapshot.projects.map((project) => {
-    if (project.id !== projectId) {
-      return project;
-    }
-
-    const localEnvironments = project.environments.filter(
-      (environment) => environment.kind === "local",
-    );
-    const worktreeEnvironments = project.environments.filter(
-      (environment) => environment.kind !== "local",
-    );
-    const reorderedWorktrees = reorderRecordsById(
-      worktreeEnvironments,
-      environmentIds,
-    );
-    if (!reorderedWorktrees) {
-      return project;
-    }
-
-    changed = true;
-    return {
-      ...project,
-      environments: [...localEnvironments, ...reorderedWorktrees],
-    };
-  });
-
-  return changed
-    ? {
-        ...snapshot,
-        projects: nextProjects,
-      }
-    : snapshot;
 }
 
 function setProjectSidebarCollapsedInSnapshot(

@@ -25,13 +25,21 @@ type ReorderMutationResult = {
 type UseTreeSidebarReorderOptions = {
   projects: ProjectRecord[];
   reorderProjects: (projectIds: string[]) => Promise<ReorderMutationResult>;
-  reorderWorktreeEnvironments: (
-    projectId: string,
-    environmentIds: string[],
-  ) => Promise<ReorderMutationResult>;
   resetMessages: () => void;
   setActionError: (message: string) => void;
 };
+
+// Worktree reorder was dropped along with the old env-row UI. Worktree
+// pointer / keyboard paths inside the hook still exist but are never
+// invoked — they resolve through this no-op so removing the caller
+// doesn't drag a larger refactor into this PR.
+const noopReorderWorktreeEnvironments: (
+  projectId: string,
+  environmentIds: string[],
+) => Promise<ReorderMutationResult> = async () => ({
+  ok: true,
+  warningMessage: null,
+});
 
 type PointerDragSessionBase = {
   sessionId: number;
@@ -89,10 +97,10 @@ type DragVisualState =
 export function useTreeSidebarReorder({
   projects,
   reorderProjects,
-  reorderWorktreeEnvironments,
   resetMessages,
   setActionError,
 }: UseTreeSidebarReorderOptions) {
+  const reorderWorktreeEnvironments = noopReorderWorktreeEnvironments;
   const [dragState, setDragState] = useState<SidebarDragState | null>(null);
   const [previewProjectIds, setPreviewProjectIds] = useState<string[] | null>(
     null,

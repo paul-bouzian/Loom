@@ -37,7 +37,6 @@ import type {
   PersistThreadComposerDraftInput,
   ProjectRecord,
   ReorderProjectsRequest,
-  ReorderWorktreeEnvironmentsRequest,
   RunProjectActionRequest,
   RunProjectActionResult,
   ShortcutSettings,
@@ -332,12 +331,6 @@ export function reorderProjects(
   input: ReorderProjectsRequest,
 ): Promise<void> {
   return invoke<void>("reorder_projects", { input });
-}
-
-export function reorderWorktreeEnvironments(
-  input: ReorderWorktreeEnvironmentsRequest,
-): Promise<void> {
-  return invoke<void>("reorder_worktree_environments", { input });
 }
 
 export function setProjectSidebarCollapsed(

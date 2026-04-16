@@ -11,7 +11,6 @@ import { useVoiceSessionStore } from "../../stores/voice-session-store";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import {
   archiveThreadWithConfirmation,
-  createManagedWorktreeForSelection,
   createThreadForSelection,
   openThreadDraftForProject,
   selectAdjacentEnvironment,
@@ -98,21 +97,6 @@ describe("studioActions", () => {
     useWorkspaceStore.getState().selectThread("thread-1");
 
     await expect(createThreadForSelection()).resolves.toBe(false);
-
-    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
-    expect(useWorkspaceStore.getState().selectedThreadId).toBe("thread-1");
-  });
-
-  it("does not select a managed-worktree thread when the snapshot refresh fails", async () => {
-    mockedBridge.createManagedWorktree.mockResolvedValue({
-      environment: makeEnvironment({ id: "env-2", kind: "managedWorktree" }),
-      thread: makeThread({ id: "thread-3", environmentId: "env-2" }),
-    });
-    const refreshSnapshot = vi.fn(async () => false);
-    useWorkspaceStore.setState((state) => ({ ...state, refreshSnapshot }));
-    useWorkspaceStore.getState().selectThread("thread-1");
-
-    await expect(createManagedWorktreeForSelection()).resolves.toBe(false);
 
     expect(refreshSnapshot).toHaveBeenCalledTimes(1);
     expect(useWorkspaceStore.getState().selectedThreadId).toBe("thread-1");

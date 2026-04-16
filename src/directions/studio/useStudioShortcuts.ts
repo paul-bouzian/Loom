@@ -14,7 +14,6 @@ import { useTerminalStore } from "../../stores/terminal-store";
 import { selectSettings, useWorkspaceStore } from "../../stores/workspace-store";
 import {
   archiveThreadWithConfirmation,
-  createManagedWorktreeForSelection,
   createThreadForSelection,
   selectAdjacentEnvironment,
   selectAdjacentThread,
@@ -198,12 +197,6 @@ export function useStudioShortcuts({
       if (matchesShortcut(event, shortcuts.newThread)) {
         event.preventDefault();
         void createThreadForSelection().catch(reportShortcutError);
-        return;
-      }
-
-      if (matchesShortcut(event, shortcuts.newWorktree)) {
-        event.preventDefault();
-        void createManagedWorktreeForSelection().catch(reportShortcutError);
         return;
       }
 
