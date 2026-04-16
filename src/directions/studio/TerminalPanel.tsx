@@ -9,7 +9,7 @@ import {
   useTerminalStore,
 } from "../../stores/terminal-store";
 import {
-  selectSelectedEnvironment,
+  selectEffectiveEnvironment,
   useWorkspaceStore,
 } from "../../stores/workspace-store";
 import { TerminalView } from "./TerminalView";
@@ -45,7 +45,7 @@ export function TerminalPanel({ theme }: Props) {
   const markExited = useTerminalStore((s) => s.markExited);
   const setVisible = useTerminalStore((s) => s.setVisible);
 
-  const env = useWorkspaceStore(selectSelectedEnvironment);
+  const env = useWorkspaceStore(selectEffectiveEnvironment);
   const environmentId = env?.id ?? null;
   const slot = useTerminalStore(selectTerminalSlot(environmentId));
   const { tabs, activeTabId, visible } = slot;
@@ -224,14 +224,14 @@ export function TerminalPanel({ theme }: Props) {
             className="terminal-panel__action"
             aria-label={
               !environmentId
-                ? "Select a worktree first"
+                ? "Select an environment first"
                 : atCap
                   ? `Maximum ${MAX_TABS} terminals`
                   : "New terminal"
             }
             title={
               !environmentId
-                ? "Select a worktree first"
+                ? "Select an environment first"
                 : atCap
                   ? `Maximum ${MAX_TABS} terminals`
                   : "New terminal"
@@ -274,14 +274,14 @@ export function TerminalPanel({ theme }: Props) {
         {!environmentId && (
           <div className="terminal-panel__empty-state">
             <p className="terminal-panel__hint">
-              Select a worktree to open a terminal.
+              Select an environment to open a terminal.
             </p>
           </div>
         )}
         {environmentId && !activeTab && (
           <div className="terminal-panel__empty-state">
             <p className="terminal-panel__hint">
-              No terminals are open in this worktree.
+              No terminals are open in this environment.
             </p>
           </div>
         )}

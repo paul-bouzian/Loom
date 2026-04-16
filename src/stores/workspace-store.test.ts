@@ -12,6 +12,7 @@ import {
 } from "../test/fixtures/conversation";
 import { useTerminalStore } from "./terminal-store";
 import {
+  selectEffectiveEnvironmentId,
   teardownWorkspaceListener,
   useWorkspaceStore,
 } from "./workspace-store";
@@ -1128,6 +1129,42 @@ describe("workspace store — grid 2x2 panes", () => {
         threadId: null,
       });
       expect(useWorkspaceStore.getState().layout.focusedSlot).toBe("topLeft");
+      expect(useWorkspaceStore.getState().selectedProjectId).toBe("project-a");
+      expect(useWorkspaceStore.getState().selectedEnvironmentId).toBeNull();
+      expect(selectEffectiveEnvironmentId(useWorkspaceStore.getState())).toBe("env-a");
+      expect(useWorkspaceStore.getState().selectedThreadId).toBeNull();
+    });
+
+    it("openThreadDraft leaves the selected environment unset when the project has no local environment", () => {
+      useWorkspaceStore.setState((state) => ({
+        ...state,
+        snapshot: makeWorkspaceSnapshot({
+          projects: [
+            makeProject({
+              id: "project-a",
+              environments: [
+                makeEnvironment({
+                  id: "env-worktree",
+                  projectId: "project-a",
+                  kind: "managedWorktree",
+                  isDefault: true,
+                  threads: [],
+                }),
+              ],
+            }),
+          ],
+        }),
+      }));
+
+      const slot = useWorkspaceStore
+        .getState()
+        .openThreadDraft("project-a");
+
+      expect(slot).toBe("topLeft");
+      expect(useWorkspaceStore.getState().selectedProjectId).toBe("project-a");
+      expect(useWorkspaceStore.getState().selectedEnvironmentId).toBeNull();
+      expect(selectEffectiveEnvironmentId(useWorkspaceStore.getState())).toBeNull();
+      expect(useWorkspaceStore.getState().selectedThreadId).toBeNull();
     });
 
     it("openThreadDraft reuses the currently focused slot", () => {
@@ -1180,6 +1217,9 @@ describe("workspace store — grid 2x2 panes", () => {
       expect(drafts().topLeft).toEqual({ projectId: "project-a" });
       expect(drafts().topRight).toBeUndefined();
       expect(useWorkspaceStore.getState().layout.focusedSlot).toBe("topLeft");
+      expect(useWorkspaceStore.getState().selectedEnvironmentId).toBeNull();
+      expect(selectEffectiveEnvironmentId(useWorkspaceStore.getState())).toBe("env-a");
+      expect(useWorkspaceStore.getState().selectedThreadId).toBeNull();
     });
 
     it("refreshSnapshot closes a draft pane when its project disappears", async () => {
@@ -1232,6 +1272,8 @@ describe("workspace store — grid 2x2 panes", () => {
       expect(drafts().topLeft).toBeUndefined();
       expect(useWorkspaceStore.getState().layout.focusedSlot).toBeNull();
       expect(useWorkspaceStore.getState().selectedProjectId).toBeNull();
+      expect(useWorkspaceStore.getState().selectedEnvironmentId).toBeNull();
+      expect(useWorkspaceStore.getState().selectedThreadId).toBeNull();
     });
 
     it("selectThread clears the draft for the focused slot", () => {

@@ -12,16 +12,16 @@ import {
   useGitReviewStore,
 } from "../../stores/git-review-store";
 import {
-  useWorkspaceStore,
-  selectSelectedEnvironment,
+  selectEffectiveEnvironment,
   selectSelectedThread,
+  useWorkspaceStore,
 } from "../../stores/workspace-store";
 import { ChangesSection, CommitSection, ReviewSummarySection } from "./GitReviewSections";
 import { confirmRevertAll, confirmRevertFile } from "./git-review-actions";
 import "./InspectorPanel.css";
 
 export function InspectorPanel({ collapsed = false }: { collapsed?: boolean }) {
-  const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
+  const selectedEnvironment = useWorkspaceStore(selectEffectiveEnvironment);
   const selectedThread = useWorkspaceStore(selectSelectedThread);
   const selectedEnvironmentId = selectedEnvironment?.id ?? null;
   const selectedThreadId = selectedThread?.id ?? null;
@@ -128,7 +128,7 @@ export function InspectorPanel({ collapsed = false }: { collapsed?: boolean }) {
         </div>
         <div className="inspector__content">
           <p className="inspector__empty">
-            Select a project or worktree to inspect its Git state.
+            Select an environment to inspect its Git state.
           </p>
         </div>
       </aside>
