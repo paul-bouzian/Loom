@@ -900,7 +900,59 @@ describe("TreeSidebar", () => {
     );
   });
 
-  it("opens the worktree context menu on right-click regardless of PR state", () => {
+  it.each([
+    { state: "open" as const, badgeLabel: "Open PR #17: Add themes" },
+    { state: "merged" as const, badgeLabel: "Merged PR #17: Add themes" },
+    { state: "closed" as const, badgeLabel: "Closed PR #17: Add themes" },
+  ])(
+    "opens the worktree context menu on right-click for $state PR",
+    ({ state, badgeLabel }) => {
+      useWorkspaceStore.setState((workspace) => ({
+        ...workspace,
+        snapshot: makeWorkspaceSnapshot({
+          projects: [
+            makeProject({
+              environments: [
+                makeEnvironment({
+                  id: "env-local",
+                  kind: "local",
+                  isDefault: true,
+                }),
+                makeEnvironment({
+                  id: "env-worktree",
+                  kind: "managedWorktree",
+                  isDefault: false,
+                  name: "add-themes",
+                  gitBranch: "add-themes",
+                  pullRequest: {
+                    number: 17,
+                    title: "Add themes",
+                    url: "https://github.com/acme/skein/pull/17",
+                    state,
+                  },
+                }),
+              ],
+            }),
+          ],
+        }),
+      }));
+
+      renderSidebar();
+
+      fireEvent.contextMenu(
+        screen.getByRole("button", { name: badgeLabel }),
+      );
+
+      expect(
+        screen.getByRole("button", { name: "Delete worktree" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Open pull request" }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("opens the worktree context menu on right-click when no PR exists", () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
       snapshot: makeWorkspaceSnapshot({
@@ -918,12 +970,6 @@ describe("TreeSidebar", () => {
                 isDefault: false,
                 name: "add-themes",
                 gitBranch: "add-themes",
-                pullRequest: {
-                  number: 17,
-                  title: "Add themes",
-                  url: "https://github.com/acme/skein/pull/17",
-                  state: "open",
-                },
               }),
             ],
           }),
@@ -934,17 +980,15 @@ describe("TreeSidebar", () => {
     renderSidebar();
 
     fireEvent.contextMenu(
-      screen.getByRole("button", {
-        name: "Open PR #17: Add themes",
-      }),
+      screen.getByRole("button", { name: "Worktree: add-themes" }),
     );
 
     expect(
       screen.getByRole("button", { name: "Delete worktree" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Open pull request" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Open pull request" }),
+    ).toBeNull();
   });
 
   it("renders merged pull request with a merged aria-label and merged data state", () => {

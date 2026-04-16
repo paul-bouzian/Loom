@@ -686,12 +686,12 @@
 }
 
 .tree-sidebar__thread-branch[data-pr-state="closed"] {
-  background: color-mix(in srgb, var(--tx-accent) 14%, transparent);
-  color: color-mix(in srgb, var(--tx-accent) 85%, var(--tx-text-primary));
+  background: color-mix(in srgb, var(--tx-danger) 14%, transparent);
+  color: color-mix(in srgb, var(--tx-danger) 85%, var(--tx-text-primary));
   cursor: pointer;
 }
 
 .tree-sidebar__thread-branch[data-pr-state="closed"]:hover {
-  background: color-mix(in srgb, var(--tx-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--tx-danger) 24%, transparent);
   color: var(--tx-text-primary);
 }

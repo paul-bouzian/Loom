@@ -1,8 +1,10 @@
+import type { PullRequestState } from "../../lib/types";
+
 export type WorktreePullRequest = {
   number: number;
   title: string;
   url: string;
-  state: "open" | "merged" | "closed";
+  state: PullRequestState;
 };
 
 export function branchChipLabel(
@@ -15,7 +17,7 @@ export function branchChipLabel(
   return `${pullRequestStatePrefix(pullRequest.state)} PR #${pullRequest.number}: ${pullRequest.title}`;
 }
 
-function pullRequestStatePrefix(state: WorktreePullRequest["state"]): string {
+function pullRequestStatePrefix(state: PullRequestState): string {
   switch (state) {
     case "merged":
       return "Merged";

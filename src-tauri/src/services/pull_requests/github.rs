@@ -215,16 +215,15 @@ fn select_display_pull_request(
     {
         return Some(open);
     }
-    if let Some(merged) = pull_requests
-        .iter()
-        .find(|pull_request| pull_request.state == ResolvedPullRequestState::Merged)
-        .cloned()
-    {
-        return Some(merged);
-    }
-    pull_requests
-        .into_iter()
-        .find(|pull_request| pull_request.state == ResolvedPullRequestState::Closed)
+    // Among non-open PRs, surface the most recently updated one so a freshly
+    // closed rejection wins over an older merge on the same branch (and vice
+    // versa). The list is already sorted by updated_at desc above.
+    pull_requests.into_iter().find(|pull_request| {
+        matches!(
+            pull_request.state,
+            ResolvedPullRequestState::Merged | ResolvedPullRequestState::Closed
+        )
+    })
 }
 
 fn normalize_pull_request(raw: RawPullRequest) -> ResolvedPullRequest {
