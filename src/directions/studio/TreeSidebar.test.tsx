@@ -534,7 +534,9 @@ describe("TreeSidebar", () => {
       name: "Start thread in add-themes",
     });
     expect(placeholder).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Worktree: add-themes" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open PR #17: Add themes" }),
+    ).toBeInTheDocument();
 
     fireEvent.contextMenu(placeholder);
 
@@ -1194,7 +1196,7 @@ describe("TreeSidebar", () => {
     const { container } = renderSidebar();
 
     expect(
-      screen.getByRole("button", { name: "fuzzy-tiger" }),
+      screen.getByRole("button", { name: "Worktree: fuzzy-tiger" }),
     ).toBeInTheDocument();
 
     await userEvent.click(
@@ -1209,7 +1211,7 @@ describe("TreeSidebar", () => {
       expect(refreshSnapshot).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "fuzzy-tiger" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Worktree: fuzzy-tiger" })).toBeNull();
     });
     expect(mockedBridge.reorderProjects).not.toHaveBeenCalled();
   });
