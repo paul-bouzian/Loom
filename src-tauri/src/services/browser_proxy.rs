@@ -30,6 +30,7 @@ fn is_loopback_host(host: &str) -> bool {
 }
 
 const MAX_REDIRECTS: usize = 10;
+const MAX_RESPONSE_BYTES: u64 = 20 * 1024 * 1024;
 
 pub fn build_client() -> Client {
     Client::builder()
@@ -125,11 +126,16 @@ fn is_forwardable_request_header(name: &HeaderName) -> bool {
     matches!(
         name.as_str(),
         "accept"
-            | "accept-language"
             | "accept-encoding"
+            | "accept-language"
+            | "authorization"
             | "cache-control"
+            | "content-length"
+            | "content-type"
             | "cookie"
+            | "origin"
             | "pragma"
+            | "referer"
             | "user-agent"
     )
 }
@@ -154,6 +160,30 @@ fn html_escape(input: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+enum BoundedBodyError {
+    TooLarge,
+    Io(reqwest::Error),
+}
+
+async fn collect_bounded_body(
+    mut response: reqwest::Response,
+    max_bytes: u64,
+) -> Result<Vec<u8>, BoundedBodyError> {
+    let mut collected: Vec<u8> = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if (collected.len() as u64) + (chunk.len() as u64) > max_bytes {
+                    return Err(BoundedBodyError::TooLarge);
+                }
+                collected.extend_from_slice(&chunk);
+            }
+            Ok(None) => return Ok(collected),
+            Err(error) => return Err(BoundedBodyError::Io(error)),
+        }
+    }
 }
 
 pub async fn handle_request(
@@ -191,6 +221,20 @@ pub async fn handle_request(
         }
     };
 
+    if response
+        .content_length()
+        .map(|len| len > MAX_RESPONSE_BYTES)
+        .unwrap_or(false)
+    {
+        return error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &format!(
+                "Response from {target} is larger than the {}-MiB proxy limit.",
+                MAX_RESPONSE_BYTES / (1024 * 1024)
+            ),
+        );
+    }
+
     let mut builder = Response::builder().status(response.status().as_u16());
     for (name, value) in response.headers() {
         if !is_blocked_response_header(name) {
@@ -198,9 +242,18 @@ pub async fn handle_request(
         }
     }
 
-    let body = match response.bytes().await {
-        Ok(bytes) => bytes.to_vec(),
-        Err(error) => {
+    let body = match collect_bounded_body(response, MAX_RESPONSE_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(BoundedBodyError::TooLarge) => {
+            return error_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                &format!(
+                    "Response from {target} exceeded the {}-MiB proxy limit while streaming.",
+                    MAX_RESPONSE_BYTES / (1024 * 1024)
+                ),
+            );
+        }
+        Err(BoundedBodyError::Io(error)) => {
             return error_response(
                 StatusCode::BAD_GATEWAY,
                 &format!("Failed to read body from {target}: {error}"),

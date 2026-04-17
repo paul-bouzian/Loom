@@ -79,6 +79,16 @@ describe("BrowserPanel", () => {
     expect(slot().tabs.length).toBe(0);
   });
 
+  it("does not re-seed after the user closes every tab", () => {
+    render(<BrowserPanel />);
+    const firstTabId = slot().tabs[0]?.id;
+    expect(firstTabId).toBeDefined();
+    act(() => {
+      useBrowserStore.getState().closeTab(ENV, firstTabId!);
+    });
+    expect(slot().tabs.length).toBe(0);
+  });
+
   it("renders back/forward/reload buttons with correct disabled state", () => {
     render(<BrowserPanel />);
     expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();

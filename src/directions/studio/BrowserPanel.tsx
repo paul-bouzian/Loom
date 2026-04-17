@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { normalizeBrowserUrl } from "../../lib/browser-preview";
@@ -42,6 +42,7 @@ export function BrowserPanel({ collapsed = false }: Props) {
   const canGoBack = selectCanGoBack(slot);
   const canGoForward = selectCanGoForward(slot);
   const currentUrl = selectCurrentUrl(slot) ?? "";
+  const seededEnvIdsRef = useRef<Set<string>>(new Set());
 
   const openTab = useBrowserStore((state) => state.openTab);
   const closeTab = useBrowserStore((state) => state.closeTab);
@@ -52,12 +53,20 @@ export function BrowserPanel({ collapsed = false }: Props) {
   const reload = useBrowserStore((state) => state.reload);
   const markLoaded = useBrowserStore((state) => state.markLoaded);
 
-  // Create an empty tab the first time the panel is revealed for an env
-  // so the URL bar is immediately usable. The store seeds fresh tabs
-  // with the most recent detected localhost URL when available.
+  // Seed the first tab only the first time the panel is revealed for an
+  // env. Once the user has used the panel (even if they close every tab)
+  // we respect the empty state instead of re-spawning a new tab behind
+  // their back. Switching to another env seeds that env once, too.
   useEffect(() => {
     if (collapsed || !environmentId) return;
-    if (slot.tabs.length === 0) openTab(environmentId);
+    const seen = seededEnvIdsRef.current;
+    if (slot.tabs.length > 0) {
+      seen.add(environmentId);
+      return;
+    }
+    if (seen.has(environmentId)) return;
+    seen.add(environmentId);
+    openTab(environmentId);
   }, [collapsed, environmentId, slot.tabs.length, openTab]);
 
   // Drop a detected dev-server URL into a pristine about:blank tab so the
