@@ -6,10 +6,13 @@ use serde_json::{json, Value};
 use tokio::io::{duplex, AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
 use tokio::sync::Mutex;
 
-use crate::domain::conversation::ConversationComposerSettings;
+use crate::domain::conversation::{
+    ConversationComposerSettings, ConversationItem, ConversationRole,
+};
 use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort, ServiceTier};
 use crate::domain::voice::VoiceAuthMode;
 use crate::runtime::protocol::AGENT_MESSAGE_DELTA_METHOD;
+use crate::runtime::session::multi_agent_nudge_text;
 use crate::services::workspace::ThreadRuntimeContext;
 
 use super::session::RuntimeSession;
@@ -447,6 +450,8 @@ fn context_with_environment(
         },
         codex_binary_path: Some("/opt/homebrew/bin/codex".to_string()),
         stream_assistant_responses: true,
+        multi_agent_nudge_enabled: false,
+        multi_agent_nudge_max_subagents: 4,
     }
 }
 
@@ -714,6 +719,48 @@ async fn send_message_starts_new_codex_thread_with_real_turn_params() {
         .iter()
         .any(|request| request.method == "skills/list"));
     assert!(!requests.iter().any(|request| request.method == "app/list"));
+}
+
+#[tokio::test]
+async fn send_message_appends_multi_agent_nudge_without_changing_visible_snapshot_text() {
+    let (session, harness) = FakeCodexHarness::new().await;
+    let mut runtime_context = context(
+        "thread-local-multi-agent",
+        None,
+        CollaborationMode::Build,
+        ApprovalPolicy::AskToEdit,
+    );
+    runtime_context.multi_agent_nudge_enabled = true;
+    runtime_context.multi_agent_nudge_max_subagents = 6;
+
+    let result = session
+        .send_message(runtime_context, "Parallelize this".to_string(), Vec::new())
+        .await
+        .expect("message should send");
+
+    let requests = harness.requests().await;
+    let turn_start = requests
+        .iter()
+        .find(|request| request.method == "turn/start")
+        .expect("turn/start should be issued");
+    assert_eq!(
+        turn_start.params["input"][0]["text"],
+        format!("Parallelize this\n\n{}", multi_agent_nudge_text(6))
+    );
+
+    let user_message = result
+        .snapshot
+        .items
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            ConversationItem::Message(message) if message.role == ConversationRole::User => {
+                Some(message)
+            }
+            _ => None,
+        })
+        .expect("visible user message should exist");
+    assert_eq!(user_message.text, "Parallelize this");
 }
 
 #[tokio::test]
