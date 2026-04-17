@@ -1,3 +1,4 @@
+pub mod browser_proxy;
 pub mod composer;
 pub mod git;
 pub mod open;

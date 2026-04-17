@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 
+import { toPreviewUrl } from "../../lib/browser-preview";
+
 type Props = {
   tabId: string;
   url: string;
@@ -20,6 +22,7 @@ export function BrowserFrame({
   onLoadError,
 }: Props) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const iframeSrc = url ? toPreviewUrl(url) : BLANK_URL;
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -34,11 +37,11 @@ export function BrowserFrame({
   return (
     <iframe
       ref={iframeRef}
-      key={`${tabId}:${reloadNonce}:${url}`}
+      key={`${tabId}:${reloadNonce}:${iframeSrc}`}
       className={`browser-frame ${active ? "" : "browser-frame--hidden"}`}
       data-testid="browser-frame"
       data-tab-id={tabId}
-      src={url || BLANK_URL}
+      src={iframeSrc}
       title={`Browser tab ${tabId}`}
       onError={() => onLoadError?.(tabId)}
       allow="clipboard-read; clipboard-write; fullscreen"

@@ -13,6 +13,8 @@ mod state;
 use tauri::{Manager, RunEvent};
 use tracing::warn;
 
+use services::browser_proxy::{self, PREVIEW_SCHEME};
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     runtime::codex_paths::sync_process_path_from_login_shell();
@@ -31,7 +33,16 @@ pub fn run() {
     #[cfg(not(target_os = "macos"))]
     let builder = tauri::Builder::default();
 
+    let proxy_client = browser_proxy::build_client();
+
     let app = builder
+        .register_asynchronous_uri_scheme_protocol(PREVIEW_SCHEME, move |_ctx, request, responder| {
+            let client = proxy_client.clone();
+            tauri::async_runtime::spawn(async move {
+                let response = browser_proxy::handle_request(request, &client).await;
+                responder.respond(response);
+            });
+        })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
