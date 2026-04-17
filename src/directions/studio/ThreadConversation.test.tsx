@@ -3286,4 +3286,187 @@ describe("ThreadConversation", () => {
     expect(screen.getByText("text**more").tagName).toBe("EM");
     expect(screen.getByText("**text*").tagName).toBe("P");
   });
+
+  describe("timeline scroll follow", () => {
+    const originalScrollHeight = Object.getOwnPropertyDescriptor(
+      HTMLDivElement.prototype,
+      "scrollHeight",
+    );
+    const originalClientHeight = Object.getOwnPropertyDescriptor(
+      HTMLDivElement.prototype,
+      "clientHeight",
+    );
+
+    function installTimelineMetrics(scrollHeight: number, clientHeight: number) {
+      Object.defineProperty(HTMLDivElement.prototype, "scrollHeight", {
+        configurable: true,
+        get() {
+          return this.classList.contains("tx-conversation__timeline")
+            ? scrollHeight
+            : 0;
+        },
+      });
+      Object.defineProperty(HTMLDivElement.prototype, "clientHeight", {
+        configurable: true,
+        get() {
+          return this.classList.contains("tx-conversation__timeline")
+            ? clientHeight
+            : 0;
+        },
+      });
+    }
+
+    function restoreTimelineMetrics() {
+      if (originalScrollHeight) {
+        Object.defineProperty(
+          HTMLDivElement.prototype,
+          "scrollHeight",
+          originalScrollHeight,
+        );
+      }
+      if (originalClientHeight) {
+        Object.defineProperty(
+          HTMLDivElement.prototype,
+          "clientHeight",
+          originalClientHeight,
+        );
+      }
+    }
+
+    function getTimeline(): HTMLDivElement {
+      const timeline = document.querySelector<HTMLDivElement>(
+        ".tx-conversation__timeline",
+      );
+      if (!timeline) {
+        throw new Error("Timeline element not found");
+      }
+      return timeline;
+    }
+
+    it("snaps the timeline to the bottom when a new item arrives and the user is near the bottom", async () => {
+      installTimelineMetrics(1200, 400);
+      try {
+        mockedBridge.openThreadConversation.mockResolvedValue({
+          snapshot: makeConversationSnapshot({
+            items: [
+              {
+                kind: "message",
+                id: "msg-initial",
+                turnId: "turn-scroll-1",
+                role: "user",
+                text: "Initial",
+                images: null,
+                isStreaming: false,
+              },
+            ],
+          }),
+          capabilities: capabilitiesFixture,
+        });
+
+        render(
+          <ThreadConversation
+            environment={makeEnvironment()}
+            thread={makeThread()}
+          />,
+        );
+
+        await screen.findByText("Initial");
+
+        const timeline = getTimeline();
+        expect(timeline.scrollTop).toBe(1200);
+
+        // Simulate a new item streaming in while the user is parked at the
+        // bottom. Push the snapshot through the store and confirm the timeline
+        // snaps to the new bottom.
+        useConversationStore.setState((state) => ({
+          ...state,
+          snapshotsByThreadId: {
+            ...state.snapshotsByThreadId,
+            "thread-1": {
+              ...state.snapshotsByThreadId["thread-1"]!,
+              items: [
+                ...state.snapshotsByThreadId["thread-1"]!.items,
+                {
+                  kind: "message",
+                  id: "msg-followup",
+                  turnId: "turn-scroll-1",
+                  role: "assistant",
+                  text: "Follow up",
+                  images: null,
+                  isStreaming: false,
+                },
+              ],
+            },
+          },
+        }));
+
+        await screen.findByText("Follow up");
+        expect(timeline.scrollTop).toBe(1200);
+      } finally {
+        restoreTimelineMetrics();
+      }
+    });
+
+    it("does not force the timeline to the bottom after the user scrolls up", async () => {
+      installTimelineMetrics(1200, 400);
+      try {
+        mockedBridge.openThreadConversation.mockResolvedValue({
+          snapshot: makeConversationSnapshot({
+            items: [
+              {
+                kind: "message",
+                id: "msg-first",
+                turnId: "turn-scroll-2",
+                role: "user",
+                text: "First",
+                images: null,
+                isStreaming: false,
+              },
+            ],
+          }),
+          capabilities: capabilitiesFixture,
+        });
+
+        render(
+          <ThreadConversation
+            environment={makeEnvironment()}
+            thread={makeThread()}
+          />,
+        );
+
+        await screen.findByText("First");
+
+        const timeline = getTimeline();
+        timeline.scrollTop = 100;
+        fireEvent.scroll(timeline);
+
+        useConversationStore.setState((state) => ({
+          ...state,
+          snapshotsByThreadId: {
+            ...state.snapshotsByThreadId,
+            "thread-1": {
+              ...state.snapshotsByThreadId["thread-1"]!,
+              items: [
+                ...state.snapshotsByThreadId["thread-1"]!.items,
+                {
+                  kind: "message",
+                  id: "msg-second",
+                  turnId: "turn-scroll-2",
+                  role: "assistant",
+                  text: "Second",
+                  images: null,
+                  isStreaming: false,
+                },
+              ],
+            },
+          },
+        }));
+
+        await screen.findByText("Second");
+        expect(timeline.scrollTop).toBe(100);
+      } finally {
+        restoreTimelineMetrics();
+      }
+    });
+  });
 });
