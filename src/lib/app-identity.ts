@@ -148,12 +148,6 @@ export const SIDE_PANEL_WIDTH_STORAGE_KEY = buildStorageKey(
 );
 export const LEGACY_SIDE_PANEL_WIDTH_STORAGE_KEYS =
   buildLegacyStorageKeys("side-panel-width");
-export const BROWSER_STATE_STORAGE_KEY = buildStorageKey(
-  APP_SLUG,
-  "browser-state",
-);
-export const LEGACY_BROWSER_STATE_STORAGE_KEYS =
-  buildLegacyStorageKeys("browser-state");
 export const VOICE_PROCESSOR_NAME = buildStorageKey(APP_SLUG, "voice-processor");
 
 export const RELEASES_BASE_URL =

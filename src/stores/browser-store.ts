@@ -1,16 +1,8 @@
 import { create } from "zustand";
 
-import {
-  BROWSER_STATE_STORAGE_KEY,
-  LEGACY_BROWSER_STATE_STORAGE_KEYS,
-  readLocalStorageWithMigration,
-} from "../lib/app-identity";
-
 export const MAX_BROWSER_TABS = 8;
 export const DETECTED_URLS_LIMIT = 16;
 export const BROWSER_HOME_URL = "about:blank";
-
-const PERSIST_DEBOUNCE_MS = 100;
 
 export type BrowserTab = {
   id: string;
@@ -45,12 +37,6 @@ type BrowserState = {
   clearDetectedUrls: () => void;
 };
 
-type PersistedTab = Pick<BrowserTab, "id" | "history" | "cursor" | "title">;
-type PersistedState = {
-  tabs: PersistedTab[];
-  activeTabId: string | null;
-};
-
 function newTabId(): string {
   return crypto.randomUUID();
 }
@@ -65,79 +51,6 @@ export function hostFromUrl(url: string): string {
   }
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readPersistedState(): PersistedState | null {
-  try {
-    const raw = readLocalStorageWithMigration(
-      BROWSER_STATE_STORAGE_KEY,
-      LEGACY_BROWSER_STATE_STORAGE_KEYS,
-    );
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!isPlainObject(parsed)) return null;
-    const tabsRaw = parsed.tabs;
-    if (!Array.isArray(tabsRaw)) return null;
-    const tabs: PersistedTab[] = [];
-    for (const entry of tabsRaw) {
-      if (!isPlainObject(entry)) continue;
-      const id = typeof entry.id === "string" ? entry.id : null;
-      const history = Array.isArray(entry.history)
-        ? entry.history.filter((u): u is string => typeof u === "string")
-        : null;
-      const cursor = typeof entry.cursor === "number" ? entry.cursor : null;
-      const title = typeof entry.title === "string" ? entry.title : null;
-      if (!id || !history || history.length === 0 || cursor === null) continue;
-      tabs.push({
-        id,
-        history,
-        cursor: Math.min(Math.max(0, cursor), history.length - 1),
-        title: title ?? hostFromUrl(history[cursor] ?? ""),
-      });
-    }
-    const activeTabIdRaw = parsed.activeTabId;
-    const activeTabId =
-      typeof activeTabIdRaw === "string" &&
-      tabs.some((tab) => tab.id === activeTabIdRaw)
-        ? activeTabIdRaw
-        : tabs[0]?.id ?? null;
-    return { tabs: tabs.slice(0, MAX_BROWSER_TABS), activeTabId };
-  } catch {
-    return null;
-  }
-}
-
-let persistTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-
-function persistNow(tabs: BrowserTab[], activeTabId: string | null) {
-  const persistedTabs: PersistedTab[] = tabs.map((tab) => ({
-    id: tab.id,
-    history: tab.history,
-    cursor: tab.cursor,
-    title: tab.title,
-  }));
-  try {
-    localStorage.setItem(
-      BROWSER_STATE_STORAGE_KEY,
-      JSON.stringify({ tabs: persistedTabs, activeTabId }),
-    );
-  } catch {
-    /* storage quota or disabled — ignore */
-  }
-}
-
-function schedulePersist(tabs: BrowserTab[], activeTabId: string | null) {
-  if (persistTimer !== null) {
-    globalThis.clearTimeout(persistTimer);
-  }
-  persistTimer = globalThis.setTimeout(() => {
-    persistTimer = null;
-    persistNow(tabs, activeTabId);
-  }, PERSIST_DEBOUNCE_MS);
-}
-
 function buildTab(initialUrl: string): BrowserTab {
   return {
     id: newTabId(),
@@ -149,27 +62,10 @@ function buildTab(initialUrl: string): BrowserTab {
   };
 }
 
-function initialState(): Pick<
-  BrowserState,
-  "tabs" | "activeTabId" | "detectedUrls"
-> {
-  const persisted = readPersistedState();
-  if (persisted) {
-    return {
-      tabs: persisted.tabs.map((tab) => ({
-        ...tab,
-        reloadNonce: 0,
-        pending: false,
-      })),
-      activeTabId: persisted.activeTabId,
-      detectedUrls: [],
-    };
-  }
-  return { tabs: [], activeTabId: null, detectedUrls: [] };
-}
-
 export const useBrowserStore = create<BrowserState>((set, get) => ({
-  ...initialState(),
+  tabs: [],
+  activeTabId: null,
+  detectedUrls: [],
 
   openTab: (url) => {
     const state = get();
@@ -181,9 +77,7 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
     const resolvedUrl =
       url ?? state.detectedUrls[0]?.url ?? BROWSER_HOME_URL;
     const tab = buildTab(resolvedUrl);
-    const nextTabs = [...state.tabs, tab];
-    set({ tabs: nextTabs, activeTabId: tab.id });
-    schedulePersist(nextTabs, tab.id);
+    set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
     return tab.id;
   },
 
@@ -198,7 +92,6 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       nextActive = fallback ? fallback.id : null;
     }
     set({ tabs: nextTabs, activeTabId: nextActive });
-    schedulePersist(nextTabs, nextActive);
   },
 
   activateTab: (id) => {
@@ -206,7 +99,6 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
     if (state.activeTabId === id) return;
     if (!state.tabs.some((tab) => tab.id === id)) return;
     set({ activeTabId: id });
-    schedulePersist(state.tabs, id);
   },
 
   navigate: (url) => {
@@ -226,7 +118,6 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       };
     });
     set({ tabs: nextTabs });
-    schedulePersist(nextTabs, state.activeTabId);
   },
 
   back: () => {
@@ -244,7 +135,6 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       };
     });
     set({ tabs: nextTabs });
-    schedulePersist(nextTabs, state.activeTabId);
   },
 
   forward: () => {
@@ -264,7 +154,6 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       };
     });
     set({ tabs: nextTabs });
-    schedulePersist(nextTabs, state.activeTabId);
   },
 
   reload: () => {

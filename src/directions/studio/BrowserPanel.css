@@ -70,6 +70,42 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--tx-accent) 10%, transparent);
 }
 
+.browser-url-bar__input--loading {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--tx-accent) 18%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: browser-url-bar-loading 1.2s linear infinite;
+}
+
+@keyframes browser-url-bar-loading {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
+
+.browser-url-bar__reload--loading {
+  color: var(--tx-accent);
+}
+
+.browser-url-bar__reload--loading svg {
+  animation: browser-url-bar-spin 0.8s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes browser-url-bar-spin {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
 .browser-panel__action {
   width: 26px;
   height: 26px;

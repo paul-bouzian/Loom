@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { BROWSER_STATE_STORAGE_KEY } from "../lib/app-identity";
 import {
   BROWSER_HOME_URL,
   DETECTED_URLS_LIMIT,
@@ -12,25 +11,7 @@ import {
   useBrowserStore,
 } from "./browser-store";
 
-const storageState = new Map<string, string>();
-
 beforeEach(() => {
-  storageState.clear();
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (key: string) => storageState.get(key) ?? null,
-      setItem: (key: string, value: string) => {
-        storageState.set(key, String(value));
-      },
-      removeItem: (key: string) => {
-        storageState.delete(key);
-      },
-      clear: () => {
-        storageState.clear();
-      },
-    },
-  });
   useBrowserStore.setState({
     tabs: [],
     activeTabId: null,
@@ -189,22 +170,15 @@ describe("browser-store: detectedUrls", () => {
   });
 });
 
-describe("browser-store: persistence", () => {
-  it("schedules persist after openTab (debounced)", async () => {
+describe("browser-store: session-only", () => {
+  it("does not persist tabs to localStorage", async () => {
     useBrowserStore.getState().openTab("http://a");
     await new Promise((resolve) => setTimeout(resolve, 120));
-    const raw = storageState.get(BROWSER_STATE_STORAGE_KEY);
-    expect(raw).toBeTruthy();
-    const parsed = JSON.parse(raw!);
-    expect(parsed.tabs).toHaveLength(1);
-    expect(parsed.tabs[0].history).toEqual(["http://a"]);
-  });
-
-  it("does not persist detectedUrls", async () => {
-    useBrowserStore.getState().openTab("http://a");
-    useBrowserStore.getState().reportDetectedUrl("http://localhost:5173");
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    const parsed = JSON.parse(storageState.get(BROWSER_STATE_STORAGE_KEY)!);
-    expect(parsed.detectedUrls).toBeUndefined();
+    // Every skein localStorage key is namespaced with "skein-". No
+    // browser-related entry should be written.
+    const keys = Object.keys(localStorage).filter((key) =>
+      key.includes("browser"),
+    );
+    expect(keys).toEqual([]);
   });
 });

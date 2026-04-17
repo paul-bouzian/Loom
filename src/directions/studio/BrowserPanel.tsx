@@ -110,6 +110,7 @@ export function BrowserPanel({ collapsed = false }: Props) {
           currentUrl={urlBarUrl}
           canGoBack={canGoBack}
           canGoForward={canGoForward}
+          loading={activeTab?.pending === true}
           detectedUrls={detectedUrls}
           onBack={back}
           onForward={forward}

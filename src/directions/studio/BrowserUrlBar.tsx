@@ -13,6 +13,7 @@ type Props = {
   currentUrl: string;
   canGoBack: boolean;
   canGoForward: boolean;
+  loading: boolean;
   detectedUrls: DetectedUrl[];
   onBack: () => void;
   onForward: () => void;
@@ -39,6 +40,7 @@ export function BrowserUrlBar({
   currentUrl,
   canGoBack,
   canGoForward,
+  loading,
   detectedUrls,
   onBack,
   onForward,
@@ -86,11 +88,12 @@ export function BrowserUrlBar({
           <ArrowRightIcon size={13} />
         </button>
       </Tooltip>
-      <Tooltip content="Reload" side="bottom">
+      <Tooltip content={loading ? "Loading…" : "Reload"} side="bottom">
         <button
           type="button"
-          className="browser-panel__action"
-          aria-label="Reload"
+          className={`browser-panel__action browser-url-bar__reload${loading ? " browser-url-bar__reload--loading" : ""}`}
+          aria-label={loading ? "Loading" : "Reload"}
+          aria-busy={loading || undefined}
           onClick={onReload}
         >
           <ReloadIcon size={13} />
@@ -98,7 +101,7 @@ export function BrowserUrlBar({
       </Tooltip>
       <input
         type="text"
-        className="browser-url-bar__input"
+        className={`browser-url-bar__input${loading ? " browser-url-bar__input--loading" : ""}`}
         aria-label="Address"
         placeholder="http://localhost:5173"
         value={draft}
