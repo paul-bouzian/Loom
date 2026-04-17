@@ -163,6 +163,35 @@ describe("terminal-output-bus", () => {
     expect(listenMock).toHaveBeenCalledTimes(1);
   });
 
+  it("supports multiple concurrent listeners for the same ptyId", async () => {
+    let emit!: (payload: TerminalOutputPayload) => void;
+    listenMock.mockImplementation(async (callback) => {
+      emit = callback;
+      return () => {};
+    });
+
+    const bus = await loadBus();
+    await bus.ensureTerminalOutputBusReady();
+
+    const receivedA: string[] = [];
+    const receivedB: string[] = [];
+    const unlistenA = bus.subscribeToTerminalOutput("pty-1", (bytes) =>
+      receivedA.push(bytesToString(bytes)),
+    );
+    bus.subscribeToTerminalOutput("pty-1", (bytes) =>
+      receivedB.push(bytesToString(bytes)),
+    );
+
+    emit({ ptyId: "pty-1", dataBase64: encodeBase64("live") });
+    expect(receivedA).toEqual(["live"]);
+    expect(receivedB).toEqual(["live"]);
+
+    unlistenA();
+    emit({ ptyId: "pty-1", dataBase64: encodeBase64(" more") });
+    expect(receivedA).toEqual(["live"]);
+    expect(receivedB).toEqual(["live", " more"]);
+  });
+
   it("retries listener attachment after an initial failure", async () => {
     let attempts = 0;
     listenMock.mockImplementation(async () => {

@@ -18,16 +18,24 @@ import {
 } from "../../stores/workspace-store";
 import { ProjectActionCreateDialog } from "./ProjectActionCreateDialog";
 import { useVoiceSessionStore } from "../../stores/voice-session-store";
+import {
+  selectSidePanelWidth,
+  useSidePanelStore,
+} from "../../stores/side-panel-store";
 import { SettingsDialog } from "./SettingsDialog";
 import { TreeSidebar } from "./TreeSidebar";
 import { StudioMain } from "./StudioMain";
 import { InspectorPanel } from "./InspectorPanel";
+import { BrowserPanel } from "./BrowserPanel";
 import { GitDiffPanel } from "./GitDiffPanel";
+import { SidePanelResizer } from "./SidePanelResizer";
 import { AppUpdateNotice } from "./AppUpdateNotice";
 import { FirstPromptRenameFailureNotice } from "./FirstPromptRenameFailureNotice";
 import { StudioStatusBar } from "./StudioStatusBar";
+import { useLocalhostAutoDetect } from "./useLocalhostAutoDetect";
 import { useStudioShortcuts } from "./useStudioShortcuts";
 import "./StudioShell.css";
+import "./SidePanelResizer.css";
 
 export type Theme = "dark" | "light";
 
@@ -44,9 +52,16 @@ function readTheme(): Theme {
   return "dark";
 }
 
+type RightPanel = "none" | "inspector" | "browser";
+
 export function StudioShell() {
   const [projectsSidebarOpen, setProjectsSidebarOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [rightPanel, setRightPanel] = useState<RightPanel>("none");
+  const inspectorOpen = rightPanel === "inspector";
+  const browserOpen = rightPanel === "browser";
+  const [sidePanelDragging, setSidePanelDragging] = useState(false);
+  const sidePanelWidth = useSidePanelStore(selectSidePanelWidth);
+  const setSidePanelWidth = useSidePanelStore((state) => state.setWidth);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [actionCreateProjectId, setActionCreateProjectId] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(readTheme);
@@ -76,6 +91,15 @@ export function StudioShell() {
     setSettingsOpen(true);
   }, []);
 
+  const toggleInspector = useCallback(() => {
+    setRightPanel((current) =>
+      current === "inspector" ? "none" : "inspector",
+    );
+  }, []);
+  const toggleBrowser = useCallback(() => {
+    setRightPanel((current) => (current === "browser" ? "none" : "browser"));
+  }, []);
+
   useStudioShortcuts({
     shortcutsBlocked,
     onOpenSettings: openSettingsDialog,
@@ -84,13 +108,22 @@ export function StudioShell() {
     onRequestComposerFocus: () => setComposerFocusNonce((current) => current + 1),
     onToggleProjectsSidebar: () =>
       setProjectsSidebarOpen((current) => !current),
-    onToggleReviewPanel: () => setInspectorOpen((current) => !current),
+    onToggleReviewPanel: toggleInspector,
   });
+
+  useLocalhostAutoDetect();
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--tx-side-panel-width",
+      `${sidePanelWidth}px`,
+    );
+  }, [sidePanelWidth]);
 
   useEffect(() => {
     void reconcileVoiceSessionSnapshot(workspaceSnapshot);
@@ -120,8 +153,12 @@ export function StudioShell() {
     setTheme((t) => (t === "dark" ? "light" : "dark"));
   }
 
+  const rightPanelOpen = rightPanel !== "none";
+
   return (
-    <div className="studio-shell">
+    <div
+      className={`studio-shell${sidePanelDragging ? " studio-shell--resizing-side-panel" : ""}`}
+    >
       <TreeSidebar
         theme={theme}
         collapsed={!projectsSidebarOpen}
@@ -132,6 +169,7 @@ export function StudioShell() {
         theme={theme}
         projectsSidebarOpen={projectsSidebarOpen}
         inspectorOpen={inspectorOpen}
+        browserOpen={browserOpen}
         composerFocusKey={composerFocusNonce}
         approveOrSubmitKey={approveOrSubmitNonce}
         onOpenActionCreateDialog={() =>
@@ -140,10 +178,21 @@ export function StudioShell() {
         onToggleProjectsSidebar={() =>
           setProjectsSidebarOpen((current) => !current)
         }
-        onToggleInspector={() => setInspectorOpen((v) => !v)}
+        onToggleInspector={toggleInspector}
+        onToggleBrowser={toggleBrowser}
       />
       {diffPanelOpen && <GitDiffPanel />}
-      <InspectorPanel collapsed={!inspectorOpen} />
+      {rightPanelOpen && (
+        <SidePanelResizer
+          width={sidePanelWidth}
+          onResize={setSidePanelWidth}
+          onDraggingChange={setSidePanelDragging}
+        />
+      )}
+      <div className="studio-shell__right-panel" data-right-panel={rightPanel}>
+        <InspectorPanel collapsed={!inspectorOpen} />
+        <BrowserPanel collapsed={!browserOpen} />
+      </div>
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

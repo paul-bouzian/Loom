@@ -4,12 +4,18 @@
   min-height: 0;
   display: grid;
   grid-template-rows: 1fr var(--tx-statusbar-height);
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   overflow: hidden;
 }
 
 .studio-shell > .studio-statusbar {
   grid-column: 1 / -1;
+}
+
+.studio-shell__right-panel {
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
 }
 
 .studio-notice-stack {

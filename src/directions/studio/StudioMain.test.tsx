@@ -22,6 +22,7 @@ vi.mock("../../shared/Icons", () => ({
   PanelLeftIcon: () => <span data-testid="icon-panel-left" />,
   PanelRightIcon: () => <span data-testid="icon-panel-right" />,
   TerminalIcon: () => <span data-testid="icon-terminal" />,
+  GlobeIcon: () => <span data-testid="icon-globe" />,
   ThreadIcon: () => <span data-testid="icon-thread" />,
 }));
 
@@ -134,10 +135,12 @@ describe("StudioMain", () => {
         theme="dark"
         projectsSidebarOpen={false}
         inspectorOpen={false}
+        browserOpen={false}
         composerFocusKey={0}
         approveOrSubmitKey={0}
         onToggleProjectsSidebar={() => {}}
         onToggleInspector={() => {}}
+        onToggleBrowser={() => {}}
       />,
     );
 
@@ -157,10 +160,12 @@ describe("StudioMain", () => {
         theme="dark"
         projectsSidebarOpen={false}
         inspectorOpen={false}
+        browserOpen={false}
         composerFocusKey={0}
         approveOrSubmitKey={0}
         onToggleProjectsSidebar={() => {}}
         onToggleInspector={() => {}}
+        onToggleBrowser={() => {}}
       />,
     );
 
@@ -208,10 +213,12 @@ describe("StudioMain", () => {
         theme="dark"
         projectsSidebarOpen={false}
         inspectorOpen={false}
+        browserOpen={false}
         composerFocusKey={0}
         approveOrSubmitKey={0}
         onToggleProjectsSidebar={() => {}}
         onToggleInspector={() => {}}
+        onToggleBrowser={() => {}}
       />,
     );
 
@@ -221,16 +228,46 @@ describe("StudioMain", () => {
     ).not.toBeDisabled();
   });
 
+  it("renders the browser toggle button between terminal and inspector", () => {
+    const { container } = render(
+      <StudioMain
+        theme="dark"
+        projectsSidebarOpen={false}
+        inspectorOpen={false}
+        browserOpen={false}
+        composerFocusKey={0}
+        approveOrSubmitKey={0}
+        onToggleProjectsSidebar={() => {}}
+        onToggleInspector={() => {}}
+        onToggleBrowser={() => {}}
+      />,
+    );
+
+    const actions = container.querySelector(".studio-main__toolbar-actions");
+    expect(actions).not.toBeNull();
+    const toggleButtons = actions!.querySelectorAll(
+      ".studio-main__toggle-terminal, .studio-main__toggle-browser, .studio-main__toggle-inspector",
+    );
+    const classLists = Array.from(toggleButtons).map(
+      (button) => button.className,
+    );
+    expect(classLists[0]).toContain("studio-main__toggle-terminal");
+    expect(classLists[1]).toContain("studio-main__toggle-browser");
+    expect(classLists[2]).toContain("studio-main__toggle-inspector");
+  });
+
   it("keeps TerminalPanel mounted when another environment still has tabs", () => {
     const { container } = render(
       <StudioMain
         theme="dark"
         projectsSidebarOpen={false}
         inspectorOpen={false}
+        browserOpen={false}
         composerFocusKey={0}
         approveOrSubmitKey={0}
         onToggleProjectsSidebar={() => {}}
         onToggleInspector={() => {}}
+        onToggleBrowser={() => {}}
       />,
     );
 

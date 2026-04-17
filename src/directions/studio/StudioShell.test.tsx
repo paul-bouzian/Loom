@@ -32,11 +32,15 @@ vi.mock("./StudioMain", () => ({
   StudioMain: ({
     onOpenActionCreateDialog,
     inspectorOpen,
+    browserOpen,
     onToggleInspector,
+    onToggleBrowser,
   }: {
     onOpenActionCreateDialog: () => void;
     inspectorOpen: boolean;
+    browserOpen: boolean;
     onToggleInspector: () => void;
+    onToggleBrowser: () => void;
   }) => (
      <div data-testid="studio-main">
       <button type="button" onClick={onOpenActionCreateDialog}>
@@ -45,6 +49,9 @@ vi.mock("./StudioMain", () => ({
        <button type="button" onClick={onToggleInspector}>
          {inspectorOpen ? "Hide inspector" : "Show inspector"}
        </button>
+       <button type="button" onClick={onToggleBrowser}>
+         {browserOpen ? "Hide browser" : "Show browser"}
+       </button>
      </div>
    ),
 }));
@@ -52,6 +59,12 @@ vi.mock("./StudioMain", () => ({
 vi.mock("./InspectorPanel", () => ({
   InspectorPanel: ({ collapsed = false }: { collapsed?: boolean }) => (
     <div data-testid="inspector-panel" data-collapsed={String(collapsed)} />
+  ),
+}));
+
+vi.mock("./BrowserPanel", () => ({
+  BrowserPanel: ({ collapsed = false }: { collapsed?: boolean }) => (
+    <div data-testid="browser-panel" data-collapsed={String(collapsed)} />
   ),
 }));
 
@@ -416,6 +429,55 @@ describe("StudioShell", () => {
     window.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("toggles exclusively between inspector and browser panels", async () => {
+    render(<StudioShell />);
+
+    expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+    expect(screen.getByTestId("browser-panel")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show inspector" }),
+    );
+    expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+      "data-collapsed",
+      "false",
+    );
+    expect(screen.getByTestId("browser-panel")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show browser" }),
+    );
+    expect(screen.getByTestId("browser-panel")).toHaveAttribute(
+      "data-collapsed",
+      "false",
+    );
+    expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Hide browser" }),
+    );
+    expect(screen.getByTestId("browser-panel")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+    expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
   });
 
   it("toggles theme from the sidebar footer and persists the selected theme", async () => {
