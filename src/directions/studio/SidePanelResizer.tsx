@@ -13,7 +13,6 @@ type Props = {
   width: number;
   onResize: (width: number) => void;
   onDraggingChange?: (dragging: boolean) => void;
-  ariaLabel?: string;
 };
 
 type DragSession = {
@@ -22,19 +21,36 @@ type DragSession = {
   lastWidth: number;
 };
 
+function writeCssVar(value: number): void {
+  document.documentElement.style.setProperty(CSS_VAR, `${value}px`);
+}
+
+function keyboardDelta(
+  key: string,
+  width: number,
+): number | null {
+  switch (key) {
+    case "ArrowLeft":
+      return clampSidePanelWidth(width + KEYBOARD_STEP);
+    case "ArrowRight":
+      return clampSidePanelWidth(width - KEYBOARD_STEP);
+    case "Home":
+      return SIDE_PANEL_MAX_WIDTH;
+    case "End":
+      return SIDE_PANEL_MIN_WIDTH;
+    default:
+      return null;
+  }
+}
+
 export function SidePanelResizer({
   width,
   onResize,
   onDraggingChange,
-  ariaLabel = "Resize side panel",
 }: Props) {
   const sessionRef = useRef<DragSession | null>(null);
 
-  function writeCssVar(value: number) {
-    document.documentElement.style.setProperty(CSS_VAR, `${value}px`);
-  }
-
-  function endDrag(event: PointerEvent<HTMLDivElement>) {
+  function endDrag(event: PointerEvent<HTMLDivElement>): void {
     const session = sessionRef.current;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -46,26 +62,12 @@ export function SidePanelResizer({
     onDraggingChange?.(false);
   }
 
-  function adjustByKeyboard(
-    event: KeyboardEvent<HTMLDivElement>,
-    delta: number | "min" | "max",
-  ) {
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    const next = keyboardDelta(event.key, width);
+    if (next === null) return;
     event.preventDefault();
-    const next =
-      delta === "min"
-        ? SIDE_PANEL_MIN_WIDTH
-        : delta === "max"
-          ? SIDE_PANEL_MAX_WIDTH
-          : clampSidePanelWidth(width + delta);
     writeCssVar(next);
     onResize(next);
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "ArrowLeft") return adjustByKeyboard(event, KEYBOARD_STEP);
-    if (event.key === "ArrowRight") return adjustByKeyboard(event, -KEYBOARD_STEP);
-    if (event.key === "Home") return adjustByKeyboard(event, "max");
-    if (event.key === "End") return adjustByKeyboard(event, "min");
   }
 
   return (
@@ -73,7 +75,7 @@ export function SidePanelResizer({
       className="side-panel-resizer"
       role="separator"
       aria-orientation="vertical"
-      aria-label={ariaLabel}
+      aria-label="Resize side panel"
       aria-valuenow={width}
       aria-valuemin={SIDE_PANEL_MIN_WIDTH}
       aria-valuemax={SIDE_PANEL_MAX_WIDTH}

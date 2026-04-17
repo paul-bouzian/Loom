@@ -36,10 +36,6 @@ type BrowserState = {
   reportDetectedUrl: (url: string) => void;
 };
 
-function newTabId(): string {
-  return crypto.randomUUID();
-}
-
 export function hostFromUrl(url: string): string {
   if (!url || url === BROWSER_HOME_URL) return "New tab";
   try {
@@ -52,7 +48,7 @@ export function hostFromUrl(url: string): string {
 
 function buildTab(initialUrl: string): BrowserTab {
   return {
-    id: newTabId(),
+    id: crypto.randomUUID(),
     history: [initialUrl],
     cursor: 0,
     reloadNonce: 0,

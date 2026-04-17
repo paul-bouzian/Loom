@@ -22,9 +22,11 @@ type Props = {
 };
 
 function isPristineBlankTab(tab: BrowserTab | null): boolean {
-  if (!tab) return false;
-  if (tab.history.length !== 1) return false;
-  return tab.history[0] === BROWSER_HOME_URL;
+  return (
+    tab !== null &&
+    tab.history.length === 1 &&
+    tab.history[0] === BROWSER_HOME_URL
+  );
 }
 
 export function BrowserPanel({ collapsed = false }: Props) {
