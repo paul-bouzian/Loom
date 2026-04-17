@@ -37,6 +37,11 @@ function checksSummaryText(checks: PullRequestChecksSnapshot): string {
   if (checks.passed > 0) parts.push(`${checks.passed} passed`);
   if (checks.pending > 0) parts.push(`${checks.pending} running`);
   if (checks.failed > 0) parts.push(`${checks.failed} failed`);
+  const other = Math.max(
+    0,
+    checks.total - checks.passed - checks.pending - checks.failed,
+  );
+  if (other > 0) parts.push(`${other} other`);
   if (parts.length === 0) {
     return `${checks.total} check${checks.total === 1 ? "" : "s"}`;
   }

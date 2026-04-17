@@ -90,6 +90,9 @@ function SidebarThreadRowImpl(props: Props) {
   const tooltipContent: ReactNode = checks
     ? renderBranchChipTooltip(tooltipHeader, checks)
     : chipLabel;
+  const tooltipRepositionKey = checks
+    ? buildChecksRepositionKey(checks)
+    : chipLabel;
 
   return (
     <div className="tree-sidebar__thread-row">
@@ -110,7 +113,7 @@ function SidebarThreadRowImpl(props: Props) {
         <Tooltip
           content={tooltipContent}
           side="bottom"
-          repositionKey={checks ? `${checks.rollup}:${checks.total}` : chipLabel}
+          repositionKey={tooltipRepositionKey}
         >
           <button
             type="button"
@@ -176,6 +179,14 @@ function resolvePaneHint(
 }
 
 const CHECK_ITEMS_IN_TOOLTIP = 8;
+
+function buildChecksRepositionKey(checks: PullRequestChecksSnapshot): string {
+  const displayed = checks.items.slice(0, CHECK_ITEMS_IN_TOOLTIP);
+  const itemsKey = displayed
+    .map((item) => `${item.name}:${item.state}`)
+    .join("|");
+  return `${checks.rollup}:${checks.total}:${itemsKey}`;
+}
 
 function renderBranchChipTooltip(
   headerLabel: string,

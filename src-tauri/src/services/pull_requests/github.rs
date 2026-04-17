@@ -189,37 +189,32 @@ fn resolve_head_context(repo_root: &Path, local_branch: &str) -> AppResult<PullR
     })
 }
 
+const PULL_REQUEST_JSON_FIELDS_WITH_CHECKS: &str = "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup";
+const PULL_REQUEST_JSON_FIELDS_BASE: &str = "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner";
+
 fn list_matching_pull_requests(
     repo_root: &Path,
     head_context: &PullRequestHeadContext,
 ) -> AppResult<Vec<ResolvedPullRequest>> {
     let mut pull_requests_by_number = HashMap::new();
+    // Some gh versions or GHES hosts don't expose statusCheckRollup. Probe with it
+    // first and, if that ever fails on this host, skip the field for the rest of
+    // this refresh so we still surface PR metadata without checks.
+    let mut include_checks = true;
 
     for head_selector in &head_context.head_selectors {
-        let output = gh_command_output(
-            repo_root,
-            [
-                "pr",
-                "list",
-                "--head",
-                head_selector,
-                "--state",
-                "all",
-                "--limit",
-                "20",
-                "--json",
-                "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
-            ],
-        )?;
-        let raw_stdout = git::stdout_message(&output.stdout);
-        if raw_stdout.is_empty() {
-            continue;
-        }
-
-        let raw_pull_requests =
-            serde_json::from_str::<Vec<RawPullRequest>>(&raw_stdout).map_err(|error| {
-                AppError::Runtime(format!("Invalid GitHub pull request JSON: {error}"))
-            })?;
+        let raw_pull_requests = match query_pull_requests(repo_root, head_selector, include_checks)
+        {
+            Ok(prs) => prs,
+            Err(error) if include_checks => {
+                debug!(
+                    "statusCheckRollup query failed ({error}); retrying without check data"
+                );
+                include_checks = false;
+                query_pull_requests(repo_root, head_selector, false)?
+            }
+            Err(error) => return Err(error),
+        };
 
         for raw_pull_request in raw_pull_requests {
             let pull_request = normalize_pull_request(raw_pull_request);
@@ -230,6 +225,39 @@ fn list_matching_pull_requests(
     }
 
     Ok(pull_requests_by_number.into_values().collect())
+}
+
+fn query_pull_requests(
+    repo_root: &Path,
+    head_selector: &str,
+    include_checks: bool,
+) -> AppResult<Vec<RawPullRequest>> {
+    let fields = if include_checks {
+        PULL_REQUEST_JSON_FIELDS_WITH_CHECKS
+    } else {
+        PULL_REQUEST_JSON_FIELDS_BASE
+    };
+    let output = gh_command_output(
+        repo_root,
+        [
+            "pr",
+            "list",
+            "--head",
+            head_selector,
+            "--state",
+            "all",
+            "--limit",
+            "20",
+            "--json",
+            fields,
+        ],
+    )?;
+    let raw_stdout = git::stdout_message(&output.stdout);
+    if raw_stdout.is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str::<Vec<RawPullRequest>>(&raw_stdout)
+        .map_err(|error| AppError::Runtime(format!("Invalid GitHub pull request JSON: {error}")))
 }
 
 fn select_display_pull_request(

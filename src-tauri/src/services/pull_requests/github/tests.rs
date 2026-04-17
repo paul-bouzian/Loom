@@ -6,12 +6,13 @@ use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
 use super::{
-    normalize_pull_request_state, parse_repository_name_from_pull_request_url,
+    build_checks_snapshot, classify_check_state, normalize_pull_request_state,
+    parse_repository_name_from_pull_request_url,
     parse_repository_name_with_owner_from_remote_url, resolve_head_context,
     resolve_pull_request_for_target, select_display_pull_request, PullRequestHeadContext,
-    ResolvedPullRequest, ResolvedPullRequestState,
+    RawStatusCheck, ResolvedPullRequest, ResolvedPullRequestState,
 };
-use crate::domain::workspace::PullRequestState;
+use crate::domain::workspace::{ChecksItemState, ChecksRollupState, PullRequestState};
 use crate::services::git;
 use crate::services::workspace::{
     AddProjectRequest, CreateManagedWorktreeRequest, PullRequestWatchTarget, WorkspaceService,
@@ -372,4 +373,155 @@ fn restore_path(previous_path: Option<OsString>) {
     } else {
         std::env::remove_var("PATH");
     }
+}
+
+fn check_run(status: &str, conclusion: Option<&str>) -> RawStatusCheck {
+    RawStatusCheck {
+        name: Some("some-check".to_string()),
+        context: None,
+        workflow_name: None,
+        status: Some(status.to_string()),
+        state: None,
+        conclusion: conclusion.map(str::to_string),
+        details_url: None,
+        target_url: None,
+    }
+}
+
+fn status_context(state: &str) -> RawStatusCheck {
+    RawStatusCheck {
+        name: None,
+        context: Some("ci/legacy".to_string()),
+        workflow_name: None,
+        status: None,
+        state: Some(state.to_string()),
+        conclusion: None,
+        details_url: None,
+        target_url: None,
+    }
+}
+
+#[test]
+fn classify_completed_check_runs_maps_conclusions_to_states() {
+    assert_eq!(
+        classify_check_state(&check_run("COMPLETED", Some("SUCCESS"))),
+        ChecksItemState::Success
+    );
+    assert_eq!(
+        classify_check_state(&check_run("completed", Some("failure"))),
+        ChecksItemState::Failure
+    );
+    assert_eq!(
+        classify_check_state(&check_run("COMPLETED", Some("TIMED_OUT"))),
+        ChecksItemState::Failure
+    );
+    assert_eq!(
+        classify_check_state(&check_run("COMPLETED", Some("CANCELLED"))),
+        ChecksItemState::Cancelled
+    );
+    assert_eq!(
+        classify_check_state(&check_run("COMPLETED", Some("SKIPPED"))),
+        ChecksItemState::Skipped
+    );
+    assert_eq!(
+        classify_check_state(&check_run("COMPLETED", Some("NEUTRAL"))),
+        ChecksItemState::Neutral
+    );
+    assert_eq!(
+        classify_check_state(&check_run("COMPLETED", None)),
+        ChecksItemState::Neutral
+    );
+}
+
+#[test]
+fn classify_in_flight_check_runs_are_pending() {
+    for status in ["QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"] {
+        assert_eq!(
+            classify_check_state(&check_run(status, None)),
+            ChecksItemState::Pending,
+            "status {status} should be Pending",
+        );
+    }
+}
+
+#[test]
+fn classify_legacy_status_contexts_uses_state_field() {
+    assert_eq!(
+        classify_check_state(&status_context("SUCCESS")),
+        ChecksItemState::Success
+    );
+    assert_eq!(
+        classify_check_state(&status_context("ERROR")),
+        ChecksItemState::Failure
+    );
+    assert_eq!(
+        classify_check_state(&status_context("pending")),
+        ChecksItemState::Pending
+    );
+    assert_eq!(
+        classify_check_state(&status_context("expected")),
+        ChecksItemState::Pending
+    );
+}
+
+#[test]
+fn build_checks_snapshot_returns_none_when_empty() {
+    assert!(build_checks_snapshot(Vec::new()).is_none());
+}
+
+#[test]
+fn build_checks_snapshot_rolls_up_failure_when_mixed_with_pending() {
+    let snapshot = build_checks_snapshot(vec![
+        check_run("COMPLETED", Some("FAILURE")),
+        check_run("IN_PROGRESS", None),
+        check_run("COMPLETED", Some("SUCCESS")),
+    ])
+    .expect("snapshot should exist");
+
+    assert_eq!(snapshot.rollup, ChecksRollupState::Failure);
+    // pending count must stay non-zero so adaptive polling keeps the 10s cadence
+    // even when a failure has already been observed.
+    assert_eq!(snapshot.pending, 1);
+    assert_eq!(snapshot.failed, 1);
+    assert_eq!(snapshot.passed, 1);
+    assert_eq!(snapshot.total, 3);
+    // Failures should be surfaced first in the truncated display list.
+    assert_eq!(snapshot.items.first().map(|item| item.state), Some(ChecksItemState::Failure));
+}
+
+#[test]
+fn build_checks_snapshot_rolls_up_pending_when_no_failure() {
+    let snapshot = build_checks_snapshot(vec![
+        check_run("IN_PROGRESS", None),
+        check_run("COMPLETED", Some("SUCCESS")),
+    ])
+    .expect("snapshot should exist");
+
+    assert_eq!(snapshot.rollup, ChecksRollupState::Pending);
+}
+
+#[test]
+fn build_checks_snapshot_rolls_up_success_when_all_pass() {
+    let snapshot = build_checks_snapshot(vec![
+        check_run("COMPLETED", Some("SUCCESS")),
+        check_run("COMPLETED", Some("SUCCESS")),
+    ])
+    .expect("snapshot should exist");
+
+    assert_eq!(snapshot.rollup, ChecksRollupState::Success);
+    assert_eq!(snapshot.passed, 2);
+}
+
+#[test]
+fn build_checks_snapshot_rolls_up_neutral_when_only_skipped() {
+    let snapshot = build_checks_snapshot(vec![
+        check_run("COMPLETED", Some("SKIPPED")),
+        check_run("COMPLETED", Some("CANCELLED")),
+    ])
+    .expect("snapshot should exist");
+
+    assert_eq!(snapshot.rollup, ChecksRollupState::Neutral);
+    assert_eq!(snapshot.passed, 0);
+    assert_eq!(snapshot.failed, 0);
+    assert_eq!(snapshot.pending, 0);
 }
