@@ -18,16 +18,22 @@ import {
 } from "../../stores/workspace-store";
 import { ProjectActionCreateDialog } from "./ProjectActionCreateDialog";
 import { useVoiceSessionStore } from "../../stores/voice-session-store";
+import {
+  selectSidePanelWidth,
+  useSidePanelStore,
+} from "../../stores/side-panel-store";
 import { SettingsDialog } from "./SettingsDialog";
 import { TreeSidebar } from "./TreeSidebar";
 import { StudioMain } from "./StudioMain";
 import { InspectorPanel } from "./InspectorPanel";
 import { GitDiffPanel } from "./GitDiffPanel";
+import { SidePanelResizer } from "./SidePanelResizer";
 import { AppUpdateNotice } from "./AppUpdateNotice";
 import { FirstPromptRenameFailureNotice } from "./FirstPromptRenameFailureNotice";
 import { StudioStatusBar } from "./StudioStatusBar";
 import { useStudioShortcuts } from "./useStudioShortcuts";
 import "./StudioShell.css";
+import "./SidePanelResizer.css";
 
 export type Theme = "dark" | "light";
 
@@ -47,6 +53,9 @@ function readTheme(): Theme {
 export function StudioShell() {
   const [projectsSidebarOpen, setProjectsSidebarOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [sidePanelDragging, setSidePanelDragging] = useState(false);
+  const sidePanelWidth = useSidePanelStore(selectSidePanelWidth);
+  const setSidePanelWidth = useSidePanelStore((state) => state.setWidth);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [actionCreateProjectId, setActionCreateProjectId] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(readTheme);
@@ -93,6 +102,13 @@ export function StudioShell() {
   }, [theme]);
 
   useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--tx-side-panel-width",
+      `${sidePanelWidth}px`,
+    );
+  }, [sidePanelWidth]);
+
+  useEffect(() => {
     void reconcileVoiceSessionSnapshot(workspaceSnapshot);
   }, [reconcileVoiceSessionSnapshot, workspaceSnapshot]);
 
@@ -120,8 +136,12 @@ export function StudioShell() {
     setTheme((t) => (t === "dark" ? "light" : "dark"));
   }
 
+  const rightPanelOpen = inspectorOpen;
+
   return (
-    <div className="studio-shell">
+    <div
+      className={`studio-shell${sidePanelDragging ? " studio-shell--resizing-side-panel" : ""}`}
+    >
       <TreeSidebar
         theme={theme}
         collapsed={!projectsSidebarOpen}
@@ -143,6 +163,13 @@ export function StudioShell() {
         onToggleInspector={() => setInspectorOpen((v) => !v)}
       />
       {diffPanelOpen && <GitDiffPanel />}
+      {rightPanelOpen && (
+        <SidePanelResizer
+          width={sidePanelWidth}
+          onResize={setSidePanelWidth}
+          onDraggingChange={setSidePanelDragging}
+        />
+      )}
       <InspectorPanel collapsed={!inspectorOpen} />
       <SettingsDialog
         open={settingsOpen}

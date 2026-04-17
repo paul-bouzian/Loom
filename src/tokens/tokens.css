@@ -47,7 +47,9 @@
   /* ── Layout ── */
   --tx-sidebar-width: 256px;
   --tx-diff-width: 420px;
-  --tx-inspector-width: 320px;
+  --tx-side-panel-width: 320px;
+  --tx-side-panel-min-width: 280px;
+  --tx-side-panel-max-width: 900px;
   --tx-toolbar-height: 44px;
   --tx-statusbar-height: 28px;
   --tx-column-width: 240px;

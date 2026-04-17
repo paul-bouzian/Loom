@@ -1,0 +1,36 @@
+.side-panel-resizer {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+  z-index: 2;
+}
+
+.side-panel-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: transparent;
+  transition: background var(--tx-transition-fast);
+}
+
+.side-panel-resizer:hover::after,
+.side-panel-resizer:focus-visible::after,
+.studio-shell--resizing-side-panel .side-panel-resizer::after {
+  background: var(--tx-accent);
+}
+
+.side-panel-resizer:focus-visible {
+  outline: none;
+}
+
+.studio-shell--resizing-side-panel {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.studio-shell--resizing-side-panel .inspector-panel,
+.studio-shell--resizing-side-panel .browser-panel {
+  transition: none !important;
+}

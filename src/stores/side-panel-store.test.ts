@@ -1,0 +1,82 @@
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { SIDE_PANEL_WIDTH_STORAGE_KEY } from "../lib/app-identity";
+import {
+  SIDE_PANEL_DEFAULT_WIDTH,
+  SIDE_PANEL_MAX_WIDTH,
+  SIDE_PANEL_MIN_WIDTH,
+  clampSidePanelWidth,
+  useSidePanelStore,
+} from "./side-panel-store";
+
+const storageState = new Map<string, string>();
+
+beforeEach(() => {
+  storageState.clear();
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storageState.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storageState.set(key, String(value));
+      },
+      removeItem: (key: string) => {
+        storageState.delete(key);
+      },
+      clear: () => {
+        storageState.clear();
+      },
+    },
+  });
+  useSidePanelStore.setState({ width: SIDE_PANEL_DEFAULT_WIDTH });
+});
+
+describe("clampSidePanelWidth", () => {
+  it("keeps values within bounds", () => {
+    expect(clampSidePanelWidth(500)).toBe(500);
+  });
+
+  it("clamps below min", () => {
+    expect(clampSidePanelWidth(100)).toBe(SIDE_PANEL_MIN_WIDTH);
+  });
+
+  it("clamps above max", () => {
+    expect(clampSidePanelWidth(5000)).toBe(SIDE_PANEL_MAX_WIDTH);
+  });
+
+  it("rounds fractional widths", () => {
+    expect(clampSidePanelWidth(420.7)).toBe(421);
+  });
+
+  it("returns default for NaN", () => {
+    expect(clampSidePanelWidth(Number.NaN)).toBe(SIDE_PANEL_DEFAULT_WIDTH);
+  });
+});
+
+describe("useSidePanelStore", () => {
+  it("setWidth persists to localStorage after debounce", async () => {
+    useSidePanelStore.getState().setWidth(600);
+    expect(useSidePanelStore.getState().width).toBe(600);
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(storageState.get(SIDE_PANEL_WIDTH_STORAGE_KEY)).toBe("600");
+  });
+
+  it("setWidth clamps to min", () => {
+    useSidePanelStore.getState().setWidth(10);
+    expect(useSidePanelStore.getState().width).toBe(SIDE_PANEL_MIN_WIDTH);
+  });
+
+  it("setWidth clamps to max", () => {
+    useSidePanelStore.getState().setWidth(9999);
+    expect(useSidePanelStore.getState().width).toBe(SIDE_PANEL_MAX_WIDTH);
+  });
+
+  it("setWidth is a no-op when unchanged", () => {
+    useSidePanelStore.getState().setWidth(500);
+    const first = useSidePanelStore.getState();
+    useSidePanelStore.getState().setWidth(500);
+    const second = useSidePanelStore.getState();
+    expect(first.width).toBe(second.width);
+  });
+});
