@@ -21,6 +21,7 @@ type Props = {
   onOpenExternal?: (url: string) => void;
 };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function normalizeBrowserUrl(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;

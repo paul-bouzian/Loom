@@ -11,7 +11,7 @@ type BufferedOutput = {
   totalBytes: number;
 };
 
-const activeListeners = new Map<string, OutputListener>();
+const activeListeners = new Map<string, Set<OutputListener>>();
 const replayBuffers = new Map<string, BufferedOutput>();
 let subscriptionPromise: Promise<void> | null = null;
 
@@ -58,10 +58,12 @@ function copyReplayBuffer(buffer: BufferedOutput): Uint8Array {
 function handleOutput(ptyId: string, bytes: Uint8Array) {
   appendToReplay(ptyId, bytes);
 
-  const listener = activeListeners.get(ptyId);
-  if (listener) {
+  const listeners = activeListeners.get(ptyId);
+  if (!listeners || listeners.size === 0) return;
+  // Copy to snapshot before iterating so listeners that unsubscribe during
+  // callback don't mutate the Set we're walking.
+  for (const listener of Array.from(listeners)) {
     listener(bytes);
-    return;
   }
 }
 
@@ -88,21 +90,30 @@ export function ensureTerminalOutputBusReady(): Promise<void> {
 /**
  * Register a listener for output from a specific PTY. Any buffered output for
  * that PTY is replayed synchronously before subscribeToTerminalOutput returns
- * so a remounted TerminalView can rebuild its scrollback. Returns an
- * unsubscribe function that removes the listener only if it is still the
- * active one for that ptyId.
+ * so a remounted TerminalView can rebuild its scrollback. Multiple listeners
+ * can coexist for the same ptyId (for example, a TerminalView rendering the
+ * output and a localhost URL sniffer running alongside). Returns an
+ * unsubscribe function that removes this specific listener.
  */
 export function subscribeToTerminalOutput(
   ptyId: string,
   listener: OutputListener,
 ): () => void {
-  activeListeners.set(ptyId, listener);
+  let listeners = activeListeners.get(ptyId);
+  if (!listeners) {
+    listeners = new Set();
+    activeListeners.set(ptyId, listeners);
+  }
+  listeners.add(listener);
   const replay = replayBuffers.get(ptyId);
   if (replay && replay.totalBytes > 0) {
     listener(copyReplayBuffer(replay));
   }
   return () => {
-    if (activeListeners.get(ptyId) === listener) {
+    const set = activeListeners.get(ptyId);
+    if (!set) return;
+    set.delete(listener);
+    if (set.size === 0) {
       activeListeners.delete(ptyId);
     }
   };

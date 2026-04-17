@@ -32,6 +32,7 @@ import { SidePanelResizer } from "./SidePanelResizer";
 import { AppUpdateNotice } from "./AppUpdateNotice";
 import { FirstPromptRenameFailureNotice } from "./FirstPromptRenameFailureNotice";
 import { StudioStatusBar } from "./StudioStatusBar";
+import { useLocalhostAutoDetect } from "./useLocalhostAutoDetect";
 import { useStudioShortcuts } from "./useStudioShortcuts";
 import "./StudioShell.css";
 import "./SidePanelResizer.css";
@@ -109,6 +110,8 @@ export function StudioShell() {
       setProjectsSidebarOpen((current) => !current),
     onToggleReviewPanel: toggleInspector,
   });
+
+  useLocalhostAutoDetect();
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
