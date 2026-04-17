@@ -801,7 +801,6 @@
 }
 
 .branch-chip-tooltip__item-dot[data-checks-state="skipped"],
-.branch-chip-tooltip__item-dot[data-checks-state="cancelled"],
 .branch-chip-tooltip__item-dot[data-checks-state="neutral"] {
   background: color-mix(in srgb, var(--tx-text-secondary) 60%, transparent);
 }

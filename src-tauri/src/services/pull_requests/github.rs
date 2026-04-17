@@ -357,7 +357,6 @@ fn build_checks_snapshot(entries: Vec<RawStatusCheck>) -> Option<PullRequestChec
         ChecksItemState::Success => 2,
         ChecksItemState::Neutral => 3,
         ChecksItemState::Skipped => 4,
-        ChecksItemState::Cancelled => 5,
     });
     items.truncate(CHECK_ITEMS_LIMIT);
 
@@ -397,12 +396,14 @@ fn classify_check_state(entry: &RawStatusCheck) -> ChecksItemState {
 }
 
 fn classify_check_conclusion(conclusion: &str) -> ChecksItemState {
+    // Mirrors gh CLI's parseCheckStatusFromCheckConclusionState in
+    // cli/cli/api/queries_pr.go so our rollup matches what users see on GitHub:
+    // cancelled/action_required/timed_out count as failing, and stale/startup_failure
+    // remain pending (they're typically re-runnable).
     match conclusion.trim().to_ascii_uppercase().as_str() {
         "SUCCESS" => ChecksItemState::Success,
-        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" | "STALE" => {
-            ChecksItemState::Failure
-        }
-        "CANCELLED" => ChecksItemState::Cancelled,
+        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "CANCELLED" => ChecksItemState::Failure,
+        "STALE" | "STARTUP_FAILURE" => ChecksItemState::Pending,
         "SKIPPED" => ChecksItemState::Skipped,
         _ => ChecksItemState::Neutral,
     }

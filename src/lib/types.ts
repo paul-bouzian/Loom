@@ -10,8 +10,7 @@ export type ChecksItemState =
   | "failure"
   | "pending"
   | "skipped"
-  | "neutral"
-  | "cancelled";
+  | "neutral";
 export type WorktreeScriptTrigger = "setup" | "teardown";
 export type WorkspaceEventKind =
   | "environmentRenamed"

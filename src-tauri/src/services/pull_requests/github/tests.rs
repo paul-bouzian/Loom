@@ -417,7 +417,12 @@ fn classify_completed_check_runs_maps_conclusions_to_states() {
     );
     assert_eq!(
         classify_check_state(&check_run("COMPLETED", Some("CANCELLED"))),
-        ChecksItemState::Cancelled
+        ChecksItemState::Failure,
+        "cancelled checks block merges and must count as failing"
+    );
+    assert_eq!(
+        classify_check_state(&check_run("COMPLETED", Some("ACTION_REQUIRED"))),
+        ChecksItemState::Failure
     );
     assert_eq!(
         classify_check_state(&check_run("COMPLETED", Some("SKIPPED"))),
@@ -426,6 +431,16 @@ fn classify_completed_check_runs_maps_conclusions_to_states() {
     assert_eq!(
         classify_check_state(&check_run("COMPLETED", Some("NEUTRAL"))),
         ChecksItemState::Neutral
+    );
+    assert_eq!(
+        classify_check_state(&check_run("COMPLETED", Some("STALE"))),
+        ChecksItemState::Pending,
+        "stale checks are re-runnable and behave like pending per gh CLI"
+    );
+    assert_eq!(
+        classify_check_state(&check_run("COMPLETED", Some("STARTUP_FAILURE"))),
+        ChecksItemState::Pending,
+        "startup_failure is transitional and counts as pending per gh CLI"
     );
     assert_eq!(
         classify_check_state(&check_run("COMPLETED", None)),
@@ -513,10 +528,10 @@ fn build_checks_snapshot_rolls_up_success_when_all_pass() {
 }
 
 #[test]
-fn build_checks_snapshot_rolls_up_neutral_when_only_skipped() {
+fn build_checks_snapshot_rolls_up_neutral_when_only_non_blocking_states() {
     let snapshot = build_checks_snapshot(vec![
         check_run("COMPLETED", Some("SKIPPED")),
-        check_run("COMPLETED", Some("CANCELLED")),
+        check_run("COMPLETED", Some("NEUTRAL")),
     ])
     .expect("snapshot should exist");
 
@@ -524,4 +539,28 @@ fn build_checks_snapshot_rolls_up_neutral_when_only_skipped() {
     assert_eq!(snapshot.passed, 0);
     assert_eq!(snapshot.failed, 0);
     assert_eq!(snapshot.pending, 0);
+}
+
+#[test]
+fn build_checks_snapshot_treats_cancelled_as_failure() {
+    let snapshot = build_checks_snapshot(vec![
+        check_run("COMPLETED", Some("SUCCESS")),
+        check_run("COMPLETED", Some("CANCELLED")),
+    ])
+    .expect("snapshot should exist");
+
+    assert_eq!(snapshot.rollup, ChecksRollupState::Failure);
+    assert_eq!(snapshot.failed, 1);
+}
+
+#[test]
+fn build_checks_snapshot_treats_stale_as_pending() {
+    let snapshot = build_checks_snapshot(vec![
+        check_run("COMPLETED", Some("SUCCESS")),
+        check_run("COMPLETED", Some("STALE")),
+    ])
+    .expect("snapshot should exist");
+
+    assert_eq!(snapshot.rollup, ChecksRollupState::Pending);
+    assert_eq!(snapshot.pending, 1);
 }

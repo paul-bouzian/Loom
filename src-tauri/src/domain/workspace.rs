@@ -58,7 +58,6 @@ pub enum ChecksItemState {
     Pending,
     Skipped,
     Neutral,
-    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
