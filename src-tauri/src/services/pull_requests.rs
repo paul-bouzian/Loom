@@ -10,12 +10,13 @@ use tracing::warn;
 
 use crate::app_identity::WORKSPACE_EVENT_NAME;
 use crate::domain::workspace::{
-    EnvironmentPullRequestSnapshot, WorkspaceEvent, WorkspaceEventKind,
+    ChecksRollupState, EnvironmentPullRequestSnapshot, WorkspaceEvent, WorkspaceEventKind,
 };
 use crate::error::AppResult;
 use crate::services::workspace::{PullRequestWatchTarget, WorkspaceService};
 
-const PULL_REQUEST_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const PULL_REQUEST_REFRESH_INTERVAL_IDLE: Duration = Duration::from_secs(30);
+const PULL_REQUEST_REFRESH_INTERVAL_ACTIVE: Duration = Duration::from_secs(10);
 const PULL_REQUEST_REFRESH_CONCURRENCY: usize = 4;
 
 #[derive(Debug, Clone)]
@@ -85,10 +86,31 @@ impl PullRequestMonitorService {
                 warn!("failed to refresh pull request state: {error}");
             }
 
+            let next_interval = self.next_refresh_interval();
             tokio::select! {
-                _ = tokio::time::sleep(PULL_REQUEST_REFRESH_INTERVAL) => {}
+                _ = tokio::time::sleep(next_interval) => {}
                 _ = self.state.refresh_notify.notified() => {}
             }
+        }
+    }
+
+    fn next_refresh_interval(&self) -> Duration {
+        let has_pending = self
+            .state
+            .snapshots
+            .read()
+            .expect("pull request snapshots lock should not be poisoned")
+            .values()
+            .any(|snapshot| {
+                snapshot
+                    .checks
+                    .as_ref()
+                    .is_some_and(|checks| checks.rollup == ChecksRollupState::Pending)
+            });
+        if has_pending {
+            PULL_REQUEST_REFRESH_INTERVAL_ACTIVE
+        } else {
+            PULL_REQUEST_REFRESH_INTERVAL_IDLE
         }
     }
 
@@ -302,6 +324,7 @@ mod tests {
                 title: "Initial".to_string(),
                 url: "https://github.com/acme/skein/pull/3".to_string(),
                 state: PullRequestState::Open,
+                checks: None,
             }),
         );
 
@@ -312,6 +335,7 @@ mod tests {
                 title: "Updated".to_string(),
                 url: "https://github.com/acme/skein/pull/4".to_string(),
                 state: PullRequestState::Merged,
+                checks: None,
             }),
         );
 
@@ -336,6 +360,7 @@ mod tests {
                 title: "Initial".to_string(),
                 url: "https://github.com/acme/skein/pull/3".to_string(),
                 state: PullRequestState::Open,
+                checks: None,
             }),
         );
 

@@ -61,6 +61,7 @@ fn select_display_pull_request_prefers_open_then_latest_merged() {
             is_cross_repository: Some(false),
             head_repository_name_with_owner: Some("acme/skein".to_string()),
             head_repository_owner_login: Some("acme".to_string()),
+            checks: None,
         },
         ResolvedPullRequest {
             number: 10,
@@ -72,6 +73,7 @@ fn select_display_pull_request_prefers_open_then_latest_merged() {
             is_cross_repository: Some(false),
             head_repository_name_with_owner: Some("acme/skein".to_string()),
             head_repository_owner_login: Some("acme".to_string()),
+            checks: None,
         },
     ])
     .expect("open pull request should win");
@@ -93,6 +95,7 @@ fn select_display_pull_request_picks_latest_among_merged_and_closed() {
             is_cross_repository: Some(false),
             head_repository_name_with_owner: Some("acme/skein".to_string()),
             head_repository_owner_login: Some("acme".to_string()),
+            checks: None,
         },
         ResolvedPullRequest {
             number: 11,
@@ -104,6 +107,7 @@ fn select_display_pull_request_picks_latest_among_merged_and_closed() {
             is_cross_repository: Some(false),
             head_repository_name_with_owner: Some("acme/skein".to_string()),
             head_repository_owner_login: Some("acme".to_string()),
+            checks: None,
         },
     ])
     .expect("newer closed pull request should surface over older merged one");
@@ -124,6 +128,7 @@ fn select_display_pull_request_falls_back_to_closed_when_no_open_or_merged() {
         is_cross_repository: Some(false),
         head_repository_name_with_owner: Some("acme/skein".to_string()),
         head_repository_owner_login: Some("acme".to_string()),
+        checks: None,
     }])
     .expect("closed pull request should surface when no open or merged exists");
 

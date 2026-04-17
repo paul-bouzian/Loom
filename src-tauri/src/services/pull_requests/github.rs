@@ -5,7 +5,10 @@ use std::process::{Command, Output};
 use serde::Deserialize;
 use tracing::debug;
 
-use crate::domain::workspace::{EnvironmentPullRequestSnapshot, PullRequestState};
+use crate::domain::workspace::{
+    ChecksItemState, ChecksRollupState, EnvironmentPullRequestSnapshot, PullRequestCheckItem,
+    PullRequestChecksSnapshot, PullRequestState,
+};
 use crate::error::{AppError, AppResult};
 use crate::services::git;
 use crate::services::workspace::PullRequestWatchTarget;
@@ -36,6 +39,7 @@ struct ResolvedPullRequest {
     is_cross_repository: Option<bool>,
     head_repository_name_with_owner: Option<String>,
     head_repository_owner_login: Option<String>,
+    checks: Option<PullRequestChecksSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +62,29 @@ struct RawPullRequest {
     is_cross_repository: Option<bool>,
     head_repository: Option<RawRepository>,
     head_repository_owner: Option<RawRepositoryOwner>,
+    #[serde(default)]
+    status_check_rollup: Option<Vec<RawStatusCheck>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawStatusCheck {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    context: Option<String>,
+    #[serde(default)]
+    workflow_name: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    details_url: Option<String>,
+    #[serde(default)]
+    target_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,6 +121,7 @@ pub(super) fn resolve_pull_request_for_target(
                 ResolvedPullRequestState::Merged => PullRequestState::Merged,
                 ResolvedPullRequestState::Closed => PullRequestState::Closed,
             },
+            checks: pull_request.checks,
         }),
     )
 }
@@ -180,7 +208,7 @@ fn list_matching_pull_requests(
                 "--limit",
                 "20",
                 "--json",
-                "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+                "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
             ],
         )?;
         let raw_stdout = git::stdout_message(&output.stdout);
@@ -235,6 +263,9 @@ fn normalize_pull_request(raw: RawPullRequest) -> ResolvedPullRequest {
         .head_repository_owner
         .map(|owner| owner.login)
         .filter(|value| !value.trim().is_empty());
+    let checks = raw
+        .status_check_rollup
+        .and_then(build_checks_snapshot);
 
     ResolvedPullRequest {
         number: raw.number,
@@ -246,7 +277,117 @@ fn normalize_pull_request(raw: RawPullRequest) -> ResolvedPullRequest {
         is_cross_repository: raw.is_cross_repository,
         head_repository_name_with_owner,
         head_repository_owner_login,
+        checks,
     }
+}
+
+const CHECK_ITEMS_LIMIT: usize = 20;
+
+fn build_checks_snapshot(entries: Vec<RawStatusCheck>) -> Option<PullRequestChecksSnapshot> {
+    if entries.is_empty() {
+        return None;
+    }
+
+    let mut items: Vec<PullRequestCheckItem> = Vec::with_capacity(entries.len());
+    let mut passed: u32 = 0;
+    let mut failed: u32 = 0;
+    let mut pending: u32 = 0;
+
+    for entry in entries {
+        let state = classify_check_state(&entry);
+        let name = check_item_name(&entry);
+        let url = entry
+            .details_url
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| entry.target_url.filter(|value| !value.trim().is_empty()));
+
+        match state {
+            ChecksItemState::Success => passed += 1,
+            ChecksItemState::Failure => failed += 1,
+            ChecksItemState::Pending => pending += 1,
+            _ => {}
+        }
+
+        items.push(PullRequestCheckItem { name, state, url });
+    }
+
+    let total = items.len() as u32;
+    let rollup = if failed > 0 {
+        ChecksRollupState::Failure
+    } else if pending > 0 {
+        ChecksRollupState::Pending
+    } else if passed > 0 {
+        ChecksRollupState::Success
+    } else {
+        ChecksRollupState::Neutral
+    };
+
+    // Prioritize failures, then pending, then the rest, then truncate.
+    items.sort_by_key(|item| match item.state {
+        ChecksItemState::Failure => 0,
+        ChecksItemState::Pending => 1,
+        ChecksItemState::Success => 2,
+        ChecksItemState::Neutral => 3,
+        ChecksItemState::Skipped => 4,
+        ChecksItemState::Cancelled => 5,
+    });
+    items.truncate(CHECK_ITEMS_LIMIT);
+
+    Some(PullRequestChecksSnapshot {
+        rollup,
+        total,
+        passed,
+        failed,
+        pending,
+        items,
+    })
+}
+
+fn classify_check_state(entry: &RawStatusCheck) -> ChecksItemState {
+    if let Some(status) = entry.status.as_deref() {
+        return match status.trim().to_ascii_uppercase().as_str() {
+            "COMPLETED" => entry
+                .conclusion
+                .as_deref()
+                .map(classify_check_conclusion)
+                .unwrap_or(ChecksItemState::Neutral),
+            "QUEUED" | "IN_PROGRESS" | "PENDING" | "WAITING" | "REQUESTED" => {
+                ChecksItemState::Pending
+            }
+            _ => ChecksItemState::Neutral,
+        };
+    }
+    match entry.state.as_deref() {
+        Some(state) => match state.trim().to_ascii_uppercase().as_str() {
+            "SUCCESS" => ChecksItemState::Success,
+            "FAILURE" | "ERROR" => ChecksItemState::Failure,
+            "PENDING" | "EXPECTED" => ChecksItemState::Pending,
+            _ => ChecksItemState::Neutral,
+        },
+        None => ChecksItemState::Neutral,
+    }
+}
+
+fn classify_check_conclusion(conclusion: &str) -> ChecksItemState {
+    match conclusion.trim().to_ascii_uppercase().as_str() {
+        "SUCCESS" => ChecksItemState::Success,
+        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" | "STALE" => {
+            ChecksItemState::Failure
+        }
+        "CANCELLED" => ChecksItemState::Cancelled,
+        "SKIPPED" => ChecksItemState::Skipped,
+        _ => ChecksItemState::Neutral,
+    }
+}
+
+fn check_item_name(entry: &RawStatusCheck) -> String {
+    [&entry.name, &entry.context, &entry.workflow_name]
+        .into_iter()
+        .flatten()
+        .map(|value| value.trim())
+        .find(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "check".to_string())
 }
 
 fn normalize_pull_request_state(
