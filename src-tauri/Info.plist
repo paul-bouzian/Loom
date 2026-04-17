@@ -8,8 +8,6 @@
   <dict>
     <key>NSAllowsLocalNetworking</key>
     <true/>
-    <key>NSAllowsArbitraryLoadsInWebContent</key>
-    <true/>
     <key>NSExceptionDomains</key>
     <dict>
       <key>localhost</key>

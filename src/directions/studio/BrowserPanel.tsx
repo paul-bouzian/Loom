@@ -72,7 +72,8 @@ export function BrowserPanel({ collapsed = false }: Props) {
   const handleNavigate = useCallback(
     (url: string) => {
       if (!environmentId) return;
-      const normalized = normalizeBrowserUrl(url) ?? url;
+      const normalized = normalizeBrowserUrl(url);
+      if (!normalized) return;
       if (slot.activeTabId) {
         navigate(environmentId, normalized);
       } else {

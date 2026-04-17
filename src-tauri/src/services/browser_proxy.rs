@@ -29,10 +29,28 @@ fn is_loopback_host(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0")
 }
 
+const MAX_REDIRECTS: usize = 10;
+
 pub fn build_client() -> Client {
     Client::builder()
         .timeout(PROXY_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::limited(10))
+        // Custom redirect policy re-validates the loopback constraint on
+        // every hop. `Policy::limited` would follow a `302 Location:
+        // https://remote.example/...` response out of loopback and defeat
+        // the boundary enforced in `decode_preview_url`.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let next = attempt.url();
+            let scheme_ok = matches!(next.scheme(), "http" | "https");
+            let host_ok = next
+                .host_str()
+                .map(is_loopback_host)
+                .unwrap_or(false);
+            if scheme_ok && host_ok && attempt.previous().len() < MAX_REDIRECTS {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
         // Cert validation is disabled only because the proxy is restricted to
         // loopback targets (see `decode_preview_url`). Self-signed certs on
         // local dev servers are common there.
