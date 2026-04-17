@@ -1,4 +1,5 @@
 import {
+  type UIEvent,
   useEffect,
   useEffectEvent,
   useMemo,
@@ -98,6 +99,7 @@ export function ThreadConversation({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPending, startTransition] = useTransition();
   const timelineRef = useRef<HTMLDivElement | null>(null);
+  const timelineFollowBottomRef = useRef(true);
   const refreshInFlightRef = useRef(false);
   const submitInFlightRef = useRef(false);
   const submitGenerationRef = useRef(0);
@@ -116,6 +118,7 @@ export function ThreadConversation({
     submitGenerationRef.current += 1;
     submitInFlightRef.current = false;
     pendingFirstMessageRetryRef.current = false;
+    timelineFollowBottomRef.current = true;
     setIsPreparingWorktreeName(false);
     setIsSubmitting(false);
   }, [thread.id]);
@@ -123,6 +126,7 @@ export function ThreadConversation({
   useEffect(() => {
     const element = timelineRef.current;
     if (!element) return;
+    if (!timelineFollowBottomRef.current) return;
     element.scrollTop = element.scrollHeight;
   }, [
     snapshot?.items.length,
@@ -235,6 +239,7 @@ export function ThreadConversation({
     submitGenerationRef.current += 1;
     const generation = submitGenerationRef.current;
     submitInFlightRef.current = true;
+    timelineFollowBottomRef.current = true;
     setIsSubmitting(true);
     return generation;
   }
@@ -396,6 +401,16 @@ export function ThreadConversation({
     thread.id,
   ]);
 
+  // Track whether the user is sitting near the bottom of the timeline.
+  // New items and streaming deltas auto-scroll to bottom (the effect
+  // above), but only when the user hasn't manually scrolled up to read
+  // older activity — otherwise the yank feels rude.
+  function handleTimelineScroll(event: UIEvent<HTMLDivElement>) {
+    const element = event.currentTarget;
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+    timelineFollowBottomRef.current = distance <= 64;
+  }
+
   async function handleSend(
     text: string,
     images: ConversationImageAttachment[],
@@ -462,7 +477,11 @@ export function ThreadConversation({
         }
         onClose={onClosePane}
       />
-      <div ref={timelineRef} className="tx-conversation__timeline">
+      <div
+        ref={timelineRef}
+        className="tx-conversation__timeline"
+        onScroll={handleTimelineScroll}
+      >
         {isConnecting ? (
           <div className="tx-loading">
             <div className="tx-loading__bar" />

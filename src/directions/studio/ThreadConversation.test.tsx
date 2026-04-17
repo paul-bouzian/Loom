@@ -1108,18 +1108,20 @@ describe("ThreadConversation", () => {
       capabilities: capabilitiesFixture,
     });
 
-    render(
+    const { container } = render(
       <ThreadConversation
         environment={makeEnvironment()}
         thread={makeThread()}
       />,
     );
 
-    const body = await screen.findByText((_, element) => {
-      return element?.textContent === "Line one\nLine two";
-    });
+    await screen.findByRole("button", { name: "Copy message" });
 
-    expect(body).toHaveClass("tx-item__body--message-plain");
+    const body = container.querySelector<HTMLElement>(
+      ".tx-item__body--message-plain",
+    );
+    expect(body).not.toBeNull();
+    expect(body?.textContent).toBe("Line one\nLine two");
 
     const copyButton = screen.getByRole("button", { name: "Copy message" });
     await userEvent.click(copyButton);

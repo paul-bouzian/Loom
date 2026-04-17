@@ -13,7 +13,8 @@ let scrollIntoViewSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   scrollIntoViewSpy = vi.fn();
-  Element.prototype.scrollIntoView = scrollIntoViewSpy;
+  Element.prototype.scrollIntoView =
+    scrollIntoViewSpy as unknown as typeof Element.prototype.scrollIntoView;
   // Run rAF callbacks synchronously so the scroll effect fires during the test.
   globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
     callback(performance.now());

@@ -186,9 +186,19 @@ function ConversationMessageRow({
     // scrollHeight reports the full intrinsic height even when the
     // wrapper is clamped by max-height + overflow hidden, so comparing
     // against the collapse threshold detects overflow without needing to
-    // toggle styles between measurements.
-    const fullHeight = element.scrollHeight;
-    setIsOverflowing(fullHeight > USER_MESSAGE_COLLAPSE_MAX_HEIGHT + 8);
+    // toggle styles between measurements. Width changes (pane resize,
+    // sidebar toggle, split pane) change the wrapped height, so re-measure
+    // whenever the wrapper's own box resizes.
+    const measure = () => {
+      setIsOverflowing(element.scrollHeight > USER_MESSAGE_COLLAPSE_MAX_HEIGHT + 8);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
   }, [isCollapsible, item.text, hasImages]);
 
   const handleCopy = useCallback(async () => {

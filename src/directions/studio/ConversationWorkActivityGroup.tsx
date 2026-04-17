@@ -30,7 +30,7 @@ export function ConversationWorkActivityGroup({ group }: Props) {
       return;
     }
     const frame = window.requestAnimationFrame(() => {
-      section.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      section.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [expanded]);
