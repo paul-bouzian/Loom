@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use reqwest::{Client, Url};
-use tauri::http::header::{HeaderMap, HeaderName};
+use tauri::http::header::{HeaderMap, HeaderName, HeaderValue};
 use tauri::http::{Request, Response, StatusCode};
 
 pub const PREVIEW_SCHEME: &str = "skein-preview";
@@ -122,6 +122,30 @@ fn is_blocked_response_header(name: &HeaderName) -> bool {
     )
 }
 
+// The iframe's window origin is `skein-preview://<scheme>_<host>[:port]`,
+// so any Origin/Referer the browser attaches to fetches from the iframe
+// carries that custom scheme. Dev servers and CSRF middlewares reject
+// those as bogus. Rewrite them back to the real http(s) origin before
+// forwarding so POSTs/API calls behave like they would in a normal
+// browser. Values that don't decode to a loopback preview URL are
+// dropped rather than forwarded verbatim.
+fn rewrite_origin_header(value: &HeaderValue) -> Option<HeaderValue> {
+    let raw = value.to_str().ok()?;
+    let decoded = decode_preview_url(raw)?;
+    let host = decoded.host_str()?;
+    let rebuilt = match decoded.port() {
+        Some(port) => format!("{}://{}:{}", decoded.scheme(), host, port),
+        None => format!("{}://{}", decoded.scheme(), host),
+    };
+    HeaderValue::from_str(&rebuilt).ok()
+}
+
+fn rewrite_referer_header(value: &HeaderValue) -> Option<HeaderValue> {
+    let raw = value.to_str().ok()?;
+    let decoded = decode_preview_url(raw)?;
+    HeaderValue::from_str(decoded.as_str()).ok()
+}
+
 fn is_forwardable_request_header(name: &HeaderName) -> bool {
     matches!(
         name.as_str(),
@@ -199,8 +223,16 @@ pub async fn handle_request(
 
     let mut forwarded = HeaderMap::new();
     for (name, value) in request.headers() {
-        if is_forwardable_request_header(name) {
-            forwarded.insert(name.clone(), value.clone());
+        if !is_forwardable_request_header(name) {
+            continue;
+        }
+        let rewritten = match name.as_str() {
+            "origin" => rewrite_origin_header(value),
+            "referer" => rewrite_referer_header(value),
+            _ => Some(value.clone()),
+        };
+        if let Some(v) = rewritten {
+            forwarded.insert(name.clone(), v);
         }
     }
 
@@ -333,5 +365,43 @@ mod tests {
     fn keeps_normal_headers() {
         let ct: HeaderName = "content-type".parse().unwrap();
         assert!(!is_blocked_response_header(&ct));
+    }
+
+    #[test]
+    fn rewrites_origin_header_to_loopback_scheme() {
+        let value = HeaderValue::from_static("skein-preview://http_localhost:3000");
+        let rewritten = rewrite_origin_header(&value).unwrap();
+        assert_eq!(rewritten.to_str().unwrap(), "http://localhost:3000");
+    }
+
+    #[test]
+    fn rewrites_origin_header_without_port() {
+        let value = HeaderValue::from_static("skein-preview://http_localhost");
+        let rewritten = rewrite_origin_header(&value).unwrap();
+        assert_eq!(rewritten.to_str().unwrap(), "http://localhost");
+    }
+
+    #[test]
+    fn drops_origin_header_that_is_not_preview_scheme() {
+        let value = HeaderValue::from_static("http://localhost:1420");
+        assert!(rewrite_origin_header(&value).is_none());
+    }
+
+    #[test]
+    fn rewrites_referer_preserving_path_and_query() {
+        let value = HeaderValue::from_static(
+            "skein-preview://http_localhost:3000/login?from=home",
+        );
+        let rewritten = rewrite_referer_header(&value).unwrap();
+        assert_eq!(
+            rewritten.to_str().unwrap(),
+            "http://localhost:3000/login?from=home",
+        );
+    }
+
+    #[test]
+    fn drops_referer_header_when_not_preview_scheme() {
+        let value = HeaderValue::from_static("http://localhost:1420/foo");
+        assert!(rewrite_referer_header(&value).is_none());
     }
 }
