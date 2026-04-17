@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { ConversationItem, ConversationMessageItem } from "../../lib/types";
 import { CheckIcon, ChevronRightIcon, CopyIcon } from "../../shared/Icons";
@@ -87,7 +87,7 @@ export function ConversationItemRow({ item, compact = false }: Props) {
             </span>
           </div>
         </button>
-        {item.summary ? (
+        {expanded && item.summary ? (
           <ConversationLinkedText
             as="p"
             className="tx-item__summary"
@@ -108,6 +108,8 @@ export function ConversationItemRow({ item, compact = false }: Props) {
   return <ConversationBanner tone={item.tone} title={item.title} body={item.body} compact={compact} />;
 }
 
+const USER_MESSAGE_COLLAPSE_MAX_HEIGHT = 280;
+
 function ConversationMessageRow({
   item,
   compact,
@@ -116,11 +118,17 @@ function ConversationMessageRow({
   compact: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const bodyWrapRef = useRef<HTMLDivElement | null>(null);
   const isMountedRef = useRef(true);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
   const shouldRenderMarkdown = item.role === "assistant";
   const hasText = item.text.trim().length > 0;
   const hasImages = Boolean(item.images && item.images.length > 0);
+  const isUser = item.role === "user";
+  const isCollapsible = isUser && hasText;
+  const isCollapsed = isCollapsible && isOverflowing && !expanded;
   const className = [
     "tx-item",
     "tx-item--message",
@@ -133,6 +141,12 @@ function ConversationMessageRow({
     "tx-item__body",
     "tx-item__body--message",
     item.role === "user" ? "tx-item__body--message-plain" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const bodyWrapClassName = [
+    "tx-item__body-wrap",
+    isCollapsed ? "tx-item__body-wrap--collapsed" : null,
   ]
     .filter(Boolean)
     .join(" ");
@@ -159,6 +173,23 @@ function ConversationMessageRow({
       clearCopyFeedbackTimeout();
     };
   }, [clearCopyFeedbackTimeout]);
+
+  useLayoutEffect(() => {
+    if (!isCollapsible) {
+      setIsOverflowing(false);
+      return;
+    }
+    const element = bodyWrapRef.current;
+    if (!element) {
+      return;
+    }
+    // scrollHeight reports the full intrinsic height even when the
+    // wrapper is clamped by max-height + overflow hidden, so comparing
+    // against the collapse threshold detects overflow without needing to
+    // toggle styles between measurements.
+    const fullHeight = element.scrollHeight;
+    setIsOverflowing(fullHeight > USER_MESSAGE_COLLAPSE_MAX_HEIGHT + 8);
+  }, [isCollapsible, item.text, hasImages]);
 
   const handleCopy = useCallback(async () => {
     if (!hasText) {
@@ -197,7 +228,19 @@ function ConversationMessageRow({
         <ConversationMarkdown markdown={item.text} className={bodyClassName} />
       ) : null}
       {!shouldRenderMarkdown && hasText ? (
-        <ConversationLinkedText as="div" className={bodyClassName} text={item.text} />
+        <div ref={bodyWrapRef} className={bodyWrapClassName}>
+          <ConversationLinkedText as="div" className={bodyClassName} text={item.text} />
+        </div>
+      ) : null}
+      {isCollapsible && isOverflowing ? (
+        <button
+          type="button"
+          className="tx-item__expand"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
       ) : null}
       {hasText ? (
         <button

@@ -1254,6 +1254,10 @@ describe("ThreadConversation", () => {
       />,
     );
 
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Show Command details" }),
+    );
+
     const summaryLink = await screen.findByRole("link", {
       name: "https://skein.dev/docs",
     });
@@ -1262,10 +1266,6 @@ describe("ThreadConversation", () => {
     await userEvent.click(summaryLink);
 
     expect(openUrlMock).toHaveBeenNthCalledWith(1, "https://skein.dev/docs");
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Show Command details" }),
-    );
 
     const outputLink = screen.getByRole("link", {
       name: "https://skein.dev/output",
