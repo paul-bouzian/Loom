@@ -41,7 +41,6 @@ export function BrowserFrame({
       src={url || BLANK_URL}
       title={`Browser tab ${tabId}`}
       onError={() => onLoadError?.(tabId)}
-      sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts allow-downloads"
       allow="clipboard-read; clipboard-write; fullscreen"
     />
   );

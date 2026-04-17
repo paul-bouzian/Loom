@@ -9,6 +9,7 @@ import {
   selectCanGoForward,
   selectCurrentUrl,
   useBrowserStore,
+  type BrowserTab,
 } from "../../stores/browser-store";
 import { BrowserFrame } from "./BrowserFrame";
 import { BrowserTabBar } from "./BrowserTabBar";
@@ -18,6 +19,12 @@ import "./BrowserPanel.css";
 type Props = {
   collapsed?: boolean;
 };
+
+function isPristineBlankTab(tab: BrowserTab | null): boolean {
+  if (!tab) return false;
+  if (tab.history.length !== 1) return false;
+  return tab.history[0] === BROWSER_HOME_URL;
+}
 
 export function BrowserPanel({ collapsed = false }: Props) {
   const tabs = useBrowserStore((state) => state.tabs);
@@ -45,6 +52,16 @@ export function BrowserPanel({ collapsed = false }: Props) {
       openTab();
     }
   }, [collapsed, tabs.length, openTab]);
+
+  // If the active tab is still on its default about:blank entry and a dev
+  // server URL just arrived, seed that tab with the detected URL so the
+  // user doesn't have to type it. Stops once the tab has any real history.
+  const detectedTopUrl = detectedUrls[0]?.url ?? null;
+  useEffect(() => {
+    if (collapsed || !detectedTopUrl) return;
+    if (!isPristineBlankTab(activeTab)) return;
+    navigate(detectedTopUrl);
+  }, [collapsed, detectedTopUrl, activeTab, navigate]);
 
   const handleNavigate = useCallback(
     (url: string) => {

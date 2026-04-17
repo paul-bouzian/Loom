@@ -176,7 +176,11 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
     if (state.tabs.length >= MAX_BROWSER_TABS) {
       return null;
     }
-    const tab = buildTab(url ?? BROWSER_HOME_URL);
+    // If no URL is provided, auto-seed with the most-recently-detected
+    // localhost URL so fresh tabs land on the dev server without a click.
+    const resolvedUrl =
+      url ?? state.detectedUrls[0]?.url ?? BROWSER_HOME_URL;
+    const tab = buildTab(resolvedUrl);
     const nextTabs = [...state.tabs, tab];
     set({ tabs: nextTabs, activeTabId: tab.id });
     schedulePersist(nextTabs, tab.id);

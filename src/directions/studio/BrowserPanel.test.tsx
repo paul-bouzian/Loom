@@ -125,6 +125,40 @@ describe("BrowserPanel", () => {
     expect(hidden.length).toBe(2);
   });
 
+  it("auto-navigates a pristine blank tab to the most recent detected URL", () => {
+    act(() => {
+      useBrowserStore.getState().reportDetectedUrl("http://localhost:5173");
+    });
+    render(<BrowserPanel />);
+    const tab = useBrowserStore.getState().tabs[0];
+    expect(tab.history[tab.cursor]).toBe("http://localhost:5173");
+  });
+
+  it("does not hijack a tab that has already been navigated", () => {
+    render(<BrowserPanel />);
+    act(() => {
+      useBrowserStore.getState().navigate("http://localhost:3000");
+    });
+    act(() => {
+      useBrowserStore.getState().reportDetectedUrl("http://localhost:5173");
+    });
+    const tab = useBrowserStore.getState().tabs[0];
+    expect(tab.history[tab.cursor]).toBe("http://localhost:3000");
+  });
+
+  it("new tab opened after a URL was detected lands on that URL", () => {
+    act(() => {
+      useBrowserStore.getState().reportDetectedUrl("http://localhost:5173");
+    });
+    render(<BrowserPanel />);
+    act(() => {
+      useBrowserStore.getState().openTab();
+    });
+    const tabs = useBrowserStore.getState().tabs;
+    const newTab = tabs[tabs.length - 1];
+    expect(newTab.history[0]).toBe("http://localhost:5173");
+  });
+
   it("surfaces detectedUrls as datalist options", () => {
     act(() => {
       useBrowserStore.getState().reportDetectedUrl("http://localhost:5173");
