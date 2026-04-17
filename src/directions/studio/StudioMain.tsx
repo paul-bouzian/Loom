@@ -22,7 +22,12 @@ import {
   selectTerminalSlot,
   useTerminalStore,
 } from "../../stores/terminal-store";
-import { PanelLeftIcon, PanelRightIcon, TerminalIcon } from "../../shared/Icons";
+import {
+  GlobeIcon,
+  PanelLeftIcon,
+  PanelRightIcon,
+  TerminalIcon,
+} from "../../shared/Icons";
 import { Tooltip } from "../../shared/Tooltip";
 import { EnvironmentActionControl } from "./EnvironmentActionControl";
 import { OpenEnvironmentControl } from "./OpenEnvironmentControl";
@@ -39,22 +44,26 @@ type Props = {
   theme: Theme;
   projectsSidebarOpen: boolean;
   inspectorOpen: boolean;
+  browserOpen: boolean;
   composerFocusKey: number;
   approveOrSubmitKey: number;
   onOpenActionCreateDialog?: () => void;
   onToggleProjectsSidebar: () => void;
   onToggleInspector: () => void;
+  onToggleBrowser: () => void;
 };
 
 export function StudioMain({
   theme,
   projectsSidebarOpen,
   inspectorOpen,
+  browserOpen,
   composerFocusKey,
   approveOrSubmitKey,
   onOpenActionCreateDialog = NOOP,
   onToggleProjectsSidebar,
   onToggleInspector,
+  onToggleBrowser,
 }: Props) {
   const selectedProject = useWorkspaceStore(selectSelectedProject);
   const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
@@ -142,6 +151,19 @@ export function StudioMain({
               }}
             >
               <TerminalIcon size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip
+            content={browserOpen ? "Hide browser" : "Show browser"}
+            side="bottom"
+          >
+            <button
+              type="button"
+              aria-label={browserOpen ? "Hide browser" : "Show browser"}
+              className={`studio-main__toggle-browser ${browserOpen ? "studio-main__toggle-browser--active" : ""}`}
+              onClick={onToggleBrowser}
+            >
+              <GlobeIcon size={14} />
             </button>
           </Tooltip>
           <Tooltip

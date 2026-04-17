@@ -12,6 +12,12 @@
   grid-column: 1 / -1;
 }
 
+.studio-shell__right-panel {
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+}
+
 .studio-notice-stack {
   position: absolute;
   right: var(--tx-space-lg);

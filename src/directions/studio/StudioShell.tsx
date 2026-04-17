@@ -26,6 +26,7 @@ import { SettingsDialog } from "./SettingsDialog";
 import { TreeSidebar } from "./TreeSidebar";
 import { StudioMain } from "./StudioMain";
 import { InspectorPanel } from "./InspectorPanel";
+import { BrowserPanel } from "./BrowserPanel";
 import { GitDiffPanel } from "./GitDiffPanel";
 import { SidePanelResizer } from "./SidePanelResizer";
 import { AppUpdateNotice } from "./AppUpdateNotice";
@@ -50,9 +51,13 @@ function readTheme(): Theme {
   return "dark";
 }
 
+type RightPanel = "none" | "inspector" | "browser";
+
 export function StudioShell() {
   const [projectsSidebarOpen, setProjectsSidebarOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [rightPanel, setRightPanel] = useState<RightPanel>("none");
+  const inspectorOpen = rightPanel === "inspector";
+  const browserOpen = rightPanel === "browser";
   const [sidePanelDragging, setSidePanelDragging] = useState(false);
   const sidePanelWidth = useSidePanelStore(selectSidePanelWidth);
   const setSidePanelWidth = useSidePanelStore((state) => state.setWidth);
@@ -85,6 +90,15 @@ export function StudioShell() {
     setSettingsOpen(true);
   }, []);
 
+  const toggleInspector = useCallback(() => {
+    setRightPanel((current) =>
+      current === "inspector" ? "none" : "inspector",
+    );
+  }, []);
+  const toggleBrowser = useCallback(() => {
+    setRightPanel((current) => (current === "browser" ? "none" : "browser"));
+  }, []);
+
   useStudioShortcuts({
     shortcutsBlocked,
     onOpenSettings: openSettingsDialog,
@@ -93,7 +107,7 @@ export function StudioShell() {
     onRequestComposerFocus: () => setComposerFocusNonce((current) => current + 1),
     onToggleProjectsSidebar: () =>
       setProjectsSidebarOpen((current) => !current),
-    onToggleReviewPanel: () => setInspectorOpen((current) => !current),
+    onToggleReviewPanel: toggleInspector,
   });
 
   useEffect(() => {
@@ -136,7 +150,7 @@ export function StudioShell() {
     setTheme((t) => (t === "dark" ? "light" : "dark"));
   }
 
-  const rightPanelOpen = inspectorOpen;
+  const rightPanelOpen = rightPanel !== "none";
 
   return (
     <div
@@ -152,6 +166,7 @@ export function StudioShell() {
         theme={theme}
         projectsSidebarOpen={projectsSidebarOpen}
         inspectorOpen={inspectorOpen}
+        browserOpen={browserOpen}
         composerFocusKey={composerFocusNonce}
         approveOrSubmitKey={approveOrSubmitNonce}
         onOpenActionCreateDialog={() =>
@@ -160,7 +175,8 @@ export function StudioShell() {
         onToggleProjectsSidebar={() =>
           setProjectsSidebarOpen((current) => !current)
         }
-        onToggleInspector={() => setInspectorOpen((v) => !v)}
+        onToggleInspector={toggleInspector}
+        onToggleBrowser={toggleBrowser}
       />
       {diffPanelOpen && <GitDiffPanel />}
       {rightPanelOpen && (
@@ -170,7 +186,10 @@ export function StudioShell() {
           onDraggingChange={setSidePanelDragging}
         />
       )}
-      <InspectorPanel collapsed={!inspectorOpen} />
+      <div className="studio-shell__right-panel" data-right-panel={rightPanel}>
+        <InspectorPanel collapsed={!inspectorOpen} />
+        <BrowserPanel collapsed={!browserOpen} />
+      </div>
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
