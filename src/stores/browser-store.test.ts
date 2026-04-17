@@ -163,11 +163,6 @@ describe("browser-store: detectedUrls", () => {
     );
   });
 
-  it("clearDetectedUrls empties the list", () => {
-    useBrowserStore.getState().reportDetectedUrl("http://localhost:3000");
-    useBrowserStore.getState().clearDetectedUrls();
-    expect(useBrowserStore.getState().detectedUrls).toEqual([]);
-  });
 });
 
 describe("browser-store: session-only", () => {

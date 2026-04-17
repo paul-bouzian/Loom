@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+import { normalizeBrowserUrl } from "../../lib/browser-preview";
 import { GlobeIcon } from "../../shared/Icons";
 import {
   BROWSER_HOME_URL,
@@ -13,7 +14,7 @@ import {
 } from "../../stores/browser-store";
 import { BrowserFrame } from "./BrowserFrame";
 import { BrowserTabBar } from "./BrowserTabBar";
-import { BrowserUrlBar, normalizeBrowserUrl } from "./BrowserUrlBar";
+import { BrowserUrlBar } from "./BrowserUrlBar";
 import "./BrowserPanel.css";
 
 type Props = {
@@ -44,18 +45,16 @@ export function BrowserPanel({ collapsed = false }: Props) {
   const reload = useBrowserStore((state) => state.reload);
   const markLoaded = useBrowserStore((state) => state.markLoaded);
 
-  // Auto-create one empty tab the first time the panel renders visible and
-  // has no tabs, so the user sees the URL bar instead of a blank void.
+  // Create an empty tab the first time the panel is revealed so the URL
+  // bar is immediately usable. The store seeds fresh tabs with the most
+  // recent detected localhost URL when available.
   useEffect(() => {
     if (collapsed) return;
-    if (tabs.length === 0) {
-      openTab();
-    }
+    if (tabs.length === 0) openTab();
   }, [collapsed, tabs.length, openTab]);
 
-  // If the active tab is still on its default about:blank entry and a dev
-  // server URL just arrived, seed that tab with the detected URL so the
-  // user doesn't have to type it. Stops once the tab has any real history.
+  // Drop a detected dev-server URL into a pristine about:blank tab so the
+  // user doesn't have to type it themselves.
   const detectedTopUrl = detectedUrls[0]?.url ?? null;
   useEffect(() => {
     if (collapsed || !detectedTopUrl) return;
@@ -66,22 +65,14 @@ export function BrowserPanel({ collapsed = false }: Props) {
   const handleNavigate = useCallback(
     (url: string) => {
       const normalized = normalizeBrowserUrl(url) ?? url;
-      if (!activeTabId) {
+      if (activeTabId) {
+        navigate(normalized);
+      } else {
         openTab(normalized);
-        return;
       }
-      navigate(normalized);
     },
     [activeTabId, openTab, navigate],
   );
-
-  const handleNewTab = useCallback(() => {
-    const id = openTab();
-    if (id == null) {
-      // Caller can surface a toast later; keep silent for now.
-      return;
-    }
-  }, [openTab]);
 
   const handleOpenExternal = useCallback((url: string) => {
     if (!url || url === BROWSER_HOME_URL) return;
@@ -90,8 +81,7 @@ export function BrowserPanel({ collapsed = false }: Props) {
     });
   }, []);
 
-  const urlBarUrl =
-    currentUrl === BROWSER_HOME_URL ? "" : currentUrl;
+  const urlBarUrl = currentUrl === BROWSER_HOME_URL ? "" : currentUrl;
 
   return (
     <aside
@@ -100,17 +90,15 @@ export function BrowserPanel({ collapsed = false }: Props) {
       inert={collapsed || undefined}
     >
       <div className="browser-panel__header">
-        <div className="browser-panel__title-row">
-          <span className="browser-panel__title">
-            <GlobeIcon size={12} />
-            Browser
-          </span>
-        </div>
+        <span className="browser-panel__title">
+          <GlobeIcon size={12} />
+          Browser
+        </span>
         <BrowserUrlBar
           currentUrl={urlBarUrl}
           canGoBack={canGoBack}
           canGoForward={canGoForward}
-          loading={activeTab?.pending === true}
+          loading={activeTab?.pending ?? false}
           detectedUrls={detectedUrls}
           onBack={back}
           onForward={forward}
@@ -123,7 +111,7 @@ export function BrowserPanel({ collapsed = false }: Props) {
           activeTabId={activeTabId}
           onActivate={activateTab}
           onClose={closeTab}
-          onNewTab={handleNewTab}
+          onNewTab={openTab}
         />
       </div>
       <div className="browser-panel__body">

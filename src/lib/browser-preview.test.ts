@@ -1,6 +1,33 @@
 import { describe, expect, it } from "vitest";
 
-import { fromPreviewUrl, toPreviewUrl } from "./browser-preview";
+import {
+  fromPreviewUrl,
+  normalizeBrowserUrl,
+  toPreviewUrl,
+} from "./browser-preview";
+
+describe("normalizeBrowserUrl", () => {
+  it("prefixes http:// to bare localhost", () => {
+    expect(normalizeBrowserUrl("localhost:3000")).toBe("http://localhost:3000");
+    expect(normalizeBrowserUrl("127.0.0.1:8000")).toBe("http://127.0.0.1:8000");
+  });
+
+  it("keeps explicit protocol", () => {
+    expect(normalizeBrowserUrl("https://github.com")).toBe("https://github.com");
+  });
+
+  it("rejects a bare word (no dot, no colon)", () => {
+    expect(normalizeBrowserUrl("hello")).toBeNull();
+  });
+
+  it("prefixes https:// for domains", () => {
+    expect(normalizeBrowserUrl("example.com")).toBe("https://example.com");
+  });
+
+  it("returns null for empty input", () => {
+    expect(normalizeBrowserUrl("   ")).toBeNull();
+  });
+});
 
 describe("toPreviewUrl", () => {
   it("rewrites http URL with port", () => {

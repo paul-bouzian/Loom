@@ -1,5 +1,6 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
 
+import { normalizeBrowserUrl } from "../../lib/browser-preview";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -21,20 +22,6 @@ type Props = {
   onNavigate: (url: string) => void;
   onOpenExternal?: (url: string) => void;
 };
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function normalizeBrowserUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  if (
-    /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i.test(trimmed)
-  ) {
-    return `http://${trimmed}`;
-  }
-  if (!trimmed.includes(".") && !trimmed.includes(":")) return null;
-  return `https://${trimmed}`;
-}
 
 export function BrowserUrlBar({
   currentUrl,

@@ -34,7 +34,6 @@ type BrowserState = {
   markLoaded: (tabId: string) => void;
 
   reportDetectedUrl: (url: string) => void;
-  clearDetectedUrls: () => void;
 };
 
 function newTabId(): string {
@@ -187,10 +186,6 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       ...existing,
     ].slice(0, DETECTED_URLS_LIMIT);
     set({ detectedUrls: next });
-  },
-
-  clearDetectedUrls: () => {
-    set({ detectedUrls: [] });
   },
 }));
 
