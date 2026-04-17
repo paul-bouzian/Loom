@@ -125,10 +125,13 @@ fn is_blocked_response_header(name: &HeaderName) -> bool {
 // The iframe's window origin is `skein-preview://<scheme>_<host>[:port]`,
 // so any Origin/Referer the browser attaches to fetches from the iframe
 // carries that custom scheme. Dev servers and CSRF middlewares reject
-// those as bogus. Rewrite them back to the real http(s) origin before
-// forwarding so POSTs/API calls behave like they would in a normal
-// browser. Values that don't decode to a loopback preview URL are
-// dropped rather than forwarded verbatim.
+// those as bogus. Rewrite them back to the real http(s) origin so POSTs
+// and API calls behave like they would in a normal browser.
+//
+// Returns `None` when the header value is not a preview URL. The caller
+// is expected to forward the original value verbatim in that case so
+// the downstream CSRF/CORS middleware still has a cross-origin signal
+// to reject truly cross-origin requests.
 fn rewrite_origin_header(value: &HeaderValue) -> Option<HeaderValue> {
     let raw = value.to_str().ok()?;
     let decoded = decode_preview_url(raw)?;
@@ -146,21 +149,24 @@ fn rewrite_referer_header(value: &HeaderValue) -> Option<HeaderValue> {
     HeaderValue::from_str(decoded.as_str()).ok()
 }
 
-fn is_forwardable_request_header(name: &HeaderName) -> bool {
+// Request headers we refuse to forward. Since the proxy is locked to
+// loopback (see `decode_preview_url`), everything else can pass through
+// so apps get the custom headers they need (x-csrf-token, x-inertia,
+// x-requested-with, auth tokens, …). The denylist covers hop-by-hop
+// headers that don't survive a reverse proxy and `host`, which reqwest
+// re-derives from the target URL.
+fn is_blocked_request_header(name: &HeaderName) -> bool {
     matches!(
         name.as_str(),
-        "accept"
-            | "accept-encoding"
-            | "accept-language"
-            | "authorization"
-            | "cache-control"
-            | "content-length"
-            | "content-type"
-            | "cookie"
-            | "origin"
-            | "pragma"
-            | "referer"
-            | "user-agent"
+        "connection"
+            | "host"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
     )
 }
 
@@ -223,17 +229,24 @@ pub async fn handle_request(
 
     let mut forwarded = HeaderMap::new();
     for (name, value) in request.headers() {
-        if !is_forwardable_request_header(name) {
+        if is_blocked_request_header(name) {
             continue;
         }
-        let rewritten = match name.as_str() {
-            "origin" => rewrite_origin_header(value),
-            "referer" => rewrite_referer_header(value),
-            _ => Some(value.clone()),
+        // For Origin/Referer, rewrite preview-scheme values back to the
+        // real loopback origin so dev servers don't reject them. When
+        // the value is NOT a preview URL, forward it verbatim so the
+        // target's CSRF/CORS middleware still sees cross-origin
+        // requests and can reject them.
+        let forwarded_value = match name.as_str() {
+            "origin" => {
+                rewrite_origin_header(value).unwrap_or_else(|| value.clone())
+            }
+            "referer" => {
+                rewrite_referer_header(value).unwrap_or_else(|| value.clone())
+            }
+            _ => value.clone(),
         };
-        if let Some(v) = rewritten {
-            forwarded.insert(name.clone(), v);
-        }
+        forwarded.insert(name.clone(), forwarded_value);
     }
 
     let mut outgoing = client
@@ -382,7 +395,10 @@ mod tests {
     }
 
     #[test]
-    fn drops_origin_header_that_is_not_preview_scheme() {
+    fn leaves_origin_header_alone_when_not_preview_scheme() {
+        // rewrite_origin_header returns None so the caller keeps the
+        // original value — the downstream CSRF middleware still needs
+        // the real Origin to detect cross-origin requests.
         let value = HeaderValue::from_static("http://localhost:1420");
         assert!(rewrite_origin_header(&value).is_none());
     }
@@ -400,8 +416,47 @@ mod tests {
     }
 
     #[test]
-    fn drops_referer_header_when_not_preview_scheme() {
+    fn leaves_referer_header_alone_when_not_preview_scheme() {
         let value = HeaderValue::from_static("http://localhost:1420/foo");
         assert!(rewrite_referer_header(&value).is_none());
+    }
+
+    #[test]
+    fn blocks_hop_by_hop_request_headers() {
+        for name in [
+            "connection",
+            "host",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailer",
+            "transfer-encoding",
+            "upgrade",
+        ] {
+            let header: HeaderName = name.parse().unwrap();
+            assert!(
+                is_blocked_request_header(&header),
+                "expected {name} to be blocked",
+            );
+        }
+    }
+
+    #[test]
+    fn forwards_app_defined_request_headers() {
+        for name in [
+            "x-csrf-token",
+            "x-inertia",
+            "x-requested-with",
+            "authorization",
+            "content-type",
+            "cookie",
+        ] {
+            let header: HeaderName = name.parse().unwrap();
+            assert!(
+                !is_blocked_request_header(&header),
+                "expected {name} to be forwarded",
+            );
+        }
     }
 }
