@@ -399,16 +399,19 @@ function resolveMenuStyle(
   const menuWidth = Math.max(rect.width, 260);
   const margin = 8;
   const gap = 6;
+  const minHeight = 120;
   const left = Math.min(
     rect.left,
     Math.max(margin, window.innerWidth - menuWidth - margin),
   );
-  if (direction === "up") {
-    const bottom = Math.max(margin, window.innerHeight - rect.top + gap);
-    const maxHeight = Math.max(120, window.innerHeight - bottom - margin);
-    return { left, bottom, minWidth: `${menuWidth}px`, maxHeight };
+  const spaceAbove = rect.top - gap - margin;
+  const spaceBelow = window.innerHeight - rect.bottom - gap - margin;
+  // Flip direction when the preferred side lacks room for a usable menu.
+  const opensUp = direction === "up" ? spaceAbove >= minHeight || spaceAbove >= spaceBelow : spaceBelow < minHeight && spaceAbove > spaceBelow;
+  if (opensUp) {
+    const bottom = window.innerHeight - rect.top + gap;
+    return { left, bottom, minWidth: `${menuWidth}px`, maxHeight: Math.max(0, spaceAbove) };
   }
-  const top = Math.min(rect.bottom + gap, window.innerHeight - margin - 40);
-  const maxHeight = Math.max(120, window.innerHeight - top - margin);
-  return { left, top, minWidth: `${menuWidth}px`, maxHeight };
+  const top = rect.bottom + gap;
+  return { left, top, minWidth: `${menuWidth}px`, maxHeight: Math.max(0, spaceBelow) };
 }

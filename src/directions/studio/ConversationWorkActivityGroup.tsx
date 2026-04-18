@@ -30,7 +30,12 @@ export function ConversationWorkActivityGroup({ group }: Props) {
       if (body) {
         body.scrollTop = body.scrollHeight;
       }
-      sectionRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+      const prefersReducedMotion =
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      sectionRef.current?.scrollIntoView?.({
+        behavior: prefersReducedMotion ? "auto" : "smooth",
+        block: "nearest",
+      });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [expanded]);
