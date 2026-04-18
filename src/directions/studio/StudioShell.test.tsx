@@ -12,6 +12,7 @@ import {
   makeEnvironment,
   makeGlobalSettings,
   makeProject,
+  makeThread,
   makeWorkspaceSnapshot,
 } from "../../test/fixtures/conversation";
 import { useCodexUsageStore } from "../../stores/codex-usage-store";
@@ -478,6 +479,128 @@ describe("StudioShell", () => {
       "data-collapsed",
       "true",
     );
+  });
+
+  it("closes the inspector when switching to a chat thread", async () => {
+    const chatThread = makeThread({
+      id: "chat-thread-1",
+      environmentId: "chat-env-1",
+    });
+    const chatEnvironment = makeEnvironment({
+      id: "chat-env-1",
+      projectId: "skein-chat-workspace",
+      name: "Chat",
+      kind: "chat",
+      path: "/tmp/.skein/chats/chat-env-1",
+      gitBranch: undefined,
+      baseBranch: undefined,
+      isDefault: false,
+      pullRequest: undefined,
+      threads: [chatThread],
+      runtime: undefined,
+    });
+    const baseSnapshot = makeWorkspaceSnapshot();
+    const projectEnvironment = baseSnapshot.projects[0]?.environments[0];
+    const projectThread = projectEnvironment?.threads[0];
+
+    expect(projectEnvironment).toBeDefined();
+    expect(projectThread).toBeDefined();
+
+    render(<StudioShell />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show inspector" }),
+    );
+    expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+      "data-collapsed",
+      "false",
+    );
+
+    act(() => {
+      useWorkspaceStore.setState((state) => ({
+        ...state,
+        snapshot: {
+          ...baseSnapshot,
+          chat: {
+            ...baseSnapshot.chat,
+            environments: [chatEnvironment],
+          },
+        },
+        layout: {
+          slots: {
+            topLeft: null,
+            topRight: null,
+            bottomLeft: null,
+            bottomRight: null,
+          },
+          focusedSlot: null,
+          rowRatio: 0.5,
+          colRatio: 0.5,
+        },
+        draftBySlot: {},
+        selectedProjectId: "skein-chat-workspace",
+        selectedEnvironmentId: chatEnvironment.id,
+        selectedThreadId: chatThread.id,
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+        "data-collapsed",
+        "true",
+      );
+    });
+
+    act(() => {
+      useWorkspaceStore.setState((state) => ({
+        ...state,
+        snapshot: baseSnapshot,
+        selectedProjectId: projectEnvironment?.projectId ?? null,
+        selectedEnvironmentId: projectEnvironment?.id ?? null,
+        selectedThreadId: projectThread?.id ?? null,
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+        "data-collapsed",
+        "true",
+      );
+    });
+  });
+
+  it("opens the git diff panel for project drafts using the effective review environment", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot(),
+      layout: {
+        slots: {
+          topLeft: null,
+          topRight: null,
+          bottomLeft: null,
+          bottomRight: null,
+        },
+        focusedSlot: null,
+        rowRatio: 0.5,
+        colRatio: 0.5,
+      },
+      draftBySlot: {},
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+      selectedThreadId: null,
+    }));
+    useWorkspaceStore.getState().openThreadDraft("project-1");
+    useGitReviewStore.setState((state) => ({
+      ...state,
+      selectedFileByContext: {
+        "env-1:uncommitted": "modified:src/app.ts",
+      },
+    }));
+
+    render(<StudioShell />);
+
+    expect(useWorkspaceStore.getState().selectedEnvironmentId).toBeNull();
+    expect(screen.getByTestId("git-diff-panel")).toBeInTheDocument();
   });
 
   it("toggles theme from the sidebar footer and persists the selected theme", async () => {

@@ -1,25 +1,32 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+
+import type { EnvironmentRecord, ProjectRecord } from "../../../lib/types";
 import { ChevronRightIcon, GitBranchIcon, PlusIcon } from "../../../shared/Icons";
-import type { EnvironmentRecord } from "../../../lib/types";
 
 export type EnvSelection =
   | { kind: "local" }
   | { kind: "existing"; environmentId: string }
   | { kind: "new"; baseBranch: string; name: string };
 
+export type DraftLocationSelection =
+  | { kind: "chat" }
+  | { kind: "project"; projectId: string; target: EnvSelection };
+
 type Props = {
+  projects: ProjectRecord[];
   localEnvironment: EnvironmentRecord | null;
   worktreeEnvironments: EnvironmentRecord[];
   availableBranches: string[];
   branchesLoading: boolean;
   defaultBaseBranch: string | null;
-  value: EnvSelection;
-  onChange: (next: EnvSelection) => void;
+  value: DraftLocationSelection;
+  onChange: (next: DraftLocationSelection) => void;
   disabled?: boolean;
 };
 
 export function EnvironmentSelector({
+  projects,
   localEnvironment,
   worktreeEnvironments,
   availableBranches,
@@ -73,40 +80,56 @@ export function EnvironmentSelector({
     };
   }, [envMenuOpen, branchMenuOpen]);
 
-  const envLabel = describeSelection(
-    value,
-    localEnvironment,
-    worktreeEnvironments,
-  );
+  const projectTarget = value.kind === "project" ? value.target : null;
+  const envLabel = describeLocation(value, localEnvironment, worktreeEnvironments);
+
+  function updateProjectTarget(next: EnvSelection) {
+    if (value.kind !== "project") return;
+    onChange({ ...value, target: next });
+  }
+
+  function pickProject(projectId: string) {
+    onChange({
+      kind: "project",
+      projectId,
+      target: { kind: "local" },
+    });
+    setEnvMenuOpen(false);
+  }
+
+  function pickChat() {
+    onChange({ kind: "chat" });
+    setEnvMenuOpen(false);
+    setBranchMenuOpen(false);
+  }
 
   function pickLocal() {
-    onChange({ kind: "local" });
+    updateProjectTarget({ kind: "local" });
     setEnvMenuOpen(false);
     setBranchMenuOpen(false);
   }
 
   function pickExisting(environmentId: string) {
-    onChange({ kind: "existing", environmentId });
+    updateProjectTarget({ kind: "existing", environmentId });
     setEnvMenuOpen(false);
     setBranchMenuOpen(false);
   }
 
   function pickNewWorktree() {
     const branch =
-      value.kind === "new"
-        ? value.baseBranch
+      projectTarget?.kind === "new"
+        ? projectTarget.baseBranch
         : defaultBaseBranch ?? availableBranches[0] ?? "";
-    const name = value.kind === "new" ? value.name : "";
-    onChange({ kind: "new", baseBranch: branch, name });
+    const name = projectTarget?.kind === "new" ? projectTarget.name : "";
+    updateProjectTarget({ kind: "new", baseBranch: branch, name });
     setEnvMenuOpen(false);
   }
 
   function pickBaseBranch(branch: string) {
-    if (value.kind !== "new") return;
-    onChange({ ...value, baseBranch: branch });
+    if (projectTarget?.kind !== "new") return;
+    updateProjectTarget({ ...projectTarget, baseBranch: branch });
     setBranchMenuOpen(false);
   }
-
 
   return (
     <div className="thread-draft-env" data-disabled={disabled ? "true" : undefined}>
@@ -126,7 +149,7 @@ export function EnvironmentSelector({
           className={`thread-draft-env__chip-caret ${envMenuOpen ? "thread-draft-env__chip-caret--open" : ""}`}
         />
       </button>
-      {value.kind === "new" ? (
+      {projectTarget?.kind === "new" ? (
         <>
           <span className="thread-draft-env__separator">from</span>
           <button
@@ -142,7 +165,7 @@ export function EnvironmentSelector({
               <GitBranchIcon size={11} />
             </span>
             <span className="thread-draft-env__chip-label">
-              {value.baseBranch || (branchesLoading ? "loading…" : "(default)")}
+              {projectTarget.baseBranch || (branchesLoading ? "loading…" : "(default)")}
             </span>
             <ChevronRightIcon
               size={10}
@@ -153,10 +176,13 @@ export function EnvironmentSelector({
             type="text"
             className="thread-draft-env__name"
             placeholder="name (optional)"
-            value={value.name}
+            value={projectTarget.name}
             disabled={disabled}
             onChange={(event) =>
-              onChange({ ...value, name: event.target.value })
+              updateProjectTarget({
+                ...projectTarget,
+                name: event.target.value,
+              })
             }
             autoComplete="off"
             spellCheck={false}
@@ -171,50 +197,80 @@ export function EnvironmentSelector({
               style={resolveMenuStyle(envButtonRef.current, "up")}
               onPointerDown={(event) => event.stopPropagation()}
             >
-              {localEnvironment ? (
-                <MenuOption
-                  active={value.kind === "local"}
-                  icon={<span className="thread-draft-env__dot" />}
-                  label="Local"
-                  sub={
-                    localEnvironment.gitBranch
-                      ? `${localEnvironment.gitBranch} — no new worktree`
-                      : "no new worktree"
-                  }
-                  onSelect={pickLocal}
-                />
-              ) : null}
-              {worktreeEnvironments.length > 0 ? (
-                <div className="thread-draft-env__group-label">
-                  Existing worktrees
-                </div>
-              ) : null}
-              {worktreeEnvironments.map((env) => {
-                const threadCount = env.threads.filter(
-                  (thread) => thread.status === "active",
-                ).length;
-                return (
+              {value.kind === "chat" ? (
+                <>
+                  {projects.length === 0 ? (
+                    <div className="thread-draft-env__empty">
+                      Add a project to work in one.
+                    </div>
+                  ) : null}
+                  {projects.map((project) => (
+                    <MenuOption
+                      key={project.id}
+                      active={false}
+                      icon={<span className="thread-draft-env__dot" />}
+                      label={project.name}
+                      sub={project.rootPath}
+                      onSelect={() => pickProject(project.id)}
+                    />
+                  ))}
+                </>
+              ) : (
+                <>
+                  {localEnvironment ? (
+                    <MenuOption
+                      active={projectTarget?.kind === "local"}
+                      icon={<span className="thread-draft-env__dot" />}
+                      label="Local"
+                      sub={
+                        localEnvironment.gitBranch
+                          ? `${localEnvironment.gitBranch} — no new worktree`
+                          : "no new worktree"
+                      }
+                      onSelect={pickLocal}
+                    />
+                  ) : null}
+                  {worktreeEnvironments.length > 0 ? (
+                    <div className="thread-draft-env__group-label">
+                      Existing worktrees
+                    </div>
+                  ) : null}
+                  {worktreeEnvironments.map((environment) => {
+                    const threadCount = environment.threads.filter(
+                      (thread) => thread.status === "active",
+                    ).length;
+                    return (
+                      <MenuOption
+                        key={environment.id}
+                        active={
+                          projectTarget?.kind === "existing" &&
+                          projectTarget.environmentId === environment.id
+                        }
+                        icon={<GitBranchIcon size={11} />}
+                        label={environment.gitBranch ?? environment.name}
+                        sub={`${threadCount} thread${threadCount === 1 ? "" : "s"}`}
+                        onSelect={() => pickExisting(environment.id)}
+                      />
+                    );
+                  })}
+                  <div className="thread-draft-env__separator-line" />
                   <MenuOption
-                    key={env.id}
-                    active={
-                      value.kind === "existing" &&
-                      value.environmentId === env.id
-                    }
-                    icon={<GitBranchIcon size={11} />}
-                    label={env.gitBranch ?? env.name}
-                    sub={`${threadCount} thread${threadCount === 1 ? "" : "s"}`}
-                    onSelect={() => pickExisting(env.id)}
+                    active={projectTarget?.kind === "new"}
+                    icon={<PlusIcon size={11} />}
+                    label="New worktree…"
+                    sub="Create a fresh worktree from a base branch"
+                    onSelect={pickNewWorktree}
                   />
-                );
-              })}
-              <div className="thread-draft-env__separator-line" />
-              <MenuOption
-                active={value.kind === "new"}
-                icon={<PlusIcon size={11} />}
-                label="New worktree…"
-                sub="Create a fresh worktree from a base branch"
-                onSelect={pickNewWorktree}
-              />
+                  <div className="thread-draft-env__separator-line" />
+                  <MenuOption
+                    active={false}
+                    icon={<span className="thread-draft-env__dot" />}
+                    label="Don't work in a project"
+                    sub="Create a standalone chat"
+                    onSelect={pickChat}
+                  />
+                </>
+              )}
             </div>,
             document.body,
           )
@@ -228,7 +284,7 @@ export function EnvironmentSelector({
               onPointerDown={(event) => event.stopPropagation()}
             >
               <MenuOption
-                active={value.kind === "new" && value.baseBranch.length === 0}
+                active={projectTarget?.kind === "new" && projectTarget.baseBranch.length === 0}
                 icon={<span className="thread-draft-env__dot" />}
                 label="Default"
                 sub="Let the repository decide (upstream or current branch)"
@@ -239,15 +295,13 @@ export function EnvironmentSelector({
               ) : null}
               {availableBranches.length === 0 ? (
                 <div className="thread-draft-env__empty">
-                  {branchesLoading
-                    ? "Loading branches…"
-                    : "No additional local branches."}
+                  {branchesLoading ? "Loading branches…" : "No additional local branches."}
                 </div>
               ) : (
                 availableBranches.map((branch) => (
                   <MenuOption
                     key={branch}
-                    active={value.kind === "new" && value.baseBranch === branch}
+                    active={projectTarget?.kind === "new" && projectTarget.baseBranch === branch}
                     icon={<GitBranchIcon size={11} />}
                     label={branch}
                     onSelect={() => pickBaseBranch(branch)}
@@ -293,6 +347,20 @@ function MenuOption({
   );
 }
 
+function describeLocation(
+  selection: DraftLocationSelection,
+  localEnvironment: EnvironmentRecord | null,
+  worktreeEnvironments: EnvironmentRecord[],
+) {
+  if (selection.kind === "chat") {
+    return {
+      icon: <PlusIcon size={11} />,
+      text: "Work in a project",
+    };
+  }
+  return describeSelection(selection.target, localEnvironment, worktreeEnvironments);
+}
+
 function describeSelection(
   selection: EnvSelection,
   localEnvironment: EnvironmentRecord | null,
@@ -308,12 +376,12 @@ function describeSelection(
     };
   }
   if (selection.kind === "existing") {
-    const env = worktreeEnvironments.find(
+    const environment = worktreeEnvironments.find(
       (candidate) => candidate.id === selection.environmentId,
     );
     return {
       icon: <GitBranchIcon size={11} />,
-      text: env?.gitBranch ?? env?.name ?? "Worktree",
+      text: environment?.gitBranch ?? environment?.name ?? "Worktree",
     };
   }
   return {
@@ -328,16 +396,16 @@ function resolveMenuStyle(
 ): React.CSSProperties {
   if (!anchor) return { left: 0, top: 0 };
   const rect = anchor.getBoundingClientRect();
-  const MENU_WIDTH = Math.max(rect.width, 260);
+  const menuWidth = Math.max(rect.width, 260);
   const margin = 8;
   const left = Math.min(
     rect.left,
-    Math.max(margin, window.innerWidth - MENU_WIDTH - margin),
+    Math.max(margin, window.innerWidth - menuWidth - margin),
   );
   const estimatedHeight = 220;
   const top =
     direction === "up"
       ? Math.max(margin, rect.top - estimatedHeight - 6)
       : Math.min(rect.bottom + 6, window.innerHeight - margin - 40);
-  return { left, top, minWidth: `${MENU_WIDTH}px` };
+  return { left, top, minWidth: `${menuWidth}px` };
 }

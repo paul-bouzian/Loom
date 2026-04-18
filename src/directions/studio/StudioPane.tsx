@@ -12,7 +12,6 @@ import {
   type SlotKey,
 } from "../../stores/workspace-store";
 import { ThreadDraftComposer } from "./draft/ThreadDraftComposer";
-import { StudioWelcome } from "./StudioWelcome";
 import { ThreadConversation } from "./ThreadConversation";
 
 type Props = {
@@ -40,9 +39,7 @@ export function StudioPane({
   let isThreadView = false;
   let isDraftView = false;
   const closeHandler = isSplit ? () => closePane(paneId) : null;
-  if (projects.length === 0) {
-    content = <StudioWelcome />;
-  } else if (thread && environment) {
+  if (thread && environment) {
     isThreadView = true;
     content = (
       <ThreadConversation
@@ -57,8 +54,7 @@ export function StudioPane({
     isDraftView = true;
     content = (
       <ThreadDraftComposer
-        key={`${paneId}:${draft.projectId}`}
-        projectId={draft.projectId}
+        draft={draft}
         paneId={paneId}
       />
     );
@@ -112,9 +108,6 @@ export function StudioPane({
 
 export function DefaultStudioView() {
   const projects = useWorkspaceStore(selectProjects);
-  if (projects.length === 0) {
-    return <StudioWelcome />;
-  }
   return <OverviewView projects={projects} />;
 }
 

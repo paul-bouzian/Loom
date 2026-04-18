@@ -7,15 +7,15 @@ use crate::domain::conversation::EnvironmentCapabilitiesSnapshot;
 use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch};
 use crate::domain::shortcuts::ShortcutSettings;
 use crate::domain::workspace::{
-    CodexRateLimitSnapshot, ManagedWorktreeCreateResult, ProjectActionIcon, ProjectRecord,
-    RuntimeStatusSnapshot, ThreadRecord, WorkspaceSnapshot,
+    ChatThreadCreateResult, CodexRateLimitSnapshot, ManagedWorktreeCreateResult, ProjectActionIcon,
+    ProjectRecord, RuntimeStatusSnapshot, ThreadRecord, WorkspaceSnapshot,
 };
 use crate::error::{AppError, CommandError};
 use crate::services::terminal::ManualActionLaunch;
 use crate::services::workspace::{
-    AddProjectRequest, ArchiveThreadRequest, CreateManagedWorktreeRequest, CreateThreadRequest,
-    RenameProjectRequest, RenameThreadRequest, ReorderProjectsRequest, RunProjectActionRequest,
-    SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest,
+    AddProjectRequest, ArchiveThreadRequest, CreateChatThreadRequest, CreateManagedWorktreeRequest,
+    CreateThreadRequest, RenameProjectRequest, RenameThreadRequest, ReorderProjectsRequest,
+    RunProjectActionRequest, SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest,
 };
 use crate::services::worktree_scripts::{skein_context_environment, SkeinContextInput};
 use crate::state::AppState;
@@ -269,6 +269,14 @@ pub fn create_thread(
     state: State<'_, AppState>,
 ) -> Result<ThreadRecord, CommandError> {
     Ok(state.workspace.create_thread(input)?)
+}
+
+#[tauri::command]
+pub fn create_chat_thread(
+    input: CreateChatThreadRequest,
+    state: State<'_, AppState>,
+) -> Result<ChatThreadCreateResult, CommandError> {
+    Ok(state.workspace.create_chat_thread(input)?)
 }
 
 #[tauri::command]

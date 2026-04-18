@@ -1,6 +1,10 @@
 /* ── Enums (match Rust serde output) ── */
 
-export type EnvironmentKind = "local" | "managedWorktree" | "permanentWorktree";
+export type EnvironmentKind =
+  | "local"
+  | "managedWorktree"
+  | "permanentWorktree"
+  | "chat";
 export type ThreadStatus = "active" | "archived";
 export type RuntimeState = "running" | "stopped" | "exited";
 export type PullRequestState = "open" | "merged" | "closed";
@@ -219,6 +223,13 @@ export type ProjectRecord = {
   environments: EnvironmentRecord[];
 };
 
+export type ChatWorkspaceSnapshot = {
+  projectId: string;
+  title: string;
+  rootPath: string;
+  environments: EnvironmentRecord[];
+};
+
 export type NotificationSoundChannelSettings = {
   enabled: boolean;
   sound: NotificationSoundId;
@@ -266,10 +277,16 @@ export type OpenTarget = {
 
 export type WorkspaceSnapshot = {
   settings: GlobalSettings;
+  chat: ChatWorkspaceSnapshot;
   projects: ProjectRecord[];
 };
 
 export type ManagedWorktreeCreateResult = {
+  environment: EnvironmentRecord;
+  thread: ThreadRecord;
+};
+
+export type ChatThreadCreateResult = {
   environment: EnvironmentRecord;
   thread: ThreadRecord;
 };

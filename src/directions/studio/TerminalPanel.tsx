@@ -8,7 +8,7 @@ import {
   useTerminalStore,
 } from "../../stores/terminal-store";
 import {
-  selectEffectiveEnvironment,
+  selectEffectiveNonChatEnvironment,
   useWorkspaceStore,
 } from "../../stores/workspace-store";
 import { TerminalView } from "./TerminalView";
@@ -43,7 +43,7 @@ export function TerminalPanel({ theme }: Props) {
   const activateTab = useTerminalStore((s) => s.activateTab);
   const setVisible = useTerminalStore((s) => s.setVisible);
 
-  const env = useWorkspaceStore(selectEffectiveEnvironment);
+  const env = useWorkspaceStore(selectEffectiveNonChatEnvironment);
   const environmentId = env?.id ?? null;
   const slot = useTerminalStore(selectTerminalSlot(environmentId));
   const { tabs, activeTabId, visible } = slot;

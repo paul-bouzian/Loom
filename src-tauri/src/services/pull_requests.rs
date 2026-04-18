@@ -452,11 +452,14 @@ mod tests {
                 temp_root.join("skein.sqlite3"),
             )
             .expect("test database should be created");
+            let chats_root = temp_root.join("chats");
+            fs::create_dir_all(&chats_root).expect("chat root should be created");
 
             Self {
                 workspace: WorkspaceService::new(
                     database,
                     temp_root.join("managed-worktrees"),
+                    chats_root,
                     WorktreeScriptService::for_test(temp_root.clone()),
                 ),
                 temp_root,

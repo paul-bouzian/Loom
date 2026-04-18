@@ -42,10 +42,7 @@ pub fn build_client() -> Client {
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             let next = attempt.url();
             let scheme_ok = matches!(next.scheme(), "http" | "https");
-            let host_ok = next
-                .host_str()
-                .map(is_loopback_host)
-                .unwrap_or(false);
+            let host_ok = next.host_str().map(is_loopback_host).unwrap_or(false);
             if scheme_ok && host_ok && attempt.previous().len() < MAX_REDIRECTS {
                 attempt.follow()
             } else {
@@ -216,10 +213,7 @@ async fn collect_bounded_body(
     }
 }
 
-pub async fn handle_request(
-    request: Request<Vec<u8>>,
-    client: &Client,
-) -> Response<Vec<u8>> {
+pub async fn handle_request(request: Request<Vec<u8>>, client: &Client) -> Response<Vec<u8>> {
     let Some(target) = decode_preview_url(&request.uri().to_string()) else {
         return error_response(
             StatusCode::FORBIDDEN,
@@ -238,12 +232,8 @@ pub async fn handle_request(
         // target's CSRF/CORS middleware still sees cross-origin
         // requests and can reject them.
         let forwarded_value = match name.as_str() {
-            "origin" => {
-                rewrite_origin_header(value).unwrap_or_else(|| value.clone())
-            }
-            "referer" => {
-                rewrite_referer_header(value).unwrap_or_else(|| value.clone())
-            }
+            "origin" => rewrite_origin_header(value).unwrap_or_else(|| value.clone()),
+            "referer" => rewrite_referer_header(value).unwrap_or_else(|| value.clone()),
             _ => value.clone(),
         };
         forwarded.insert(name.clone(), forwarded_value);
@@ -405,9 +395,7 @@ mod tests {
 
     #[test]
     fn rewrites_referer_preserving_path_and_query() {
-        let value = HeaderValue::from_static(
-            "skein-preview://http_localhost:3000/login?from=home",
-        );
+        let value = HeaderValue::from_static("skein-preview://http_localhost:3000/login?from=home");
         let rewritten = rewrite_referer_header(&value).unwrap();
         assert_eq!(
             rewritten.to_str().unwrap(),

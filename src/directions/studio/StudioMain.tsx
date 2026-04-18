@@ -8,9 +8,9 @@ import {
 
 import {
   selectEffectiveEnvironment,
+  selectEffectiveNonChatEnvironment,
   selectHasAnyPane,
   selectLayout,
-  selectSelectedEnvironment,
   selectSelectedProject,
   selectSettings,
   useWorkspaceStore,
@@ -66,14 +66,17 @@ export function StudioMain({
   onToggleBrowser,
 }: Props) {
   const selectedProject = useWorkspaceStore(selectSelectedProject);
-  const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
   const effectiveEnvironment = useWorkspaceStore(selectEffectiveEnvironment);
+  const actionableEnvironment = useWorkspaceStore(selectEffectiveNonChatEnvironment);
   const settings = useWorkspaceStore(selectSettings);
   const layout = useWorkspaceStore(selectLayout);
   const hasAnyPane = useWorkspaceStore(selectHasAnyPane);
   const setRowRatio = useWorkspaceStore((state) => state.setRowRatio);
   const setColRatio = useWorkspaceStore((state) => state.setColRatio);
-  const selectedEnvironmentId = effectiveEnvironment?.id ?? null;
+  const projectAffordancesEnabled =
+    selectedProject !== null && actionableEnvironment !== null;
+  const inspectorEnabled = actionableEnvironment !== null;
+  const selectedEnvironmentId = actionableEnvironment?.id ?? null;
   const terminalSlot = useTerminalStore(selectTerminalSlot(selectedEnvironmentId));
   const hasAnyTerminalTabs = useTerminalStore(selectHasAnyTerminalTabs);
 
@@ -82,6 +85,14 @@ export function StudioMain({
   const terminalVisible = selectedEnvironmentId != null && terminalSlot.visible;
   const terminalHeight = terminalSlot.height;
   const terminalMounted = terminalVisible || hasAnyTerminalTabs;
+  const terminalUnavailableMessage =
+    effectiveEnvironment?.kind === "chat"
+      ? "Terminal is unavailable for chats"
+      : "Select an environment first";
+  const inspectorUnavailableMessage =
+    effectiveEnvironment?.kind === "chat"
+      ? "Inspector is unavailable for chats"
+      : "Select an environment first";
   const [terminalDragging, setTerminalDragging] = useState(false);
   const [splitDragging, setSplitDragging] = useState(false);
 
@@ -113,19 +124,29 @@ export function StudioMain({
         </div>
         <div className="studio-main__toolbar-actions">
           <EnvironmentActionControl
-            environmentId={selectedEnvironment?.id ?? null}
-            projectId={selectedProject?.id ?? null}
-            actions={selectedProject?.settings.manualActions ?? []}
+            environmentId={
+              projectAffordancesEnabled ? (actionableEnvironment?.id ?? null) : null
+            }
+            projectId={
+              projectAffordancesEnabled ? (selectedProject?.id ?? null) : null
+            }
+            actions={
+              projectAffordancesEnabled
+                ? (selectedProject?.settings.manualActions ?? [])
+                : []
+            }
             onAddAction={onOpenActionCreateDialog}
           />
           <OpenEnvironmentControl
-            environmentId={selectedEnvironment?.id ?? null}
+            environmentId={
+              projectAffordancesEnabled ? (actionableEnvironment?.id ?? null) : null
+            }
             settings={settings}
           />
           <Tooltip
             content={
               !selectedEnvironmentId
-                ? "Select an environment first"
+                ? terminalUnavailableMessage
                 : terminalVisible
                   ? "Hide terminal"
                   : "Show terminal"
@@ -136,7 +157,7 @@ export function StudioMain({
               type="button"
               aria-label={
                 !selectedEnvironmentId
-                  ? "Select an environment first"
+                  ? terminalUnavailableMessage
                   : terminalVisible
                     ? "Hide terminal"
                     : "Show terminal"
@@ -167,14 +188,32 @@ export function StudioMain({
             </button>
           </Tooltip>
           <Tooltip
-            content={inspectorOpen ? "Hide inspector" : "Show inspector"}
+            content={
+              !inspectorEnabled
+                ? inspectorUnavailableMessage
+                : inspectorOpen
+                  ? "Hide inspector"
+                  : "Show inspector"
+            }
             side="bottom"
           >
             <button
               type="button"
-              aria-label={inspectorOpen ? "Hide inspector" : "Show inspector"}
+              aria-label={
+                !inspectorEnabled
+                  ? inspectorUnavailableMessage
+                  : inspectorOpen
+                    ? "Hide inspector"
+                    : "Show inspector"
+              }
               className={`studio-main__toggle-inspector ${inspectorOpen ? "studio-main__toggle-inspector--active" : ""}`}
-              onClick={onToggleInspector}
+              disabled={!inspectorEnabled}
+              onClick={() => {
+                if (!inspectorEnabled) {
+                  return;
+                }
+                onToggleInspector();
+              }}
             >
               <PanelRightIcon size={14} />
             </button>

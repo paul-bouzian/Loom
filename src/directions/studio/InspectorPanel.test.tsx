@@ -120,6 +120,59 @@ describe("InspectorPanel", () => {
     });
   });
 
+  it("does not load Git review for chat environments", () => {
+    const thread = makeThread({
+      id: "chat-thread-1",
+      environmentId: "chat-env-1",
+    });
+    const chatEnvironment = makeEnvironment({
+      id: "chat-env-1",
+      projectId: "skein-chat-workspace",
+      name: "Chat",
+      kind: "chat",
+      path: "/tmp/.skein/chats/chat-env-1",
+      gitBranch: undefined,
+      baseBranch: undefined,
+      isDefault: false,
+      pullRequest: undefined,
+      threads: [thread],
+      runtime: undefined,
+    });
+    const baseSnapshot = makeWorkspaceSnapshot();
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: {
+        ...baseSnapshot,
+        chat: {
+          ...baseSnapshot.chat,
+          environments: [chatEnvironment],
+        },
+      },
+      layout: {
+        slots: {
+          topLeft: null,
+          topRight: null,
+          bottomLeft: null,
+          bottomRight: null,
+        },
+        focusedSlot: null,
+        rowRatio: 0.5,
+        colRatio: 0.5,
+      },
+      draftBySlot: {},
+      selectedProjectId: "skein-chat-workspace",
+      selectedEnvironmentId: chatEnvironment.id,
+      selectedThreadId: thread.id,
+    }));
+
+    render(<InspectorPanel />);
+
+    expect(
+      screen.getByText("Select an environment to inspect its Git state."),
+    ).toBeInTheDocument();
+    expect(mockedBridge.getGitReviewSnapshot).not.toHaveBeenCalled();
+  });
+
   it("confirms before reverting all tracked changes", async () => {
     confirmMock.mockResolvedValue(false);
     mockedBridge.getGitReviewSnapshot.mockResolvedValue(makeGitReviewSnapshot());

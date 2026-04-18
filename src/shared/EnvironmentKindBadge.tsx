@@ -9,6 +9,7 @@ const labels: Record<EnvironmentKind, string> = {
   local: "Local",
   managedWorktree: "Worktree",
   permanentWorktree: "Permanent",
+  chat: "Chat",
 };
 
 export function EnvironmentKindBadge({ kind }: Props) {
