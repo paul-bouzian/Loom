@@ -1,27 +1,20 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { confirm, message } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createPortal } from "react-dom";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
-import {
-  deriveEnvironmentConversationStatus,
-  indicatorToneForConversationStatus,
-} from "../../lib/conversation-status";
 import { APP_NAME } from "../../lib/app-identity";
 import {
   selectChatWorkspace,
   useWorkspaceStore,
   selectProjects,
 } from "../../stores/workspace-store";
-import { useConversationStore } from "../../stores/conversation-store";
 import { useWorktreeScriptStore } from "../../stores/worktree-script-store";
 import * as bridge from "../../lib/bridge";
 import { ProjectIcon } from "../../shared/ProjectIcon";
-import { RuntimeIndicator } from "../../shared/RuntimeIndicator";
 import {
   ChevronRightIcon,
   DotsHorizontalIcon,
-  GitBranchIcon,
   PencilIcon,
   PlusIcon,
 } from "../../shared/Icons";
@@ -29,11 +22,9 @@ import { Tooltip } from "../../shared/Tooltip";
 import type {
   EnvironmentRecord,
   ProjectRecord,
-  ThreadConversationSnapshot,
   ThreadRecord,
 } from "../../lib/types";
 import { SidebarThreadRow } from "./SidebarThreadRow";
-import { branchChipLabel } from "./worktreeLabels";
 import { SidebarUsagePanel } from "./SidebarUsagePanel";
 import { SidebarUtilityActions } from "./SidebarUtilityActions";
 import type { Theme } from "./StudioShell";
@@ -185,9 +176,9 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
           .filter((thread) => thread.status === "active")
           .sort(sortThreadsByUpdatedAtDesc)
       : [];
-    const worktreeRows = buildFlattenedWorktreeRows(worktreeEnvironments);
+    const worktreeGroups = buildWorktreeGroups(worktreeEnvironments);
 
-    if (localThreads.length === 0 && worktreeRows.length === 0) {
+    if (localThreads.length === 0 && worktreeGroups.length === 0) {
       return (
         <div className="project-group__threads project-group__threads--empty">
           <p className="project-group__empty-hint">
@@ -224,114 +215,62 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
             />
           </li>
         ))}
-        {worktreeRows.map((row) => {
-          const env = row.environment;
+        {worktreeGroups.map((group) => {
+          const env = group.environment;
           const branchLabel = resolveWorktreeBranchLabel(env);
-          const openBranchMenu = (event: React.MouseEvent<HTMLElement>) => {
-            event.preventDefault();
-            event.stopPropagation();
-            const anchor = resolveContextMenuAnchor(event);
-            setContextMenu(buildBranchContextMenuState(env, anchor.x, anchor.y));
-          };
-
-          if (row.kind === "empty") {
-            const pr = env.pullRequest;
-            const chipTooltip = branchChipLabel(branchLabel, pr);
-            return (
-              <li key={env.id} className="project-group__thread-item">
-                <div className="tree-sidebar__thread-row">
-                  <button
-                    type="button"
-                    className="tree-sidebar__thread tree-sidebar__thread--placeholder tree-sidebar__thread--with-worktree"
-                    aria-label={`Start thread in ${branchLabel}`}
-                    title={`Start thread in ${branchLabel}`}
-                    onClick={() => void handleCreateThreadInEnvironment(env.id)}
-                    onContextMenu={openBranchMenu}
-                  >
-                    <span className="tree-sidebar__thread-indicator">
-                      <EnvironmentConversationIndicator environment={env} />
-                    </span>
-                    <span className="tree-sidebar__thread-title">
-                      Start thread
-                    </span>
-                  </button>
-                  <Tooltip content={chipTooltip} side="bottom">
-                    <button
-                      type="button"
-                      className="tree-sidebar__thread-branch"
-                      data-pr-state={pr?.state ?? "none"}
-                      aria-label={chipTooltip}
-                      data-no-reorder-drag="true"
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        if (pr) {
-                          void Promise.resolve(openUrl(pr.url)).catch(
-                            () => undefined,
-                          );
-                        }
-                      }}
-                      onContextMenu={openBranchMenu}
-                    >
-                      {pr?.checks ? (
-                        <span
-                          className="tree-sidebar__thread-checks-dot"
-                          data-checks-state={pr.checks.rollup}
-                          aria-hidden="true"
-                        />
-                      ) : null}
-                      <GitBranchIcon
-                        size={10}
-                        className="tree-sidebar__thread-branch-icon"
-                      />
-                      <span className="tree-sidebar__thread-branch-label">
-                        {branchLabel}
-                      </span>
-                    </button>
-                  </Tooltip>
-                </div>
-              </li>
-            );
-          }
-
-          const thread = row.thread;
           return (
-            <li key={thread.id} className="project-group__thread-item">
-              <SidebarThreadRow
-                thread={thread}
-                worktree={{
-                  environmentId: env.id,
-                  branch: branchLabel,
-                  pullRequest: env.pullRequest,
-                }}
-                onSelect={() => handleThreadSelect(thread.id)}
-                onOpenInOtherPane={() =>
-                  handleOpenThreadInOtherPane(thread.id)
-                }
-                onBranchChipContextMenu={(event) => {
-                  const anchor = resolveContextMenuAnchor(event);
-                  setContextMenu(
-                    buildBranchContextMenuState(env, anchor.x, anchor.y),
-                  );
-                }}
-                onBranchChipOpenPullRequest={(url) => {
-                  void Promise.resolve(openUrl(url)).catch(() => undefined);
-                }}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  setContextMenu({
-                    kind: "thread",
-                    threadId: thread.id,
-                    threadTitle: thread.title,
-                    threadWorktreeEnvId: env.id,
-                    threadWorktreeBranch: branchLabel,
-                    x: event.clientX,
-                    y: event.clientY,
-                  });
-                }}
-              />
-            </li>
+            <Fragment key={env.id}>
+              <li
+                className="project-group__worktree-header"
+                aria-hidden="true"
+              >
+                <span className="project-group__worktree-header-label">
+                  {branchLabel}
+                </span>
+              </li>
+              {group.threads.map((thread) => (
+                <li
+                  key={thread.id}
+                  className="project-group__thread-item"
+                >
+                  <SidebarThreadRow
+                    thread={thread}
+                    worktree={{
+                      environmentId: env.id,
+                      branch: branchLabel,
+                      pullRequest: env.pullRequest,
+                    }}
+                    onSelect={() => handleThreadSelect(thread.id)}
+                    onOpenInOtherPane={() =>
+                      handleOpenThreadInOtherPane(thread.id)
+                    }
+                    onBranchChipContextMenu={(event) => {
+                      const anchor = resolveContextMenuAnchor(event);
+                      setContextMenu(
+                        buildBranchContextMenuState(env, anchor.x, anchor.y),
+                      );
+                    }}
+                    onBranchChipOpenPullRequest={(url) => {
+                      void Promise.resolve(openUrl(url)).catch(
+                        () => undefined,
+                      );
+                    }}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setContextMenu({
+                        kind: "thread",
+                        threadId: thread.id,
+                        threadTitle: thread.title,
+                        threadWorktreeEnvId: env.id,
+                        threadWorktreeBranch: branchLabel,
+                        x: event.clientX,
+                        y: event.clientY,
+                      });
+                    }}
+                  />
+                </li>
+              ))}
+            </Fragment>
           );
         })}
       </ul>
@@ -843,24 +782,6 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   );
 }
 
-function EnvironmentConversationIndicator({
-  environment,
-}: {
-  environment: EnvironmentRecord;
-}) {
-  const tone = useConversationStore(selectEnvironmentIndicatorTone(environment));
-  return <RuntimeIndicator tone={tone} />;
-}
-
-function selectEnvironmentIndicatorTone(environment: EnvironmentRecord) {
-  return (state: {
-    snapshotsByThreadId: Record<string, ThreadConversationSnapshot>;
-  }) =>
-    indicatorToneForConversationStatus(
-      deriveEnvironmentConversationStatus(environment, state.snapshotsByThreadId),
-    );
-}
-
 async function showProjectRemovalBlockedDialog(
   cause: unknown,
 ): Promise<boolean> {
@@ -942,70 +863,45 @@ function buildBranchContextMenuState(
   };
 }
 
-type FlattenedWorktreeRow =
-  | {
-      kind: "thread";
-      environment: EnvironmentRecord;
-      thread: ThreadRecord;
-    }
-  | {
-      kind: "empty";
-      environment: EnvironmentRecord;
-    };
+type WorktreeGroup = {
+  environment: EnvironmentRecord;
+  threads: ThreadRecord[];
+};
 
-function buildFlattenedWorktreeRows(
+function buildWorktreeGroups(
   environments: EnvironmentRecord[],
-): FlattenedWorktreeRow[] {
-  const rows: FlattenedWorktreeRow[] = [];
+): WorktreeGroup[] {
+  const groups: WorktreeGroup[] = [];
   for (const environment of environments) {
     const activeThreads = environment.threads
       .filter((thread) => thread.status === "active")
       .sort(sortThreadsByUpdatedAtDesc);
     if (activeThreads.length === 0) {
-      rows.push({ kind: "empty", environment });
       continue;
     }
-    for (const thread of activeThreads) {
-      rows.push({ kind: "thread", environment, thread });
-    }
+    groups.push({ environment, threads: activeThreads });
   }
 
-  return rows
-    .sort((left, right) => {
-      const activityOrder =
-        flattenedWorktreeRowTimestamp(right) - flattenedWorktreeRowTimestamp(left);
-      if (activityOrder !== 0) {
-        return activityOrder;
-      }
-      const branchOrder = resolveWorktreeBranchLabel(
-        left.environment,
-      ).localeCompare(resolveWorktreeBranchLabel(right.environment));
-      if (branchOrder !== 0) {
-        return branchOrder;
-      }
-      if (left.kind === "empty" || right.kind === "empty") {
-        return left.kind === "empty" ? 1 : -1;
-      }
-      return left.thread.title.localeCompare(right.thread.title);
-    });
+  return groups.sort((left, right) => {
+    const activityOrder =
+      latestActiveThreadTimestamp(right.threads) -
+      latestActiveThreadTimestamp(left.threads);
+    if (activityOrder !== 0) {
+      return activityOrder;
+    }
+    return resolveWorktreeBranchLabel(left.environment).localeCompare(
+      resolveWorktreeBranchLabel(right.environment),
+    );
+  });
+}
+
+function latestActiveThreadTimestamp(threads: ThreadRecord[]) {
+  // Threads are pre-sorted by updatedAt desc, so the first entry is the newest.
+  return threads.length > 0 ? timestampOf(threads[0].updatedAt) : 0;
 }
 
 function sortThreadsByUpdatedAtDesc(left: ThreadRecord, right: ThreadRecord) {
   return timestampOf(right.updatedAt) - timestampOf(left.updatedAt);
-}
-
-function flattenedWorktreeRowTimestamp(row: FlattenedWorktreeRow) {
-  if (row.kind === "thread") {
-    return timestampOf(row.thread.updatedAt);
-  }
-  return latestEnvironmentActivityTimestamp(row.environment);
-}
-
-function latestEnvironmentActivityTimestamp(environment: EnvironmentRecord) {
-  return environment.threads.reduce(
-    (latest, thread) => Math.max(latest, timestampOf(thread.updatedAt)),
-    timestampOf(environment.updatedAt),
-  );
 }
 
 function resolveWorktreeBranchLabel(environment: EnvironmentRecord) {

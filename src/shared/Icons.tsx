@@ -605,3 +605,31 @@ export function ReloadIcon({ size = 16, className }: IconProps) {
     </svg>
   );
 }
+
+export function SpinnerIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path
+        d="M8 2a6 6 0 1 1-6 6"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function AlertIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M8 4.8v3.8"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <circle cx="8" cy="11" r="0.85" fill="currentColor" />
+    </svg>
+  );
+}

@@ -277,10 +277,22 @@ export async function archiveThreadWithConfirmation(threadId: string) {
     return false;
   }
 
-  const confirmed = await confirm("Are you sure you want to archive this thread?", {
-    title: "Archive Thread",
+  const willEmptyWorktree = isLastActiveWorktreeThread(
+    target.environment,
+    threadId,
+  );
+  const dialogPrompt = willEmptyWorktree
+    ? `This is the last active thread in the worktree "${target.environment.name}". Archiving it will also delete the worktree.\n\nContinue?`
+    : "Are you sure you want to archive this thread?";
+  const dialogTitle = willEmptyWorktree
+    ? "Archive thread & delete worktree"
+    : "Archive Thread";
+  const dialogOkLabel = willEmptyWorktree ? "Archive & delete" : "Archive";
+
+  const confirmed = await confirm(dialogPrompt, {
+    title: dialogTitle,
     kind: "warning",
-    okLabel: "Archive",
+    okLabel: dialogOkLabel,
     cancelLabel: "Cancel",
   });
   if (!confirmed) {
@@ -294,62 +306,68 @@ export async function archiveThreadWithConfirmation(threadId: string) {
   }
 
   const archivedEnvironmentId = latestTarget.environment.id;
-  const archivedEnvironmentKind = latestTarget.environment.kind;
+  const wantsWorktreeDeletion =
+    willEmptyWorktree &&
+    isLastActiveWorktreeThread(latestTarget.environment, threadId);
 
   await bridge.archiveThread({ threadId: latestTarget.thread.id });
   useWorkspaceStore.getState().removeThread(latestTarget.thread.id);
   const refreshed = await useWorkspaceStore.getState().refreshSnapshot();
 
-  if (refreshed && archivedEnvironmentKind !== "local") {
-    if (archivedEnvironmentKind === "chat") {
-      return refreshed;
+  if (refreshed && wantsWorktreeDeletion) {
+    // Re-check against the refreshed snapshot: a concurrent thread creation
+    // could have repopulated the environment while we awaited the archive.
+    const refreshedEnv = findEnvironmentInWorkspace(
+      useWorkspaceStore.getState().snapshot,
+      archivedEnvironmentId,
+    );
+    if (refreshedEnv && environmentHasNoActiveThreads(refreshedEnv)) {
+      await deleteEmptyWorktreeQuietly(archivedEnvironmentId);
     }
-    await maybePromptDeleteEmptyWorktree(archivedEnvironmentId);
   }
 
   return refreshed;
 }
 
-async function maybePromptDeleteEmptyWorktree(environmentId: string) {
-  const targetEnv = findEnvironmentById(environmentId);
-  if (!targetEnv || targetEnv.kind === "local") return;
-  const stillHasActiveThread = targetEnv.threads.some(
-    (thread) => thread.status === "active",
+function isLastActiveWorktreeThread(
+  environment: EnvironmentRecord,
+  archivedThreadId: string,
+) {
+  if (environment.kind === "local" || environment.kind === "chat") return false;
+  const remainingActive = environment.threads.filter(
+    (thread) => thread.status === "active" && thread.id !== archivedThreadId,
   );
-  if (stillHasActiveThread) return;
-
-  const approved = await confirm(
-    `The worktree "${targetEnv.name}" has no more active threads. Delete it?`,
-    {
-      title: "Delete empty worktree",
-      kind: "warning",
-      okLabel: "Delete",
-      cancelLabel: "Keep",
-    },
-  );
-  if (!approved) return;
-
-  try {
-    await bridge.deleteWorktreeEnvironment(environmentId);
-    await useWorkspaceStore.getState().refreshSnapshot();
-  } catch {
-    // A failure to delete the worktree is not worth surfacing a duplicate
-    // notice here; the user can retry from the chip menu.
-  }
+  return remainingActive.length === 0;
 }
 
-function findEnvironmentById(
+function environmentHasNoActiveThreads(environment: EnvironmentRecord) {
+  if (environment.kind === "local" || environment.kind === "chat") return false;
+  return !environment.threads.some((thread) => thread.status === "active");
+}
+
+function findEnvironmentInWorkspace(
+  snapshot: WorkspaceSnapshot | null,
   environmentId: string,
 ): EnvironmentRecord | null {
-  const snapshot = useWorkspaceStore.getState().snapshot;
   if (!snapshot) return null;
   for (const project of snapshot.projects) {
     const match = project.environments.find(
-      (env) => env.id === environmentId,
+      (environment) => environment.id === environmentId,
     );
     if (match) return match;
   }
   return null;
+}
+
+async function deleteEmptyWorktreeQuietly(environmentId: string) {
+  try {
+    await bridge.deleteWorktreeEnvironment(environmentId);
+    await useWorkspaceStore.getState().refreshSnapshot();
+  } catch {
+    // Swallowing the error here keeps the archive flow clean. The worktree
+    // remains, but the user already confirmed archival; surfacing a second
+    // error dialog would be more confusing than retrying from elsewhere.
+  }
 }
 
 export function selectAdjacentThread(direction: "next" | "previous") {

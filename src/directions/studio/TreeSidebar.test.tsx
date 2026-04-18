@@ -589,7 +589,7 @@ describe("TreeSidebar", () => {
     expect(mockedBridge.deleteWorktreeEnvironment).not.toHaveBeenCalled();
   });
 
-  it("keeps empty worktrees visible and routes their branch menu through the placeholder row", () => {
+  it("hides worktrees with no active threads from the sidebar list", () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
       snapshot: makeWorkspaceSnapshot({
@@ -631,25 +631,13 @@ describe("TreeSidebar", () => {
 
     renderSidebar();
 
-    const placeholder = screen.getByRole("button", {
-      name: "Start thread in add-themes",
-    });
-    expect(placeholder).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Open PR #17: Add themes" }),
-    ).toBeInTheDocument();
-
-    fireEvent.contextMenu(placeholder);
-
+      screen.queryByRole("button", { name: "Start thread in add-themes" }),
+    ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "New thread in add-themes" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Open pull request" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Delete worktree" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Open PR #17: Add themes" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("add-themes")).not.toBeInTheDocument();
   });
 
   it("anchors the branch menu to the trigger button for keyboard activation", () => {
