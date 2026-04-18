@@ -417,6 +417,55 @@ describe("useStudioShortcuts", () => {
     expect(useWorkspaceStore.getState().selectedEnvironmentId).toBeNull();
   });
 
+  it("ignores the terminal shortcut when a chat thread is selected", () => {
+    const toggleVisible = vi.fn();
+    const chatThread = makeThread({
+      id: "chat-thread-1",
+      environmentId: "chat-env-1",
+    });
+    const chatEnvironment = makeEnvironment({
+      id: "chat-env-1",
+      projectId: "skein-chat-workspace",
+      name: "Chat",
+      kind: "chat",
+      path: "/tmp/.skein/chats/chat-env-1",
+      gitBranch: undefined,
+      baseBranch: undefined,
+      isDefault: false,
+      pullRequest: undefined,
+      threads: [chatThread],
+      runtime: undefined,
+    });
+    const baseSnapshot = makeWorkspaceSnapshot();
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: {
+        ...baseSnapshot,
+        chat: {
+          ...baseSnapshot.chat,
+          environments: [chatEnvironment],
+        },
+      },
+      selectedProjectId: "skein-chat-workspace",
+      selectedEnvironmentId: chatEnvironment.id,
+      selectedThreadId: chatThread.id,
+    }));
+    useTerminalStore.setState({ toggleVisible });
+
+    render(<Harness />);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "J",
+      cancelable: true,
+      ...primaryModifier(),
+    });
+    window.dispatchEvent(event);
+
+    expect(toggleVisible).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+    expect(useTerminalStore.getState().byEnv[chatEnvironment.id]).toBeUndefined();
+  });
+
   it("does not navigate away from a focused draft pane when cycling threads", () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
@@ -462,6 +511,7 @@ describe("useStudioShortcuts", () => {
     });
 
     expect(useWorkspaceStore.getState().draftBySlot.topLeft).toEqual({
+      kind: "project",
       projectId: "project-1",
     });
     expect(useWorkspaceStore.getState().selectedThreadId).toBeNull();

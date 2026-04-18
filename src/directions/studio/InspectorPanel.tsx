@@ -12,7 +12,7 @@ import {
   useGitReviewStore,
 } from "../../stores/git-review-store";
 import {
-  selectEffectiveEnvironment,
+  selectEffectiveNonChatEnvironment,
   selectSelectedThread,
   useWorkspaceStore,
 } from "../../stores/workspace-store";
@@ -21,7 +21,7 @@ import { confirmRevertAll, confirmRevertFile } from "./git-review-actions";
 import "./InspectorPanel.css";
 
 export function InspectorPanel({ collapsed = false }: { collapsed?: boolean }) {
-  const selectedEnvironment = useWorkspaceStore(selectEffectiveEnvironment);
+  const selectedEnvironment = useWorkspaceStore(selectEffectiveNonChatEnvironment);
   const selectedThread = useWorkspaceStore(selectSelectedThread);
   const selectedEnvironmentId = selectedEnvironment?.id ?? null;
   const selectedThreadId = selectedThread?.id ?? null;

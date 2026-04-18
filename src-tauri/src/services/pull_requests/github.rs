@@ -207,9 +207,7 @@ fn list_matching_pull_requests(
         {
             Ok(prs) => prs,
             Err(error) if include_checks => {
-                debug!(
-                    "statusCheckRollup query failed ({error}); retrying without check data"
-                );
+                debug!("statusCheckRollup query failed ({error}); retrying without check data");
                 include_checks = false;
                 query_pull_requests(repo_root, head_selector, false)?
             }
@@ -291,9 +289,7 @@ fn normalize_pull_request(raw: RawPullRequest) -> ResolvedPullRequest {
         .head_repository_owner
         .map(|owner| owner.login)
         .filter(|value| !value.trim().is_empty());
-    let checks = raw
-        .status_check_rollup
-        .and_then(build_checks_snapshot);
+    let checks = raw.status_check_rollup.and_then(build_checks_snapshot);
 
     ResolvedPullRequest {
         number: raw.number,

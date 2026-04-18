@@ -19,7 +19,8 @@ export function SidebarUsagePanel() {
   const hasWorkspaceEnvironment =
     workspaceSnapshot?.projects.some(
       (project) => project.environments.length > 0,
-    ) ?? false;
+    ) ||
+    (workspaceSnapshot?.chat.environments.length ?? 0) > 0;
   const sourceEnvironmentId = resolveUsageSourceEnvironmentId(
     workspaceSnapshot,
     selectedEnvironmentId,
@@ -87,7 +88,7 @@ function resolveUsagePlaceholder(
   rows: ReturnType<typeof buildCodexUsageRows>,
 ) {
   if (!hasWorkspaceEnvironment && !hasSnapshot) {
-    return "Add a project to inspect Codex usage.";
+    return "Start a chat or add a project to inspect Codex usage.";
   }
   if (!loading && error) {
     return error;
@@ -106,10 +107,10 @@ function resolveUsageSourceEnvironmentId(
     return null;
   }
 
-  const selectedEnvironment =
-    snapshot.projects
-      .flatMap((project) => project.environments)
-      .find((environment) => environment.id === selectedEnvironmentId) ?? null;
+  const selectedEnvironment = [
+    ...snapshot.projects.flatMap((project) => project.environments),
+    ...snapshot.chat.environments,
+  ].find((environment) => environment.id === selectedEnvironmentId) ?? null;
 
   return selectedEnvironment?.id ?? null;
 }

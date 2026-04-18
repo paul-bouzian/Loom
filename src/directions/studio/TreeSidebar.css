@@ -53,6 +53,44 @@
   padding: var(--tx-space-sm) 0;
 }
 
+.tree-sidebar__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--tx-space-sm) var(--tx-space-sm) 0;
+}
+
+.tree-sidebar__section-title {
+  color: var(--tx-text-muted);
+}
+
+.tree-sidebar__section-content {
+  padding: var(--tx-space-xs) var(--tx-space-sm) 0;
+}
+
+.tree-sidebar__section-thread-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+}
+
+.tree-sidebar__section-thread-item {
+  display: flex;
+}
+
+.tree-sidebar__section-empty-hint {
+  margin: 0;
+  padding: var(--tx-space-xs) var(--tx-space-sm);
+  font-size: 11px;
+  color: var(--tx-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .tree-sidebar__footer {
   flex-shrink: 0;
   display: flex;

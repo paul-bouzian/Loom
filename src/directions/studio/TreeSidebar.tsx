@@ -9,6 +9,7 @@ import {
 } from "../../lib/conversation-status";
 import { APP_NAME } from "../../lib/app-identity";
 import {
+  selectChatWorkspace,
   useWorkspaceStore,
   selectProjects,
 } from "../../stores/workspace-store";
@@ -39,6 +40,7 @@ import type { Theme } from "./StudioShell";
 import {
   archiveThreadWithConfirmation,
   createThreadForEnvironment,
+  openChatDraft,
   openThreadDraftForProject,
 } from "./studioActions";
 import {
@@ -79,6 +81,7 @@ const PROJECT_REMOVAL_BLOCKED_MESSAGE =
 const PROJECT_REMOVAL_DIALOG_TITLE = "Remove project";
 
 export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggleTheme }: Props) {
+  const chatWorkspace = useWorkspaceStore(selectChatWorkspace);
   const projects = useWorkspaceStore(selectProjects);
   const selectedProjectId = useWorkspaceStore((s) => s.selectedProjectId);
   const refreshSnapshot = useWorkspaceStore((s) => s.refreshSnapshot);
@@ -335,6 +338,59 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
     );
   }
 
+  function renderChatThreads() {
+    const chatThreads =
+      chatWorkspace?.environments
+        .flatMap((environment) =>
+          environment.threads
+            .filter((thread) => thread.status === "active")
+            .map((thread) => ({ thread, environment })),
+        )
+        .sort((left, right) => sortThreadsByUpdatedAtDesc(left.thread, right.thread)) ?? [];
+
+    if (chatThreads.length === 0) {
+      return (
+        <div className="tree-sidebar__section-content">
+          <p className="tree-sidebar__section-empty-hint">
+            No chats yet — click{" "}
+            <span aria-hidden>
+              <PencilIcon size={10} />
+            </span>{" "}
+            to start one.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="tree-sidebar__section-content">
+        <ul className="tree-sidebar__section-thread-list">
+        {chatThreads.map(({ thread }) => (
+          <li key={thread.id} className="tree-sidebar__section-thread-item">
+            <SidebarThreadRow
+              thread={thread}
+              onSelect={() => handleThreadSelect(thread.id)}
+              onOpenInOtherPane={() => handleOpenThreadInOtherPane(thread.id)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setContextMenu({
+                  kind: "thread",
+                  threadId: thread.id,
+                  threadTitle: thread.title,
+                  threadWorktreeEnvId: null,
+                  threadWorktreeBranch: null,
+                  x: event.clientX,
+                  y: event.clientY,
+                });
+              }}
+            />
+          </li>
+        ))}
+        </ul>
+      </div>
+    );
+  }
+
   async function handleArchiveThreadFromMenu(threadId: string) {
     setContextMenu(null);
     resetMessages();
@@ -469,19 +525,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   return (
     <aside className={`tree-sidebar ${collapsed ? "tree-sidebar--collapsed" : ""}`} inert={collapsed || undefined}>
       <div className="tree-sidebar__header">
-        <span className="tree-sidebar__title tx-section-label">Projects</span>
-        <button
-          type="button"
-          className="tree-sidebar__add"
-          title="Add project"
-          onClick={() => {
-            resetMessages();
-            void importProject();
-          }}
-          disabled={isImporting}
-        >
-          <PlusIcon size={14} />
-        </button>
+        <span className="tree-sidebar__title tx-section-label">Workspace</span>
       </div>
       <div className="tree-sidebar__scroll">
         <div className="tree-sidebar__project-list">
@@ -507,6 +551,21 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
               </button>
             </div>
           ) : null}
+          <div className="tree-sidebar__section-header">
+            <span className="tree-sidebar__section-title tx-section-label">Projects</span>
+            <button
+              type="button"
+              className="tree-sidebar__add"
+              title="Add project"
+              onClick={() => {
+                resetMessages();
+                void importProject();
+              }}
+              disabled={isImporting}
+            >
+              <PlusIcon size={14} />
+            </button>
+          </div>
           {projects.length === 0 ? (
             <p className="tree-sidebar__empty">
               {isImporting ? "Importing project..." : "No projects yet"}
@@ -624,8 +683,29 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
                 {!project.sidebarCollapsed &&
                   renderProjectThreads(project)}
               </section>
-            ))
-          )}
+              ))
+            )}
+          <div className="tree-sidebar__section-header">
+            <span className="tree-sidebar__section-title tx-section-label">
+              {chatWorkspace?.title ?? "Chats"}
+            </span>
+            <Tooltip content="New chat" side="bottom">
+              <button
+                type="button"
+                className="tree-sidebar__add"
+                aria-label="New chat"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  resetMessages();
+                  openChatDraft();
+                }}
+              >
+                <PencilIcon size={13} />
+              </button>
+            </Tooltip>
+          </div>
+          {renderChatThreads()}
         </div>
       </div>
       <div className="tree-sidebar__footer">

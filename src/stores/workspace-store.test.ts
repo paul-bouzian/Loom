@@ -1186,7 +1186,10 @@ describe("workspace store — grid 2x2 panes", () => {
         .openThreadDraft("project-a");
 
       expect(slot).toBe("topLeft");
-      expect(drafts().topLeft).toEqual({ projectId: "project-a" });
+      expect(drafts().topLeft).toEqual({
+        kind: "project",
+        projectId: "project-a",
+      });
       expect(slots().topLeft).toEqual({
         projectId: "project-a",
         environmentId: null,
@@ -1241,7 +1244,10 @@ describe("workspace store — grid 2x2 panes", () => {
         .openThreadDraft("project-a");
 
       expect(slot).toBe("topRight");
-      expect(drafts().topRight?.projectId).toBe("project-a");
+      expect(drafts().topRight).toEqual({
+        kind: "project",
+        projectId: "project-a",
+      });
       expect(slots().topRight?.threadId).toBeNull();
     });
 
@@ -1265,7 +1271,7 @@ describe("workspace store — grid 2x2 panes", () => {
           colRatio: 0.5,
         },
         draftBySlot: {
-          topRight: { projectId: "project-a" },
+          topRight: { kind: "project", projectId: "project-a" },
         },
       }));
       mockedBridge.getWorkspaceSnapshot.mockResolvedValue(snapshot);
@@ -1278,7 +1284,10 @@ describe("workspace store — grid 2x2 panes", () => {
         threadId: null,
       });
       expect(slots().topRight).toBeNull();
-      expect(drafts().topLeft).toEqual({ projectId: "project-a" });
+      expect(drafts().topLeft).toEqual({
+        kind: "project",
+        projectId: "project-a",
+      });
       expect(drafts().topRight).toBeUndefined();
       expect(useWorkspaceStore.getState().layout.focusedSlot).toBe("topLeft");
       expect(useWorkspaceStore.getState().selectedEnvironmentId).toBeNull();
@@ -1306,7 +1315,7 @@ describe("workspace store — grid 2x2 panes", () => {
           colRatio: 0.5,
         },
         draftBySlot: {
-          topLeft: { projectId: "project-a" },
+          topLeft: { kind: "project", projectId: "project-a" },
         },
         selectedProjectId: "project-a",
         selectedEnvironmentId: null,
@@ -1378,7 +1387,10 @@ describe("workspace store — grid 2x2 panes", () => {
       useWorkspaceStore.getState().closeThreadDraft("topRight");
 
       expect(drafts().topRight).toBeUndefined();
-      expect(drafts().topLeft?.projectId).toBe("project-a");
+      expect(drafts().topLeft).toEqual({
+        kind: "project",
+        projectId: "project-a",
+      });
     });
   });
 });

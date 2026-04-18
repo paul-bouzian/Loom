@@ -476,6 +476,12 @@ describe("terminal-store", () => {
           completion: { enabled: true, sound: "glass" },
         },
       },
+      chat: {
+        projectId: "skein-chat-workspace",
+        title: "Chats",
+        rootPath: "/tmp/.skein/chats",
+        environments: [],
+      },
       projects: [
         {
           id: "project-1",

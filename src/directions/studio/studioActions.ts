@@ -12,8 +12,11 @@ import type {
 import { useConversationStore } from "../../stores/conversation-store";
 import { useVoiceSessionStore } from "../../stores/voice-session-store";
 import {
+  findThreadInWorkspace,
+  selectSelectedEnvironment,
   useWorkspaceStore,
   type SlotKey,
+  type ThreadDraftState,
 } from "../../stores/workspace-store";
 import type { EnvSelection } from "./draft/EnvironmentSelector";
 
@@ -21,6 +24,9 @@ export async function createThreadForSelection() {
   const environment = selectedEnvironment();
   if (!environment) {
     return false;
+  }
+  if (environment.kind === "chat") {
+    return openChatDraft() !== null;
   }
   return createThreadForEnvironment(environment.id);
 }
@@ -42,10 +48,14 @@ export function openThreadDraftForProject(
   return useWorkspaceStore.getState().openThreadDraft(projectId, slot);
 }
 
+export function openChatDraft(slot?: SlotKey): SlotKey | null {
+  return useWorkspaceStore.getState().openChatDraft(slot);
+}
+
 export type SendThreadDraftInput = {
   paneId: SlotKey;
-  projectId: string;
-  selection: EnvSelection;
+  draft: ThreadDraftState;
+  projectSelection: EnvSelection;
   text: string;
   images?: ConversationImageAttachment[];
   mentionBindings?: ComposerMentionBindingInput[];
@@ -59,7 +69,7 @@ export type SendThreadDraftResult =
 export async function sendThreadDraft(
   input: SendThreadDraftInput,
 ): Promise<SendThreadDraftResult> {
-  const { paneId, projectId, selection, text, composer } = input;
+  const { paneId, draft, projectSelection, text, composer } = input;
   const images = input.images ?? [];
   const mentionBindings = input.mentionBindings ?? [];
   if (text.trim().length === 0 && images.length === 0) {
@@ -68,15 +78,22 @@ export async function sendThreadDraft(
 
   let resolved: ResolvedDraftThread;
   try {
-    resolved = await resolveDraftThread(projectId, selection);
+    resolved = await resolveDraftThread(draft, projectSelection);
   } catch (cause: unknown) {
     return {
       ok: false,
-      error:
-        cause instanceof Error ? cause.message : "Failed to create thread",
+      error: extractErrorMessage(cause) ?? "Failed to create thread",
     };
   }
   const { thread, environment } = resolved;
+  const projectId =
+    environment?.projectId ??
+    (draft.kind === "project"
+      ? draft.projectId
+      : (useWorkspaceStore.getState().snapshot?.chat.projectId ?? null));
+  if (!projectId) {
+    return { ok: false, error: "Failed to resolve the draft destination." };
+  }
 
   // Stage the new thread in the local snapshot so pane resolution works
   // before `refreshSnapshot` completes. Without this, a slow refresh would
@@ -124,19 +141,24 @@ export async function sendThreadDraft(
 
 type ResolvedDraftThread = {
   thread: ThreadRecord;
-  // Populated only for "new worktree" flows, where the backend returns the
-  // freshly-created environment alongside the thread.
+  // Populated for chat creation and "new worktree" flows, where the backend
+  // returns the freshly-created environment alongside the thread.
   environment?: EnvironmentRecord;
 };
 
 async function resolveDraftThread(
-  projectId: string,
-  selection: EnvSelection,
+  draft: ThreadDraftState,
+  projectSelection: EnvSelection,
 ): Promise<ResolvedDraftThread> {
-  if (selection.kind === "new") {
-    const trimmedName = selection.name.trim();
-    const baseBranch = selection.baseBranch.trim();
-    const result = await bridge.createManagedWorktree(projectId, {
+  if (draft.kind === "chat") {
+    const result = await bridge.createChatThread({});
+    return { thread: result.thread, environment: result.environment };
+  }
+
+  if (projectSelection.kind === "new") {
+    const trimmedName = projectSelection.name.trim();
+    const baseBranch = projectSelection.baseBranch.trim();
+    const result = await bridge.createManagedWorktree(draft.projectId, {
       // Leaving baseBranch empty lets the backend fall back to
       // resolve_base_reference (remote/upstream), which is how the legacy
       // standalone flow worked and matters for detached-HEAD repos.
@@ -146,14 +168,14 @@ async function resolveDraftThread(
     return { thread: result.thread, environment: result.environment };
   }
 
-  if (selection.kind === "existing") {
+  if (projectSelection.kind === "existing") {
     const thread = await bridge.createThread({
-      environmentId: selection.environmentId,
+      environmentId: projectSelection.environmentId,
     });
     return { thread };
   }
 
-  const localEnv = findLocalEnvironment(projectId);
+  const localEnv = findLocalEnvironment(draft.projectId);
   if (!localEnv) {
     throw new Error("No local environment found for this project.");
   }
@@ -174,6 +196,31 @@ function mergeCreatedThreadIntoSnapshot(
 ): void {
   useWorkspaceStore.setState((state) => {
     if (!state.snapshot) return state;
+    if (projectId === state.snapshot.chat.projectId) {
+      let environments = state.snapshot.chat.environments;
+      if (
+        environment &&
+        !environments.some((candidate) => candidate.id === environment.id)
+      ) {
+        environments = [...environments, environment];
+      }
+      environments = environments.map((env) => {
+        if (env.id !== thread.environmentId) return env;
+        if (env.threads.some((candidate) => candidate.id === thread.id)) {
+          return env;
+        }
+        return { ...env, threads: [...env.threads, thread] };
+      });
+      return {
+        snapshot: {
+          ...state.snapshot,
+          chat: {
+            ...state.snapshot.chat,
+            environments,
+          },
+        },
+      };
+    }
     const nextProjects = state.snapshot.projects.map((project) => {
       if (project.id !== projectId) return project;
       let environments = project.environments;
@@ -204,9 +251,28 @@ function findLocalEnvironment(projectId: string): EnvironmentRecord | null {
   return project?.environments.find((env) => env.kind === "local") ?? null;
 }
 
+function extractErrorMessage(cause: unknown): string | null {
+  if (
+    typeof cause === "object" &&
+    cause !== null &&
+    "message" in cause &&
+    typeof cause.message === "string"
+  ) {
+    const message = cause.message.trim();
+    return message.length > 0 ? message : null;
+  }
+
+  if (cause instanceof Error) {
+    const message = cause.message.trim();
+    return message.length > 0 ? message : null;
+  }
+
+  return null;
+}
+
 export async function archiveThreadWithConfirmation(threadId: string) {
   const snapshot = useWorkspaceStore.getState().snapshot;
-  const target = findThread(snapshot, threadId);
+  const target = findThreadInWorkspace(snapshot, threadId);
   if (!target || ownsPendingVoiceWork(threadId)) {
     return false;
   }
@@ -222,7 +288,7 @@ export async function archiveThreadWithConfirmation(threadId: string) {
   }
 
   const latestSnapshot = useWorkspaceStore.getState().snapshot;
-  const latestTarget = findThread(latestSnapshot, threadId);
+  const latestTarget = findThreadInWorkspace(latestSnapshot, threadId);
   if (!latestTarget || ownsPendingVoiceWork(threadId)) {
     return false;
   }
@@ -235,6 +301,9 @@ export async function archiveThreadWithConfirmation(threadId: string) {
   const refreshed = await useWorkspaceStore.getState().refreshSnapshot();
 
   if (refreshed && archivedEnvironmentKind !== "local") {
+    if (archivedEnvironmentKind === "chat") {
+      return refreshed;
+    }
     await maybePromptDeleteEmptyWorktree(archivedEnvironmentId);
   }
 
@@ -343,28 +412,7 @@ export function selectAdjacentEnvironment(direction: "next" | "previous") {
 }
 
 function selectedEnvironment() {
-  const state = useWorkspaceStore.getState();
-  return resolveSelectedEnvironment(
-    state.snapshot,
-    state.selectedProjectId,
-    state.selectedEnvironmentId,
-  );
-}
-
-
-function findThread(snapshot: WorkspaceSnapshot | null, threadId: string) {
-  if (!snapshot) {
-    return null;
-  }
-  for (const project of snapshot.projects) {
-    for (const environment of project.environments) {
-      const thread = environment.threads.find((candidate) => candidate.id === threadId);
-      if (thread) {
-        return { project, environment, thread };
-      }
-    }
-  }
-  return null;
+  return selectSelectedEnvironment(useWorkspaceStore.getState());
 }
 
 function listOrderedEnvironments(snapshot: WorkspaceSnapshot | null): EnvironmentRecord[] {

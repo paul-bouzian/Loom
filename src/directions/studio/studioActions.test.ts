@@ -23,6 +23,7 @@ const confirmMock = vi.fn();
 
 vi.mock("../../lib/bridge", () => ({
   archiveThread: vi.fn(),
+  createChatThread: vi.fn(),
   createManagedWorktree: vi.fn(),
   createThread: vi.fn(),
   sendThreadMessage: vi.fn(),
@@ -100,6 +101,57 @@ describe("studioActions", () => {
 
     expect(refreshSnapshot).toHaveBeenCalledTimes(1);
     expect(useWorkspaceStore.getState().selectedThreadId).toBe("thread-1");
+  });
+
+  it("opens a new chat draft when creating a thread from a selected chat", async () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [],
+        chat: {
+          projectId: "skein-chat-workspace",
+          title: "Chats",
+          rootPath: "/tmp/.skein/chats",
+          environments: [
+            makeEnvironment({
+              id: "chat-env-1",
+              projectId: "skein-chat-workspace",
+              kind: "chat",
+              name: "Chat",
+              path: "/tmp/.skein/chats/chat-env-1",
+              gitBranch: undefined,
+              isDefault: false,
+              threads: [makeThread({ id: "chat-thread-1", environmentId: "chat-env-1" })],
+            }),
+          ],
+        },
+      }),
+      layout: {
+        slots: {
+          topLeft: {
+            projectId: "skein-chat-workspace",
+            environmentId: "chat-env-1",
+            threadId: "chat-thread-1",
+          },
+          topRight: null,
+          bottomLeft: null,
+          bottomRight: null,
+        },
+        focusedSlot: "topLeft",
+        rowRatio: 0.5,
+        colRatio: 0.5,
+      },
+      selectedProjectId: "skein-chat-workspace",
+      selectedEnvironmentId: "chat-env-1",
+      selectedThreadId: "chat-thread-1",
+    }));
+
+    await expect(createThreadForSelection()).resolves.toBe(true);
+
+    expect(mockedBridge.createThread).not.toHaveBeenCalled();
+    expect(useWorkspaceStore.getState().draftBySlot.topLeft).toEqual({
+      kind: "chat",
+    });
   });
 
   it("selects the first environment when navigating next with no current selection", () => {
@@ -367,11 +419,81 @@ describe("studioActions", () => {
     expect(mockedBridge.archiveThread).not.toHaveBeenCalled();
   });
 
+  it("archives chat threads from the sidebar context menu", async () => {
+    confirmMock.mockResolvedValue(true);
+    mockedBridge.archiveThread.mockResolvedValue(
+      makeThread({
+        id: "chat-thread-1",
+        environmentId: "chat-env-1",
+        status: "archived",
+      }),
+    );
+    const refreshSnapshot = vi.fn(async () => {
+      useWorkspaceStore.setState((state) => {
+        if (!state.snapshot) return state;
+        return {
+          ...state,
+          snapshot: {
+            ...state.snapshot,
+            chat: {
+              ...state.snapshot.chat,
+              environments: [],
+            },
+          },
+        };
+      });
+      return true;
+    });
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [],
+        chat: {
+          projectId: "skein-chat-workspace",
+          title: "Chats",
+          rootPath: "/tmp/.skein/chats",
+          environments: [
+            makeEnvironment({
+              id: "chat-env-1",
+              projectId: "skein-chat-workspace",
+              kind: "chat",
+              name: "Chat",
+              path: "/tmp/.skein/chats/chat-env-1",
+              gitBranch: undefined,
+              isDefault: false,
+              threads: [
+                makeThread({
+                  id: "chat-thread-1",
+                  environmentId: "chat-env-1",
+                  title: "Chat thread",
+                }),
+              ],
+            }),
+          ],
+        },
+      }),
+      refreshSnapshot,
+      selectedProjectId: "skein-chat-workspace",
+      selectedEnvironmentId: "chat-env-1",
+      selectedThreadId: "chat-thread-1",
+    }));
+
+    await expect(archiveThreadWithConfirmation("chat-thread-1")).resolves.toBe(
+      true,
+    );
+
+    expect(mockedBridge.archiveThread).toHaveBeenCalledWith({
+      threadId: "chat-thread-1",
+    });
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   describe("thread draft", () => {
     it("openThreadDraftForProject stores the draft on the focused slot", () => {
       const slot = openThreadDraftForProject("project-1");
       expect(slot).toBe("topLeft");
       expect(useWorkspaceStore.getState().draftBySlot.topLeft).toEqual({
+        kind: "project",
         projectId: "project-1",
       });
     });
@@ -401,13 +523,13 @@ describe("studioActions", () => {
         });
         return true;
       });
-      useWorkspaceStore.setState((state) => ({ ...state, refreshSnapshot }));
+    useWorkspaceStore.setState((state) => ({ ...state, refreshSnapshot }));
       useWorkspaceStore.getState().openThreadDraft("project-1", "topLeft");
 
       const result = await sendThreadDraft({
         paneId: "topLeft",
-        projectId: "project-1",
-        selection: { kind: "local" },
+        draft: { kind: "project", projectId: "project-1" },
+        projectSelection: { kind: "local" },
         text: "Hello",
       });
 
@@ -454,8 +576,8 @@ describe("studioActions", () => {
 
       const result = await sendThreadDraft({
         paneId: "topLeft",
-        projectId: "project-1",
-        selection: {
+        draft: { kind: "project", projectId: "project-1" },
+        projectSelection: {
           kind: "new",
           baseBranch: "main",
           name: "fix/crash",
@@ -483,8 +605,8 @@ describe("studioActions", () => {
 
       const result = await sendThreadDraft({
         paneId: "topLeft",
-        projectId: "project-1",
-        selection: { kind: "local" },
+        draft: { kind: "project", projectId: "project-1" },
+        projectSelection: { kind: "local" },
         text: "Hi",
       });
 
@@ -497,13 +619,49 @@ describe("studioActions", () => {
     it("sendThreadDraft refuses empty messages", async () => {
       const result = await sendThreadDraft({
         paneId: "topLeft",
-        projectId: "project-1",
-        selection: { kind: "local" },
+        draft: { kind: "project", projectId: "project-1" },
+        projectSelection: { kind: "local" },
         text: "   ",
       });
 
       expect(result).toEqual({ ok: false, error: "Message is empty" });
       expect(mockedBridge.createThread).not.toHaveBeenCalled();
+    });
+
+    it("sendThreadDraft creates a chat thread when the draft is in chat mode", async () => {
+      const chatEnvironment = makeEnvironment({
+        id: "env-chat-1",
+        projectId: "skein-chat-workspace",
+        kind: "chat",
+        name: "Chat",
+        path: "/tmp/.skein/chats/env-chat-1",
+        gitBranch: undefined,
+        isDefault: false,
+        threads: [],
+      });
+      const chatThread = makeThread({
+        id: "thread-chat-1",
+        environmentId: chatEnvironment.id,
+      });
+      mockedBridge.createChatThread.mockResolvedValue({
+        environment: chatEnvironment,
+        thread: chatThread,
+      });
+      const refreshSnapshot = vi.fn(async () => true);
+      useWorkspaceStore.setState((state) => ({ ...state, refreshSnapshot }));
+      useWorkspaceStore.getState().openChatDraft("topLeft");
+
+      const result = await sendThreadDraft({
+        paneId: "topLeft",
+        draft: { kind: "chat" },
+        projectSelection: { kind: "local" },
+        text: "Research this topic",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(mockedBridge.createChatThread).toHaveBeenCalledWith({});
+      expect(mockedBridge.createThread).not.toHaveBeenCalled();
+      expect(useWorkspaceStore.getState().selectedThreadId).toBe(chatThread.id);
     });
 
     afterEach(() => {

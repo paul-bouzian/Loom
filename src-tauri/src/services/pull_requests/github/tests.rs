@@ -7,10 +7,9 @@ use uuid::Uuid;
 
 use super::{
     build_checks_snapshot, classify_check_state, normalize_pull_request_state,
-    parse_repository_name_from_pull_request_url,
-    parse_repository_name_with_owner_from_remote_url, resolve_head_context,
-    resolve_pull_request_for_target, select_display_pull_request, PullRequestHeadContext,
-    RawStatusCheck, ResolvedPullRequest, ResolvedPullRequestState,
+    parse_repository_name_from_pull_request_url, parse_repository_name_with_owner_from_remote_url,
+    resolve_head_context, resolve_pull_request_for_target, select_display_pull_request,
+    PullRequestHeadContext, RawStatusCheck, ResolvedPullRequest, ResolvedPullRequestState,
 };
 use crate::domain::workspace::{ChecksItemState, ChecksRollupState, PullRequestState};
 use crate::services::git;
@@ -246,6 +245,8 @@ impl PullRequestHarness {
         )?;
         let managed_root = temp_root.join("managed-worktrees");
         fs::create_dir_all(&managed_root)?;
+        let chats_root = temp_root.join("chats");
+        fs::create_dir_all(&chats_root)?;
         let gh_path = temp_root.join("bin");
         fs::create_dir_all(&gh_path)?;
 
@@ -253,6 +254,7 @@ impl PullRequestHarness {
             workspace: WorkspaceService::new(
                 database,
                 managed_root,
+                chats_root,
                 WorktreeScriptService::for_test(temp_root.clone()),
             ),
             temp_root,
@@ -501,7 +503,10 @@ fn build_checks_snapshot_rolls_up_failure_when_mixed_with_pending() {
     assert_eq!(snapshot.passed, 1);
     assert_eq!(snapshot.total, 3);
     // Failures should be surfaced first in the truncated display list.
-    assert_eq!(snapshot.items.first().map(|item| item.state), Some(ChecksItemState::Failure));
+    assert_eq!(
+        snapshot.items.first().map(|item| item.state),
+        Some(ChecksItemState::Failure)
+    );
 }
 
 #[test]

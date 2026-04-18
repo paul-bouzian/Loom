@@ -11,7 +11,7 @@ import {
   useGitReviewStore,
 } from "../../stores/git-review-store";
 import {
-  selectSelectedEnvironment,
+  selectEffectiveNonChatEnvironment,
   selectSelectedProject,
   selectSettings,
   useWorkspaceStore,
@@ -57,8 +57,6 @@ type RightPanel = "none" | "inspector" | "browser";
 export function StudioShell() {
   const [projectsSidebarOpen, setProjectsSidebarOpen] = useState(true);
   const [rightPanel, setRightPanel] = useState<RightPanel>("none");
-  const inspectorOpen = rightPanel === "inspector";
-  const browserOpen = rightPanel === "browser";
   const [sidePanelDragging, setSidePanelDragging] = useState(false);
   const sidePanelWidth = useSidePanelStore(selectSidePanelWidth);
   const setSidePanelWidth = useSidePanelStore((state) => state.setWidth);
@@ -70,21 +68,31 @@ export function StudioShell() {
   const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot);
   const settings = useWorkspaceStore(selectSettings);
   const selectedProject = useWorkspaceStore(selectSelectedProject);
-  const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
+  const reviewEnvironment = useWorkspaceStore(selectEffectiveNonChatEnvironment);
   const reconcileVoiceSessionSnapshot = useVoiceSessionStore(
     (state) => state.reconcileWorkspaceSnapshot,
   );
   const scope = useGitReviewStore(
-    selectGitReviewScope(selectedEnvironment?.id ?? null),
+    selectGitReviewScope(reviewEnvironment?.id ?? null),
   );
   const selectedFileKey = useGitReviewStore(
-    selectGitReviewSelectedFile(selectedEnvironment?.id ?? null, scope),
+    selectGitReviewSelectedFile(reviewEnvironment?.id ?? null, scope),
   );
   const actionCreateProject =
     workspaceSnapshot?.projects.find((project) => project.id === actionCreateProjectId) ?? null;
   const diffPanelOpen = Boolean(selectedFileKey);
   const actionCreateDialogOpen = !settingsOpen && actionCreateProject != null;
   const shortcutsBlocked = settingsOpen || actionCreateDialogOpen;
+  const effectiveRightPanel: RightPanel =
+    rightPanel === "inspector" && !reviewEnvironment ? "none" : rightPanel;
+  const inspectorOpen = effectiveRightPanel === "inspector";
+  const browserOpen = effectiveRightPanel === "browser";
+
+  useEffect(() => {
+    if (rightPanel === "inspector" && !reviewEnvironment) {
+      setRightPanel("none");
+    }
+  }, [reviewEnvironment, rightPanel]);
 
   const openSettingsDialog = useCallback(() => {
     setActionCreateProjectId(null);
@@ -92,10 +100,13 @@ export function StudioShell() {
   }, []);
 
   const toggleInspector = useCallback(() => {
+    if (!reviewEnvironment) {
+      return;
+    }
     setRightPanel((current) =>
       current === "inspector" ? "none" : "inspector",
     );
-  }, []);
+  }, [reviewEnvironment]);
   const toggleBrowser = useCallback(() => {
     setRightPanel((current) => (current === "browser" ? "none" : "browser"));
   }, []);
@@ -153,7 +164,7 @@ export function StudioShell() {
     setTheme((t) => (t === "dark" ? "light" : "dark"));
   }
 
-  const rightPanelOpen = rightPanel !== "none";
+  const rightPanelOpen = effectiveRightPanel !== "none";
 
   return (
     <div
@@ -189,7 +200,10 @@ export function StudioShell() {
           onDraggingChange={setSidePanelDragging}
         />
       )}
-      <div className="studio-shell__right-panel" data-right-panel={rightPanel}>
+      <div
+        className="studio-shell__right-panel"
+        data-right-panel={effectiveRightPanel}
+      >
         <InspectorPanel collapsed={!inspectorOpen} />
         <BrowserPanel collapsed={!browserOpen} />
       </div>
