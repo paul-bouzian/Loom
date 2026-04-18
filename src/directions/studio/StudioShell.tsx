@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import * as bridge from "../../lib/bridge";
 import {
   THEME_STORAGE_KEY,
@@ -11,6 +11,7 @@ import {
   useGitReviewStore,
 } from "../../stores/git-review-store";
 import {
+  selectEffectiveNonChatEnvironment,
   selectSelectedEnvironment,
   selectSelectedProject,
   selectSettings,
@@ -71,6 +72,7 @@ export function StudioShell() {
   const settings = useWorkspaceStore(selectSettings);
   const selectedProject = useWorkspaceStore(selectSelectedProject);
   const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
+  const reviewEnvironment = useWorkspaceStore(selectEffectiveNonChatEnvironment);
   const reconcileVoiceSessionSnapshot = useVoiceSessionStore(
     (state) => state.reconcileWorkspaceSnapshot,
   );
@@ -92,10 +94,13 @@ export function StudioShell() {
   }, []);
 
   const toggleInspector = useCallback(() => {
+    if (!reviewEnvironment) {
+      return;
+    }
     setRightPanel((current) =>
       current === "inspector" ? "none" : "inspector",
     );
-  }, []);
+  }, [reviewEnvironment]);
   const toggleBrowser = useCallback(() => {
     setRightPanel((current) => (current === "browser" ? "none" : "browser"));
   }, []);
@@ -124,6 +129,12 @@ export function StudioShell() {
       `${sidePanelWidth}px`,
     );
   }, [sidePanelWidth]);
+
+  useLayoutEffect(() => {
+    if (rightPanel === "inspector" && !reviewEnvironment) {
+      setRightPanel("none");
+    }
+  }, [reviewEnvironment, rightPanel]);
 
   useEffect(() => {
     void reconcileVoiceSessionSnapshot(workspaceSnapshot);

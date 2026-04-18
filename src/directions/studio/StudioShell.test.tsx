@@ -12,6 +12,7 @@ import {
   makeEnvironment,
   makeGlobalSettings,
   makeProject,
+  makeThread,
   makeWorkspaceSnapshot,
 } from "../../test/fixtures/conversation";
 import { useCodexUsageStore } from "../../stores/codex-usage-store";
@@ -478,6 +479,72 @@ describe("StudioShell", () => {
       "data-collapsed",
       "true",
     );
+  });
+
+  it("closes the inspector when switching to a chat thread", async () => {
+    const chatThread = makeThread({
+      id: "chat-thread-1",
+      environmentId: "chat-env-1",
+    });
+    const chatEnvironment = makeEnvironment({
+      id: "chat-env-1",
+      projectId: "skein-chat-workspace",
+      name: "Chat",
+      kind: "chat",
+      path: "/tmp/.skein/chats/chat-env-1",
+      gitBranch: undefined,
+      baseBranch: undefined,
+      isDefault: false,
+      pullRequest: undefined,
+      threads: [chatThread],
+      runtime: undefined,
+    });
+    const baseSnapshot = makeWorkspaceSnapshot();
+
+    render(<StudioShell />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show inspector" }),
+    );
+    expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+      "data-collapsed",
+      "false",
+    );
+
+    act(() => {
+      useWorkspaceStore.setState((state) => ({
+        ...state,
+        snapshot: {
+          ...baseSnapshot,
+          chat: {
+            ...baseSnapshot.chat,
+            environments: [chatEnvironment],
+          },
+        },
+        layout: {
+          slots: {
+            topLeft: null,
+            topRight: null,
+            bottomLeft: null,
+            bottomRight: null,
+          },
+          focusedSlot: null,
+          rowRatio: 0.5,
+          colRatio: 0.5,
+        },
+        draftBySlot: {},
+        selectedProjectId: "skein-chat-workspace",
+        selectedEnvironmentId: chatEnvironment.id,
+        selectedThreadId: chatThread.id,
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("inspector-panel")).toHaveAttribute(
+        "data-collapsed",
+        "true",
+      );
+    });
   });
 
   it("toggles theme from the sidebar footer and persists the selected theme", async () => {

@@ -8,6 +8,7 @@ import {
 
 import {
   selectEffectiveEnvironment,
+  selectEffectiveNonChatEnvironment,
   selectHasAnyPane,
   selectLayout,
   selectSelectedProject,
@@ -66,21 +67,16 @@ export function StudioMain({
 }: Props) {
   const selectedProject = useWorkspaceStore(selectSelectedProject);
   const effectiveEnvironment = useWorkspaceStore(selectEffectiveEnvironment);
+  const actionableEnvironment = useWorkspaceStore(selectEffectiveNonChatEnvironment);
   const settings = useWorkspaceStore(selectSettings);
   const layout = useWorkspaceStore(selectLayout);
   const hasAnyPane = useWorkspaceStore(selectHasAnyPane);
   const setRowRatio = useWorkspaceStore((state) => state.setRowRatio);
   const setColRatio = useWorkspaceStore((state) => state.setColRatio);
   const projectAffordancesEnabled =
-    selectedProject !== null &&
-    effectiveEnvironment !== null &&
-    effectiveEnvironment.kind !== "chat";
-  const terminalEnabled =
-    effectiveEnvironment !== null && effectiveEnvironment.kind !== "chat";
-  const inspectorEnabled =
-    effectiveEnvironment !== null && effectiveEnvironment.kind !== "chat";
-  const selectedEnvironmentId =
-    terminalEnabled ? (effectiveEnvironment?.id ?? null) : null;
+    selectedProject !== null && actionableEnvironment !== null;
+  const inspectorEnabled = actionableEnvironment !== null;
+  const selectedEnvironmentId = actionableEnvironment?.id ?? null;
   const terminalSlot = useTerminalStore(selectTerminalSlot(selectedEnvironmentId));
   const hasAnyTerminalTabs = useTerminalStore(selectHasAnyTerminalTabs);
 
@@ -89,6 +85,14 @@ export function StudioMain({
   const terminalVisible = selectedEnvironmentId != null && terminalSlot.visible;
   const terminalHeight = terminalSlot.height;
   const terminalMounted = terminalVisible || hasAnyTerminalTabs;
+  const terminalUnavailableMessage =
+    effectiveEnvironment?.kind === "chat"
+      ? "Terminal is unavailable for chats"
+      : "Select an environment first";
+  const inspectorUnavailableMessage =
+    effectiveEnvironment?.kind === "chat"
+      ? "Inspector is unavailable for chats"
+      : "Select an environment first";
   const [terminalDragging, setTerminalDragging] = useState(false);
   const [splitDragging, setSplitDragging] = useState(false);
 
@@ -121,7 +125,7 @@ export function StudioMain({
         <div className="studio-main__toolbar-actions">
           <EnvironmentActionControl
             environmentId={
-              projectAffordancesEnabled ? (effectiveEnvironment?.id ?? null) : null
+              projectAffordancesEnabled ? (actionableEnvironment?.id ?? null) : null
             }
             projectId={
               projectAffordancesEnabled ? (selectedProject?.id ?? null) : null
@@ -135,14 +139,14 @@ export function StudioMain({
           />
           <OpenEnvironmentControl
             environmentId={
-              projectAffordancesEnabled ? (effectiveEnvironment?.id ?? null) : null
+              projectAffordancesEnabled ? (actionableEnvironment?.id ?? null) : null
             }
             settings={settings}
           />
           <Tooltip
             content={
               !selectedEnvironmentId
-                ? "Select an environment first"
+                ? terminalUnavailableMessage
                 : terminalVisible
                   ? "Hide terminal"
                   : "Show terminal"
@@ -153,7 +157,7 @@ export function StudioMain({
               type="button"
               aria-label={
                 !selectedEnvironmentId
-                  ? "Select an environment first"
+                  ? terminalUnavailableMessage
                   : terminalVisible
                     ? "Hide terminal"
                     : "Show terminal"
@@ -186,7 +190,7 @@ export function StudioMain({
           <Tooltip
             content={
               !inspectorEnabled
-                ? "Inspector is unavailable for chats"
+                ? inspectorUnavailableMessage
                 : inspectorOpen
                   ? "Hide inspector"
                   : "Show inspector"
@@ -197,7 +201,7 @@ export function StudioMain({
               type="button"
               aria-label={
                 !inspectorEnabled
-                  ? "Inspector is unavailable for chats"
+                  ? inspectorUnavailableMessage
                   : inspectorOpen
                     ? "Hide inspector"
                     : "Show inspector"

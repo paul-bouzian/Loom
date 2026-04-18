@@ -10,7 +10,11 @@ import {
   type EnvironmentTerminalSlot,
 } from "../../stores/terminal-store";
 import { useWorkspaceStore } from "../../stores/workspace-store";
-import { makeWorkspaceSnapshot } from "../../test/fixtures/conversation";
+import {
+  makeEnvironment,
+  makeThread,
+  makeWorkspaceSnapshot,
+} from "../../test/fixtures/conversation";
 import { TerminalPanel } from "./TerminalPanel";
 
 vi.mock("./TerminalView", () => ({
@@ -202,6 +206,59 @@ describe("TerminalPanel", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("terminal-view-pty-existing-3")).toBeInTheDocument();
     expect(screen.getByTestId("terminal-view-pty-existing-3")).toHaveAttribute("data-active", "true");
+  });
+
+  it("does not auto-bootstrap a terminal for chat environments", async () => {
+    const chatThread = makeThread({
+      id: "chat-thread-1",
+      environmentId: "chat-env-1",
+    });
+    const chatEnvironment = makeEnvironment({
+      id: "chat-env-1",
+      projectId: "skein-chat-workspace",
+      name: "Chat",
+      kind: "chat",
+      path: "/tmp/.skein/chats/chat-env-1",
+      gitBranch: undefined,
+      baseBranch: undefined,
+      isDefault: false,
+      pullRequest: undefined,
+      threads: [chatThread],
+      runtime: undefined,
+    });
+    const baseSnapshot = makeWorkspaceSnapshot();
+    useWorkspaceStore.setState({
+      snapshot: {
+        ...baseSnapshot,
+        chat: {
+          ...baseSnapshot.chat,
+          environments: [chatEnvironment],
+        },
+      },
+      bootstrapStatus: null,
+      loadingState: "ready",
+      error: null,
+      selectedProjectId: "skein-chat-workspace",
+      selectedEnvironmentId: "chat-env-1",
+      selectedThreadId: "chat-thread-1",
+    });
+    useTerminalStore.setState({
+      knownEnvironmentIds: [],
+      byEnv: {
+        "chat-env-1": makeSlot({
+          visible: true,
+        }),
+      },
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(mockedBridge.spawnTerminal).not.toHaveBeenCalled();
+    });
+    expect(
+      screen.getByText("Select an environment to open a terminal."),
+    ).toBeInTheDocument();
   });
 
   it("opens a new terminal in the active env when + is clicked", async () => {

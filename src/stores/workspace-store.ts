@@ -777,6 +777,19 @@ export function selectEffectiveEnvironment(
   return findEnvironment(s.snapshot, selectEffectiveEnvironmentId(s))?.environment ?? null;
 }
 
+export function selectEffectiveNonChatEnvironment(
+  s: WorkspaceState,
+): EnvironmentRecord | null {
+  const environment = selectEffectiveEnvironment(s);
+  return environment?.kind === "chat" ? null : environment;
+}
+
+export function selectEffectiveNonChatEnvironmentId(
+  s: WorkspaceState,
+): string | null {
+  return selectEffectiveNonChatEnvironment(s)?.id ?? null;
+}
+
 export function selectSelectedThread(s: WorkspaceState): ThreadRecord | null {
   return findThreadInWorkspace(s.snapshot, s.selectedThreadId)?.thread ?? null;
 }
