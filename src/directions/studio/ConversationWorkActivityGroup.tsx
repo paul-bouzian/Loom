@@ -16,21 +16,21 @@ type Props = {
 export function ConversationWorkActivityGroup({ group }: Props) {
   const [expanded, setExpanded] = useState(false);
   const sectionRef = useRef<HTMLElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const summary = useMemo(() => buildSummary(group), [group]);
 
-  // When the user opens the panel, make sure the expanded body is visible
-  // above the composer. scrollIntoView only scrolls the nearest scrollable
-  // ancestor, so it targets the timeline without disturbing the window.
+  // On open, scroll the body to the end (newest content) so the panel
+  // doesn't push the timeline around with old content.
   useEffect(() => {
     if (!expanded) {
       return;
     }
-    const section = sectionRef.current;
-    if (!section) {
-      return;
-    }
     const frame = window.requestAnimationFrame(() => {
-      section.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+      const body = bodyRef.current;
+      if (body) {
+        body.scrollTop = body.scrollHeight;
+      }
+      sectionRef.current?.scrollIntoView?.({ block: "nearest" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [expanded]);
@@ -56,10 +56,13 @@ export function ConversationWorkActivityGroup({ group }: Props) {
             {labelForStatus(group.status)}
           </span>
         </div>
-        {summary ? <p className="tx-work-activity__summary">{summary}</p> : null}
+        {summary ? <span className="tx-work-activity__summary">{summary}</span> : null}
       </button>
-      {expanded ? (
-        <div className="tx-work-activity__body">
+      <div
+        className={`tx-work-activity__body-wrap ${expanded ? "tx-work-activity__body-wrap--open" : ""}`}
+        aria-hidden={!expanded}
+      >
+        <div ref={bodyRef} className="tx-work-activity__body">
           {group.taskPlan ? <ConversationTaskCard taskPlan={group.taskPlan} compact /> : null}
           {group.subagents.length > 0 ? (
             <div className="tx-work-activity__subagents">
@@ -87,7 +90,7 @@ export function ConversationWorkActivityGroup({ group }: Props) {
             <ConversationItemRow key={item.id} item={item} compact />
           ))}
         </div>
-      ) : null}
+      </div>
     </section>
   );
 }

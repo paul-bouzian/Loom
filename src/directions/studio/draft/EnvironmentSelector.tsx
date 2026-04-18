@@ -398,14 +398,17 @@ function resolveMenuStyle(
   const rect = anchor.getBoundingClientRect();
   const menuWidth = Math.max(rect.width, 260);
   const margin = 8;
+  const gap = 6;
   const left = Math.min(
     rect.left,
     Math.max(margin, window.innerWidth - menuWidth - margin),
   );
-  const estimatedHeight = 220;
-  const top =
-    direction === "up"
-      ? Math.max(margin, rect.top - estimatedHeight - 6)
-      : Math.min(rect.bottom + 6, window.innerHeight - margin - 40);
-  return { left, top, minWidth: `${menuWidth}px` };
+  if (direction === "up") {
+    const bottom = Math.max(margin, window.innerHeight - rect.top + gap);
+    const maxHeight = Math.max(120, window.innerHeight - bottom - margin);
+    return { left, bottom, minWidth: `${menuWidth}px`, maxHeight };
+  }
+  const top = Math.min(rect.bottom + gap, window.innerHeight - margin - 40);
+  const maxHeight = Math.max(120, window.innerHeight - top - margin);
+  return { left, top, minWidth: `${menuWidth}px`, maxHeight };
 }
