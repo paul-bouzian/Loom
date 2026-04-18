@@ -8,8 +8,15 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::app_identity::{TERMINAL_EXIT_EVENT_NAME, TERMINAL_OUTPUT_EVENT_NAME};
+use crate::app_identity::{
+    PROJECT_ACTION_STATE_EVENT_NAME, TERMINAL_EXIT_EVENT_NAME, TERMINAL_OUTPUT_EVENT_NAME,
+};
 use crate::error::{AppError, AppResult};
+
+const ACTION_MARKER_START: u8 = 0x1e;
+const ACTION_MARKER_END: u8 = 0x1f;
+const ACTION_DONE_PREFIX: &str = "SKEIN_ACTION_DONE:";
+const ACTION_MARKER_MAX_BYTES: usize = 128;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,15 +32,143 @@ pub struct TerminalExitPayload {
     pub exit_code: Option<i32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectActionRunState {
+    Running,
+    Idle,
+    Exited,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectActionStatePayload {
+    pub pty_id: String,
+    pub action_id: String,
+    pub state: ProjectActionRunState,
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellFamily {
+    Posix,
+    Fish,
+    Nu,
+    PowerShell,
+}
+
+#[derive(Debug, Default)]
+struct ManualActionOutputFilter {
+    marker_bytes: Option<Vec<u8>>,
+    suppress_trailing_newline: bool,
+}
+
+impl ManualActionOutputFilter {
+    fn process(&mut self, input: &[u8]) -> (Vec<u8>, Vec<i32>) {
+        let mut output = Vec::with_capacity(input.len());
+        let mut exit_codes = Vec::new();
+
+        for &byte in input {
+            let mut current = Some(byte);
+            while let Some(value) = current.take() {
+                if self.suppress_trailing_newline {
+                    if matches!(value, b'\r' | b'\n') {
+                        break;
+                    }
+                    self.suppress_trailing_newline = false;
+                    current = Some(value);
+                    continue;
+                }
+
+                if self.marker_bytes.is_some() {
+                    if value == ACTION_MARKER_END {
+                        let marker = self.marker_bytes.take().unwrap_or_default();
+                        if let Some(exit_code) = parse_action_done_marker(&marker) {
+                            exit_codes.push(exit_code);
+                            self.suppress_trailing_newline = true;
+                        } else {
+                            output.push(ACTION_MARKER_START);
+                            output.extend_from_slice(&marker);
+                            output.push(ACTION_MARKER_END);
+                        }
+                        break;
+                    }
+
+                    let marker_bytes = self.marker_bytes.as_mut().expect("marker bytes");
+                    marker_bytes.push(value);
+                    if marker_bytes.len() >= ACTION_MARKER_MAX_BYTES {
+                        let marker = self.marker_bytes.take().unwrap_or_default();
+                        output.push(ACTION_MARKER_START);
+                        output.extend_from_slice(&marker);
+                    }
+                    break;
+                }
+
+                if value == ACTION_MARKER_START {
+                    self.marker_bytes = Some(Vec::new());
+                    break;
+                }
+
+                output.push(value);
+            }
+        }
+
+        (output, exit_codes)
+    }
+}
+
+#[derive(Debug)]
+struct ManualActionSession {
+    environment_id: String,
+    action_id: String,
+    shell_family: ShellFamily,
+    state: ProjectActionRunState,
+    output_filter: ManualActionOutputFilter,
+}
+
+impl ManualActionSession {
+    fn new(environment_id: String, action_id: String, shell_family: ShellFamily) -> Self {
+        Self {
+            environment_id,
+            action_id,
+            shell_family,
+            state: ProjectActionRunState::Idle,
+            output_filter: ManualActionOutputFilter::default(),
+        }
+    }
+}
+
 struct Session {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
+    manual_action: Option<Mutex<ManualActionSession>>,
 }
 
 struct RegisteredSession {
     environment_id: String,
     session: Arc<Session>,
+}
+
+type EnvOverride = (String, String);
+
+struct TerminalSpawnRequest<'a> {
+    environment_id: &'a str,
+    cwd: &'a str,
+    cols: u16,
+    rows: u16,
+    env_overrides: Vec<EnvOverride>,
+    manual_action_id: Option<&'a str>,
+}
+
+pub struct ManualActionLaunch<'a> {
+    pub environment_id: &'a str,
+    pub cwd: &'a str,
+    pub cols: u16,
+    pub rows: u16,
+    pub env_overrides: Vec<EnvOverride>,
+    pub action_id: &'a str,
+    pub script: &'a str,
 }
 
 #[derive(Default)]
@@ -61,6 +196,48 @@ fn login_flag_for_shell(shell: &str) -> Option<&'static str> {
     }
 }
 
+fn shell_family_for_shell(shell: &str) -> ShellFamily {
+    let shell_name = std::path::Path::new(shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match shell_name.as_str() {
+        "fish" => ShellFamily::Fish,
+        "nu" => ShellFamily::Nu,
+        "pwsh" | "powershell" | "powershell.exe" | "pwsh.exe" => ShellFamily::PowerShell,
+        _ => ShellFamily::Posix,
+    }
+}
+
+fn parse_action_done_marker(marker: &[u8]) -> Option<i32> {
+    let marker = std::str::from_utf8(marker).ok()?;
+    marker
+        .strip_prefix(ACTION_DONE_PREFIX)?
+        .trim()
+        .parse::<i32>()
+        .ok()
+}
+
+fn project_action_wrapper(shell_family: ShellFamily, script: &str) -> String {
+    let marker_start = ACTION_MARKER_START as char;
+    let marker_end = ACTION_MARKER_END as char;
+    match shell_family {
+        ShellFamily::Posix => format!(
+            "{{\n{script}\n__skein_action_status=$?\nprintf '{marker_start}{ACTION_DONE_PREFIX}%s{marker_end}\\n' \"$__skein_action_status\"\nunset __skein_action_status\n}}\n"
+        ),
+        ShellFamily::Fish => format!(
+            "begin\n{script}\nset -l __skein_action_status $status\nprintf '{marker_start}{ACTION_DONE_PREFIX}%s{marker_end}\\n' $__skein_action_status\nend\n"
+        ),
+        ShellFamily::Nu => format!(
+            "do {{\n{script}\n}}\nlet __skein_action_status = (if \"LAST_EXIT_CODE\" in $env {{ $env.LAST_EXIT_CODE }} else {{ 0 }})\nprint -n $\"{marker_start}{ACTION_DONE_PREFIX}($__skein_action_status){marker_end}\\n\"\n"
+        ),
+        ShellFamily::PowerShell => format!(
+            "& {{\n{script}\n}}\n$__skeinActionStatus = if (Test-Path variable:LASTEXITCODE) {{ $LASTEXITCODE }} elseif ($?) {{ 0 }} else {{ 1 }}\n[Console]::Out.Write(\"{marker_start}{ACTION_DONE_PREFIX}$($__skeinActionStatus){marker_end}`n\")\nRemove-Variable __skeinActionStatus -ErrorAction SilentlyContinue\n"
+        ),
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct TerminalService {
     registry: Arc<Mutex<TerminalRegistry>>,
@@ -75,6 +252,128 @@ impl TerminalService {
             .get(pty_id)
             .map(|registered| registered.session.clone())
             .ok_or_else(|| AppError::NotFound("terminal session not found".into()))
+    }
+
+    fn emit_project_action_state(
+        app: &AppHandle,
+        pty_id: &str,
+        action_id: &str,
+        state: ProjectActionRunState,
+        exit_code: Option<i32>,
+    ) {
+        let _ = app.emit(
+            PROJECT_ACTION_STATE_EVENT_NAME,
+            ProjectActionStatePayload {
+                pty_id: pty_id.to_string(),
+                action_id: action_id.to_string(),
+                state,
+                exit_code,
+            },
+        );
+    }
+
+    fn set_manual_action_state(
+        app: &AppHandle,
+        pty_id: &str,
+        manual_action: &mut ManualActionSession,
+        state: ProjectActionRunState,
+        exit_code: Option<i32>,
+    ) {
+        manual_action.state = state;
+        Self::emit_project_action_state(app, pty_id, &manual_action.action_id, state, exit_code);
+    }
+
+    fn dispatch_manual_action(&self, app: &AppHandle, pty_id: &str, script: &str) -> AppResult<()> {
+        let session = self.get_session(pty_id)?;
+        let Some(manual_action) = session.manual_action.as_ref() else {
+            return Err(AppError::Validation(
+                "Terminal session is not a project action shell.".to_string(),
+            ));
+        };
+
+        let shell_family = {
+            let mut manual_action = manual_action.lock().unwrap();
+            if manual_action.state == ProjectActionRunState::Running {
+                return Err(AppError::Validation(
+                    "Project action is still running.".to_string(),
+                ));
+            }
+            let shell_family = manual_action.shell_family;
+            Self::set_manual_action_state(
+                app,
+                pty_id,
+                &mut manual_action,
+                ProjectActionRunState::Running,
+                None,
+            );
+            shell_family
+        };
+
+        let wrapped_script = project_action_wrapper(shell_family, script);
+        let encoded = B64.encode(wrapped_script);
+        if let Err(error) = self.write(pty_id, &encoded) {
+            let _ = self.kill(pty_id);
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    pub fn spawn_manual_action(
+        &self,
+        app: &AppHandle,
+        request: ManualActionLaunch<'_>,
+    ) -> AppResult<String> {
+        let pty_id = self.spawn_internal(
+            app,
+            TerminalSpawnRequest {
+                environment_id: request.environment_id,
+                cwd: request.cwd,
+                cols: request.cols,
+                rows: request.rows,
+                env_overrides: request.env_overrides,
+                manual_action_id: Some(request.action_id),
+            },
+        )?;
+
+        if let Err(error) = self.dispatch_manual_action(app, &pty_id, request.script) {
+            let _ = self.kill(&pty_id);
+            return Err(error);
+        }
+
+        Ok(pty_id)
+    }
+
+    pub fn rerun_manual_action(
+        &self,
+        app: &AppHandle,
+        pty_id: &str,
+        environment_id: &str,
+        action_id: &str,
+        script: &str,
+    ) -> AppResult<()> {
+        let session = self.get_session(pty_id)?;
+        let Some(manual_action) = session.manual_action.as_ref() else {
+            return Err(AppError::Validation(
+                "Terminal session is not a project action shell.".to_string(),
+            ));
+        };
+
+        {
+            let manual_action = manual_action.lock().unwrap();
+            if manual_action.environment_id != environment_id {
+                return Err(AppError::Validation(
+                    "Project action terminal belongs to a different environment.".to_string(),
+                ));
+            }
+            if manual_action.action_id != action_id {
+                return Err(AppError::Validation(
+                    "Project action terminal belongs to a different action.".to_string(),
+                ));
+            }
+        }
+
+        self.dispatch_manual_action(app, pty_id, script)
     }
 
     fn register_session(&self, environment_id: String, pty_id: String, session: Arc<Session>) {
@@ -134,8 +433,8 @@ impl TerminalService {
         sessions
     }
 
-    fn finalize_exited_session(&self, pty_id: &str) -> bool {
-        self.take_session(pty_id).is_some()
+    fn finalize_exited_session(&self, pty_id: &str) -> Option<RegisteredSession> {
+        self.take_session(pty_id)
     }
 
     pub fn spawn(
@@ -170,16 +469,37 @@ impl TerminalService {
         K: AsRef<str>,
         V: AsRef<str>,
     {
+        self.spawn_internal(
+            app,
+            TerminalSpawnRequest {
+                environment_id,
+                cwd,
+                cols,
+                rows,
+                env_overrides: env_overrides
+                    .into_iter()
+                    .map(|(key, value)| (key.as_ref().to_string(), value.as_ref().to_string()))
+                    .collect(),
+                manual_action_id: None,
+            },
+        )
+    }
+
+    fn spawn_internal(
+        &self,
+        app: &AppHandle,
+        request: TerminalSpawnRequest<'_>,
+    ) -> AppResult<String> {
         let pty_system = native_pty_system();
         let pair = pty_system
-            .openpty(pty_size(cols, rows))
+            .openpty(pty_size(request.cols, request.rows))
             .map_err(|e| AppError::Runtime(format!("openpty: {e}")))?;
 
         // Resolve cwd: explicit path > $HOME > "/".
-        let resolved_cwd = if cwd.trim().is_empty() {
+        let resolved_cwd = if request.cwd.trim().is_empty() {
             std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
         } else {
-            cwd.to_string()
+            request.cwd.to_string()
         };
 
         // Resolve shell: $SHELL > /bin/zsh > /bin/sh. Reject SHELL when it is
@@ -198,6 +518,7 @@ impl TerminalService {
                     "/bin/sh".to_string()
                 }
             });
+        let shell_family = shell_family_for_shell(&shell);
 
         let mut cmd = CommandBuilder::new(&shell);
         // Login shell: source .zprofile/.zshrc/etc so PATH/nvm/mise/pyenv work
@@ -208,8 +529,8 @@ impl TerminalService {
         cmd.cwd(&resolved_cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
-        for (key, value) in env_overrides {
-            cmd.env(key.as_ref(), value.as_ref());
+        for (key, value) in request.env_overrides {
+            cmd.env(key, value);
         }
 
         let child = pair
@@ -234,9 +555,20 @@ impl TerminalService {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             child: Mutex::new(child),
+            manual_action: request.manual_action_id.map(|action_id| {
+                Mutex::new(ManualActionSession::new(
+                    request.environment_id.to_string(),
+                    action_id.to_string(),
+                    shell_family,
+                ))
+            }),
         });
 
-        self.register_session(environment_id.to_string(), pty_id.clone(), session.clone());
+        self.register_session(
+            request.environment_id.to_string(),
+            pty_id.clone(),
+            session.clone(),
+        );
 
         // Reader loop on a dedicated OS thread. portable-pty Read is blocking;
         // we don't want this loop to occupy a tokio blocking-pool slot for the
@@ -251,11 +583,33 @@ impl TerminalService {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        let payload = TerminalOutputPayload {
-                            pty_id: pty_id_for_reader.clone(),
-                            data_base64: B64.encode(&buf[..n]),
-                        };
-                        let _ = app_for_reader.emit(TERMINAL_OUTPUT_EVENT_NAME, payload);
+                        if let Some(manual_action) = session_for_reader.manual_action.as_ref() {
+                            let mut manual_action = manual_action.lock().unwrap();
+                            let (output, exit_codes) =
+                                manual_action.output_filter.process(&buf[..n]);
+                            for exit_code in exit_codes {
+                                TerminalService::set_manual_action_state(
+                                    &app_for_reader,
+                                    &pty_id_for_reader,
+                                    &mut manual_action,
+                                    ProjectActionRunState::Idle,
+                                    Some(exit_code),
+                                );
+                            }
+                            if !output.is_empty() {
+                                let payload = TerminalOutputPayload {
+                                    pty_id: pty_id_for_reader.clone(),
+                                    data_base64: B64.encode(output),
+                                };
+                                let _ = app_for_reader.emit(TERMINAL_OUTPUT_EVENT_NAME, payload);
+                            }
+                        } else {
+                            let payload = TerminalOutputPayload {
+                                pty_id: pty_id_for_reader.clone(),
+                                data_base64: B64.encode(&buf[..n]),
+                            };
+                            let _ = app_for_reader.emit(TERMINAL_OUTPUT_EVENT_NAME, payload);
+                        }
                     }
                     Err(_) => break,
                 }
@@ -270,7 +624,18 @@ impl TerminalService {
                 .ok()
                 .and_then(|mut c| c.try_wait().ok().flatten())
                 .and_then(|s| i32::try_from(s.exit_code()).ok());
-            if service_for_reader.finalize_exited_session(&pty_id_for_reader) {
+            if let Some(registered) = service_for_reader.finalize_exited_session(&pty_id_for_reader)
+            {
+                if let Some(manual_action) = registered.session.manual_action.as_ref() {
+                    let mut manual_action = manual_action.lock().unwrap();
+                    TerminalService::set_manual_action_state(
+                        &app_for_reader,
+                        &pty_id_for_reader,
+                        &mut manual_action,
+                        ProjectActionRunState::Exited,
+                        exit_code,
+                    );
+                }
                 let _ = app_for_reader.emit(
                     TERMINAL_EXIT_EVENT_NAME,
                     TerminalExitPayload {
@@ -428,6 +793,7 @@ mod tests {
                 kill_count,
                 exit_status: Some(ExitStatus::with_exit_code(0)),
             })),
+            manual_action: None,
         })
     }
 
@@ -442,7 +808,7 @@ mod tests {
             fake_session(kill_count),
         );
 
-        assert!(service.finalize_exited_session("pty-1"));
+        assert!(service.finalize_exited_session("pty-1").is_some());
 
         let registry = service.registry.lock().unwrap();
         assert!(registry.sessions.is_empty());
@@ -536,5 +902,104 @@ mod tests {
         assert_eq!(login_flag_for_shell("/opt/homebrew/bin/nu"), Some("-l"));
         assert_eq!(login_flag_for_shell("/usr/local/bin/elvish"), None);
         assert_eq!(login_flag_for_shell(""), None);
+    }
+
+    #[test]
+    fn shell_family_matches_supported_shells() {
+        assert_eq!(shell_family_for_shell("/bin/zsh"), ShellFamily::Posix);
+        assert_eq!(
+            shell_family_for_shell("/opt/homebrew/bin/fish"),
+            ShellFamily::Fish
+        );
+        assert_eq!(
+            shell_family_for_shell("/opt/homebrew/bin/nu"),
+            ShellFamily::Nu
+        );
+        assert_eq!(
+            shell_family_for_shell("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"),
+            ShellFamily::PowerShell
+        );
+        assert_eq!(shell_family_for_shell("pwsh"), ShellFamily::PowerShell);
+    }
+
+    #[test]
+    fn parse_action_done_marker_accepts_valid_exit_codes() {
+        assert_eq!(parse_action_done_marker(b"SKEIN_ACTION_DONE:0"), Some(0));
+        assert_eq!(
+            parse_action_done_marker(b"SKEIN_ACTION_DONE:130"),
+            Some(130)
+        );
+        assert_eq!(parse_action_done_marker(b"SKEIN_ACTION_DONE: 7"), Some(7));
+        assert_eq!(parse_action_done_marker(b"nope"), None);
+    }
+
+    #[test]
+    fn manual_action_output_filter_strips_markers_and_collects_exit_codes() {
+        let mut filter = ManualActionOutputFilter::default();
+        let marker = format!(
+            "hello {start}{prefix}42{end}\nworld",
+            start = ACTION_MARKER_START as char,
+            prefix = ACTION_DONE_PREFIX,
+            end = ACTION_MARKER_END as char,
+        );
+
+        let (output, exit_codes) = filter.process(marker.as_bytes());
+
+        assert_eq!(
+            String::from_utf8(output).expect("utf8 output"),
+            "hello world"
+        );
+        assert_eq!(exit_codes, vec![42]);
+    }
+
+    #[test]
+    fn manual_action_output_filter_handles_split_markers() {
+        let mut filter = ManualActionOutputFilter::default();
+        let first = format!("before {}", ACTION_MARKER_START as char);
+        let second = format!("{ACTION_DONE_PREFIX}17{}", ACTION_MARKER_END as char);
+
+        let (first_output, first_exit_codes) = filter.process(first.as_bytes());
+        let (second_output, second_exit_codes) = filter.process(second.as_bytes());
+
+        assert_eq!(
+            String::from_utf8(first_output).expect("utf8 output"),
+            "before "
+        );
+        assert!(first_exit_codes.is_empty());
+        assert!(second_output.is_empty());
+        assert_eq!(second_exit_codes, vec![17]);
+    }
+
+    #[test]
+    fn manual_action_output_filter_preserves_unknown_markers() {
+        let mut filter = ManualActionOutputFilter::default();
+        let marker = format!(
+            "{}NOT_A_SKEIN_MARKER{}",
+            ACTION_MARKER_START as char, ACTION_MARKER_END as char
+        );
+
+        let (output, exit_codes) = filter.process(marker.as_bytes());
+
+        assert_eq!(String::from_utf8(output).expect("utf8 output"), marker);
+        assert!(exit_codes.is_empty());
+    }
+
+    #[test]
+    fn project_action_wrappers_emit_completion_markers_for_supported_shells() {
+        let posix = project_action_wrapper(ShellFamily::Posix, "bun run dev");
+        assert!(posix.contains("SKEIN_ACTION_DONE:%s"));
+        assert!(posix.contains("__skein_action_status=$?"));
+
+        let fish = project_action_wrapper(ShellFamily::Fish, "bun run dev");
+        assert!(fish.contains("set -l __skein_action_status $status"));
+        assert!(fish.contains("SKEIN_ACTION_DONE:%s"));
+
+        let nu = project_action_wrapper(ShellFamily::Nu, "bun run dev");
+        assert!(nu.contains("LAST_EXIT_CODE"));
+        assert!(nu.contains("SKEIN_ACTION_DONE:($__skein_action_status)"));
+
+        let powershell = project_action_wrapper(ShellFamily::PowerShell, "bun run dev");
+        assert!(powershell.contains("Test-Path variable:LASTEXITCODE"));
+        assert!(powershell.contains("SKEIN_ACTION_DONE:$($__skeinActionStatus)"));
     }
 }

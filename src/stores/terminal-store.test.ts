@@ -4,6 +4,7 @@ import * as bridge from "../lib/bridge";
 import { TERMINAL_LAYOUTS_STORAGE_KEY } from "../lib/app-identity";
 import * as terminalOutputBus from "../lib/terminal-output-bus";
 import {
+  __resetTerminalEventSubscriptions,
   MAX_TABS,
   selectTerminalSlot,
   useTerminalStore,
@@ -13,6 +14,8 @@ vi.mock("../lib/bridge", () => ({
   spawnTerminal: vi.fn(),
   runProjectAction: vi.fn(),
   killTerminal: vi.fn().mockResolvedValue(undefined),
+  listenToTerminalExit: vi.fn().mockResolvedValue(() => {}),
+  listenToProjectActionState: vi.fn().mockResolvedValue(() => {}),
 }));
 
 vi.mock("../lib/terminal-output-bus", () => ({
@@ -29,9 +32,20 @@ const storageState = new Map<string, string>();
 
 const ENV_A = "env-a";
 const ENV_B = "env-b";
+let terminalExitListener: ((payload: { ptyId: string; exitCode: number | null }) => void) | null =
+  null;
+let projectActionStateListener:
+  | ((payload: {
+      ptyId: string;
+      actionId: string;
+      state: "running" | "idle" | "exited";
+      exitCode?: number | null;
+    }) => void)
+  | null = null;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetTerminalEventSubscriptions();
   storageState.clear();
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
@@ -55,6 +69,20 @@ beforeEach(() => {
   useTerminalStore.setState({
     byEnv: {},
     knownEnvironmentIds: [ENV_A, ENV_B],
+  });
+  terminalExitListener = null;
+  projectActionStateListener = null;
+  mockedBridge.listenToTerminalExit.mockImplementation(async (listener) => {
+    terminalExitListener = listener;
+    return () => {
+      terminalExitListener = null;
+    };
+  });
+  mockedBridge.listenToProjectActionState.mockImplementation(async (listener) => {
+    projectActionStateListener = listener;
+    return () => {
+      projectActionStateListener = null;
+    };
   });
   let counter = 0;
   mockedBridge.spawnTerminal.mockImplementation(async ({ environmentId }) => {
@@ -85,6 +113,18 @@ function slotForB() {
 function readPersistedLayouts() {
   const raw = localStorage.getItem(TERMINAL_LAYOUTS_STORAGE_KEY);
   return raw ? (JSON.parse(raw) as Record<string, { visible: boolean; height: number }>) : {};
+}
+
+function emitProjectActionState(payload: {
+  ptyId: string;
+  actionId: string;
+  state: "running" | "idle" | "exited";
+  exitCode?: number | null;
+}) {
+  if (!projectActionStateListener) {
+    throw new Error("expected project action state listener");
+  }
+  projectActionStateListener(payload);
 }
 
 describe("terminal-store", () => {
@@ -306,11 +346,13 @@ describe("terminal-store", () => {
       actionLabel: "Dev",
       actionIcon: "play",
       exited: false,
+      actionRunState: "running",
     });
     expect(slot.activeTabId).toBe(id);
     expect(mockedBridge.runProjectAction).toHaveBeenCalledWith({
       environmentId: ENV_A,
       actionId: "dev",
+      ptyId: null,
     });
   });
 
@@ -335,6 +377,51 @@ describe("terminal-store", () => {
     expect(mockedBridge.runProjectAction).toHaveBeenCalledTimes(1);
   });
 
+  it("reruns an idle manual action in place on the same tab", async () => {
+    const first = await useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+    if (!first) {
+      throw new Error("expected first action tab");
+    }
+
+    emitProjectActionState({
+      ptyId: "pty-1",
+      actionId: "dev",
+      state: "idle",
+      exitCode: 0,
+    });
+    mockedBridge.runProjectAction.mockResolvedValueOnce({
+      ptyId: "pty-1",
+      cwd: `/path/to/${ENV_A}`,
+      actionId: "dev",
+      actionLabel: "Dev",
+      actionIcon: "play",
+    });
+
+    const second = await useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+
+    expect(second).toBe(first);
+    expect(slotForA().tabs).toHaveLength(1);
+    expect(slotForA().tabs[0]).toMatchObject({
+      id: first,
+      ptyId: "pty-1",
+      exited: false,
+      actionRunState: "running",
+    });
+    expect(mockedBridge.runProjectAction).toHaveBeenNthCalledWith(2, {
+      environmentId: ENV_A,
+      actionId: "dev",
+      ptyId: "pty-1",
+    });
+  });
+
   it("reuses the same action tab id after the previous run exited", async () => {
     const first = await useTerminalStore.getState().openActionTab(ENV_A, {
       id: "dev",
@@ -356,7 +443,27 @@ describe("terminal-store", () => {
     expect(slotForA().tabs).toHaveLength(1);
     expect(slotForA().tabs[0]?.ptyId).toBe("pty-2");
     expect(slotForA().tabs[0]?.exited).toBe(false);
+    expect(slotForA().tabs[0]?.actionRunState).toBe("running");
     expect(mockedBridge.runProjectAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks a manual action tab exited when the PTY exits", async () => {
+    await useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+    if (!terminalExitListener) {
+      throw new Error("expected terminal exit listener");
+    }
+
+    terminalExitListener({ ptyId: "pty-1", exitCode: 130 });
+
+    expect(slotForA().tabs[0]).toMatchObject({
+      ptyId: "pty-1",
+      exited: true,
+      actionRunState: "exited",
+    });
   });
 
   it("deduplicates concurrent launches of the same manual action", async () => {
@@ -395,6 +502,64 @@ describe("terminal-store", () => {
     expect(slotForA().tabs).toHaveLength(1);
     expect(slotForA().tabs[0]?.ptyId).toBe("pty-pending");
     expect(mockedBridge.runProjectAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates concurrent reruns of the same idle manual action", async () => {
+    const first = await useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+    if (!first) {
+      throw new Error("expected first action tab");
+    }
+
+    emitProjectActionState({
+      ptyId: "pty-1",
+      actionId: "dev",
+      state: "idle",
+      exitCode: 0,
+    });
+
+    let resolveRun: (
+      value: Awaited<ReturnType<typeof bridge.runProjectAction>>,
+    ) => void = () => {};
+    const pendingRun = new Promise<Awaited<ReturnType<typeof bridge.runProjectAction>>>(
+      (resolve) => {
+        resolveRun = resolve;
+      },
+    );
+    mockedBridge.runProjectAction.mockImplementationOnce(() => pendingRun);
+
+    const rerunA = useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+    const rerunB = useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+
+    resolveRun({
+      ptyId: "pty-1",
+      cwd: `/path/to/${ENV_A}`,
+      actionId: "dev",
+      actionLabel: "Dev",
+      actionIcon: "play",
+    });
+
+    const [rerunTabA, rerunTabB] = await Promise.all([rerunA, rerunB]);
+
+    expect(rerunTabA).toBe(first);
+    expect(rerunTabB).toBe(first);
+    expect(mockedBridge.runProjectAction).toHaveBeenCalledTimes(2);
+    expect(mockedBridge.runProjectAction).toHaveBeenNthCalledWith(2, {
+      environmentId: ENV_A,
+      actionId: "dev",
+      ptyId: "pty-1",
+    });
   });
 
   it("rechecks the tab cap when a reusable action tab disappears mid-launch", async () => {

@@ -1,5 +1,3 @@
-use base64::engine::general_purpose::STANDARD as B64;
-use base64::Engine as _;
 use serde::Deserialize;
 use serde::Serialize;
 use tauri::State;
@@ -13,10 +11,11 @@ use crate::domain::workspace::{
     RuntimeStatusSnapshot, ThreadRecord, WorkspaceSnapshot,
 };
 use crate::error::{AppError, CommandError};
+use crate::services::terminal::ManualActionLaunch;
 use crate::services::workspace::{
     AddProjectRequest, ArchiveThreadRequest, CreateManagedWorktreeRequest, CreateThreadRequest,
-    RenameProjectRequest, RenameThreadRequest, ReorderProjectsRequest,
-    RunProjectActionRequest, SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest,
+    RenameProjectRequest, RenameThreadRequest, ReorderProjectsRequest, RunProjectActionRequest,
+    SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest,
 };
 use crate::services::worktree_scripts::{skein_context_environment, SkeinContextInput};
 use crate::state::AppState;
@@ -36,6 +35,15 @@ pub struct RunProjectActionResult {
     pub action_id: String,
     pub action_label: String,
     pub action_icon: ProjectActionIcon,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunProjectActionInput {
+    pub environment_id: String,
+    pub action_id: String,
+    #[serde(default)]
+    pub pty_id: Option<String>,
 }
 
 #[tauri::command]
@@ -93,11 +101,17 @@ pub fn update_project_settings(
 
 #[tauri::command]
 pub fn run_project_action(
-    input: RunProjectActionRequest,
+    input: RunProjectActionInput,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RunProjectActionResult, CommandError> {
-    let target = state.workspace.project_action_execution_target(input)?;
+    let pty_id = input.pty_id.clone();
+    let target = state
+        .workspace
+        .project_action_execution_target(RunProjectActionRequest {
+            environment_id: input.environment_id,
+            action_id: input.action_id,
+        })?;
     let mut env = skein_context_environment(&SkeinContextInput {
         project_id: &target.project_id,
         project_name: &target.project_name,
@@ -114,14 +128,29 @@ pub fn run_project_action(
         target.action.label.clone(),
     ));
     env.push(("SKEIN_ACTION_KIND".to_string(), "manual".to_string()));
-
-    let pty_id =
-        state
-            .terminal
-            .spawn_with_env(&app, &target.environment_id, &target.cwd, 80, 24, env)?;
-    state
-        .terminal
-        .write(&pty_id, &B64.encode(format!("{}\r", target.action.script)))?;
+    let pty_id = if let Some(existing_pty_id) = pty_id.as_deref() {
+        state.terminal.rerun_manual_action(
+            &app,
+            existing_pty_id,
+            &target.environment_id,
+            &target.action.id,
+            &target.action.script,
+        )?;
+        existing_pty_id.to_string()
+    } else {
+        state.terminal.spawn_manual_action(
+            &app,
+            ManualActionLaunch {
+                environment_id: &target.environment_id,
+                cwd: &target.cwd,
+                cols: 80,
+                rows: 24,
+                env_overrides: env,
+                action_id: &target.action.id,
+                script: &target.action.script,
+            },
+        )?
+    };
 
     Ok(RunProjectActionResult {
         pty_id,

@@ -8,7 +8,13 @@ import {
   readLocalStorageWithMigration,
 } from "../lib/app-identity";
 import * as bridge from "../lib/bridge";
-import type { ProjectActionIcon, ProjectManualAction, WorkspaceSnapshot } from "../lib/types";
+import type {
+  ProjectActionIcon,
+  ProjectActionRunState,
+  ProjectActionStateEventPayload,
+  ProjectManualAction,
+  WorkspaceSnapshot,
+} from "../lib/types";
 import {
   dropPendingTerminalOutput,
   ensureTerminalOutputBusReady,
@@ -18,6 +24,8 @@ const DEFAULT_HEIGHT = 280;
 const MIN_HEIGHT = 120;
 export const MAX_TABS = 10;
 const pendingActionTabOpens = new Map<string, Promise<string | null>>();
+let terminalEventSubscriptionsPromise: Promise<void> | null = null;
+let terminalEventUnlisteners: Array<() => void> = [];
 
 type PersistedTerminalLayout = {
   visible: boolean;
@@ -62,6 +70,23 @@ function actionTabOperationKey(environmentId: string, actionId: string) {
   return `${environmentId}\u0000${actionId}`;
 }
 
+function actionRunStateFor(tab: TerminalTab): ProjectActionRunState | null {
+  if (tab.kind !== "manualAction") {
+    return null;
+  }
+  return tab.actionRunState ?? (tab.exited ? "exited" : "running");
+}
+
+function normalizeTerminalTab(tab: TerminalTab): TerminalTab {
+  if (tab.kind !== "manualAction") {
+    return tab;
+  }
+  return {
+    ...tab,
+    actionRunState: actionRunStateFor(tab) ?? "running",
+  };
+}
+
 export type TerminalTab = {
   id: string;
   ptyId: string;
@@ -72,6 +97,7 @@ export type TerminalTab = {
   actionId?: string;
   actionLabel?: string;
   actionIcon?: ProjectActionIcon;
+  actionRunState?: ProjectActionRunState;
 };
 
 export type EnvironmentTerminalSlot = {
@@ -223,7 +249,7 @@ function normalizeSlot(
   };
 
   return {
-    tabs: Array.isArray(slot.tabs) ? slot.tabs : [],
+    tabs: Array.isArray(slot.tabs) ? slot.tabs.map(normalizeTerminalTab) : [],
     activeTabId: slot.activeTabId ?? null,
     visible:
       typeof slot.visible === "boolean"
@@ -260,6 +286,87 @@ async function killTerminalSession(ptyId: string) {
   }
 }
 
+function mapTabsByPtyId(
+  byEnv: Record<string, EnvironmentTerminalSlot>,
+  ptyId: string,
+  updateTab: (tab: TerminalTab) => TerminalTab,
+) {
+  let changed = false;
+  const nextByEnv = Object.fromEntries(
+    Object.entries(byEnv).map(([environmentId, rawSlot]) => {
+      const slot = normalizeSlot(rawSlot, environmentId);
+      let slotChanged = false;
+      const tabs = slot.tabs.map((tab) => {
+        if (tab.ptyId !== ptyId) {
+          return tab;
+        }
+        const nextTab = updateTab(tab);
+        if (nextTab !== tab) {
+          slotChanged = true;
+        }
+        return nextTab;
+      });
+      changed ||= slotChanged;
+      return [environmentId, slotChanged ? { ...slot, tabs } : slot];
+    }),
+  );
+
+  return changed ? nextByEnv : byEnv;
+}
+
+function applyProjectActionStateEvent(
+  byEnv: Record<string, EnvironmentTerminalSlot>,
+  payload: ProjectActionStateEventPayload,
+) {
+  return mapTabsByPtyId(byEnv, payload.ptyId, (tab) =>
+    tab.kind !== "manualAction"
+      ? tab
+      : {
+          ...tab,
+          exited: payload.state === "exited",
+          actionRunState: payload.state,
+        },
+  );
+}
+
+function clearTerminalEventSubscriptions() {
+  const unlisteners = terminalEventUnlisteners;
+  terminalEventUnlisteners = [];
+  for (const unlisten of unlisteners) {
+    unlisten();
+  }
+}
+
+function ensureTerminalEventSubscriptionsReady(): Promise<void> {
+  if (terminalEventSubscriptionsPromise) {
+    return terminalEventSubscriptionsPromise;
+  }
+
+  terminalEventSubscriptionsPromise = Promise.all([
+    bridge.listenToTerminalExit((payload) => {
+      useTerminalStore.getState().markExited(payload.ptyId);
+    }),
+    bridge.listenToProjectActionState((payload) => {
+      useTerminalStore.getState().syncProjectActionState(payload);
+    }),
+  ])
+    .then((unlisteners) => {
+      terminalEventUnlisteners = unlisteners;
+    })
+    .catch((error) => {
+      clearTerminalEventSubscriptions();
+      terminalEventSubscriptionsPromise = null;
+      throw error;
+    });
+
+  return terminalEventSubscriptionsPromise;
+}
+
+export function __resetTerminalEventSubscriptions(): void {
+  clearTerminalEventSubscriptions();
+  terminalEventSubscriptionsPromise = null;
+}
+
 type TerminalState = {
   // Tabs and panel chrome are keyed by environmentId so the selected worktree
   // restores its own terminal state without leaking visibility or size to
@@ -281,6 +388,7 @@ type TerminalState = {
   closeTab: (environmentId: string, id: string) => Promise<void>;
   activateTab: (environmentId: string, id: string) => void;
   markExited: (ptyId: string) => void;
+  syncProjectActionState: (payload: ProjectActionStateEventPayload) => void;
 };
 
 export const useTerminalStore = create<TerminalState>((set, get) => {
@@ -388,7 +496,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => {
       if (slot.tabs.length >= MAX_TABS) return null;
       // Attach the output bus BEFORE spawning so any bytes emitted between
       // spawn and the TerminalView subscribe are buffered, not dropped.
-      await ensureTerminalOutputBusReady();
+      await Promise.all([
+        ensureTerminalOutputBusReady(),
+        ensureTerminalEventSubscriptionsReady(),
+      ]);
       // Generous defaults; FitAddon will resize immediately after mount.
       const { ptyId, cwd } = await bridge.spawnTerminal({
         environmentId,
@@ -429,16 +540,16 @@ export const useTerminalStore = create<TerminalState>((set, get) => {
 
     openActionTab: async (environmentId, action) => {
       const slot = slotForEnvironment(get().byEnv, environmentId);
-      const runningTab = slot.tabs.find(
-        (tab) => tab.kind === "manualAction" && tab.actionId === action.id && !tab.exited,
+      const actionTab = slot.tabs.find(
+        (tab) => tab.kind === "manualAction" && tab.actionId === action.id,
       );
-      if (runningTab) {
+      if (actionTab && actionRunStateFor(actionTab) === "running") {
         updateSlot(environmentId, (existing) => ({
           ...existing,
           visible: true,
-          activeTabId: runningTab.id,
+          activeTabId: actionTab.id,
         }));
-        return runningTab.id;
+        return actionTab.id;
       }
 
       const operationKey = actionTabOperationKey(environmentId, action.id);
@@ -447,25 +558,32 @@ export const useTerminalStore = create<TerminalState>((set, get) => {
         return pendingOpen;
       }
 
-      const reusableTab = slot.tabs.find(
-        (tab) => tab.kind === "manualAction" && tab.actionId === action.id,
-      );
-      const nextTabCount = reusableTab ? slot.tabs.length : slot.tabs.length + 1;
+      const reusableTab =
+        actionTab && actionRunStateFor(actionTab) === "idle" ? actionTab : null;
+      const reusableExitedTab =
+        actionTab && actionRunStateFor(actionTab) === "exited" ? actionTab : null;
+      const replacementTab = reusableTab ?? reusableExitedTab;
+      const nextTabCount = replacementTab ? slot.tabs.length : slot.tabs.length + 1;
       if (nextTabCount > MAX_TABS) {
         return null;
       }
 
       const openPromise = (async () => {
-        await ensureTerminalOutputBusReady();
+        await Promise.all([
+          ensureTerminalOutputBusReady(),
+          ensureTerminalEventSubscriptionsReady(),
+        ]);
         const { ptyId, cwd, actionId, actionLabel, actionIcon } =
           await bridge.runProjectAction({
             environmentId,
             actionId: action.id,
+            ptyId: reusableTab?.ptyId ?? null,
           });
         const slotAfter = slotForEnvironment(get().byEnv, environmentId);
-        const reusableTabStillPresent =
-          reusableTab != null && slotAfter.tabs.some((tab) => tab.id === reusableTab.id);
-        const nextTabCount = reusableTabStillPresent
+        const replacementTabStillPresent =
+          replacementTab != null &&
+          slotAfter.tabs.some((tab) => tab.id === replacementTab.id);
+        const nextTabCount = replacementTabStillPresent
           ? slotAfter.tabs.length
           : slotAfter.tabs.length + 1;
         if (
@@ -477,7 +595,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => {
         }
 
         const nextTabId =
-          reusableTabStillPresent && reusableTab ? reusableTab.id : crypto.randomUUID();
+          replacementTabStillPresent && replacementTab
+            ? replacementTab.id
+            : crypto.randomUUID();
         const nextTab: TerminalTab = {
           id: nextTabId,
           ptyId,
@@ -488,13 +608,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => {
           actionId,
           actionLabel,
           actionIcon,
+          actionRunState: "running",
         };
 
         updateSlot(environmentId, (existing) => ({
           ...existing,
           visible: true,
-          tabs: reusableTabStillPresent
-            ? existing.tabs.map((tab) => (tab.id === reusableTab.id ? nextTab : tab))
+          tabs: replacementTabStillPresent && replacementTab
+            ? existing.tabs.map((tab) => (tab.id === replacementTab.id ? nextTab : tab))
             : [...existing.tabs, nextTab],
           activeTabId: nextTabId,
         }));
@@ -547,20 +668,17 @@ export const useTerminalStore = create<TerminalState>((set, get) => {
 
     markExited: (ptyId) =>
       set((state) => ({
-        byEnv: Object.fromEntries(
-          Object.entries(state.byEnv).map(([envId]) => {
-            const normalized = slotForEnvironment(state.byEnv, envId);
-            return [
-              envId,
-              {
-                ...normalized,
-                tabs: normalized.tabs.map((tab) =>
-                  tab.ptyId === ptyId ? { ...tab, exited: true } : tab,
-                ),
-              },
-            ];
-          }),
-        ),
+        byEnv: mapTabsByPtyId(state.byEnv, ptyId, (tab) => ({
+          ...tab,
+          exited: true,
+          actionRunState:
+            tab.kind === "manualAction" ? "exited" : tab.actionRunState,
+        })),
+      })),
+
+    syncProjectActionState: (payload) =>
+      set((state) => ({
+        byEnv: applyProjectActionStateEvent(state.byEnv, payload),
       })),
   };
 });
