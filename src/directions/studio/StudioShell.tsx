@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import * as bridge from "../../lib/bridge";
 import {
   THEME_STORAGE_KEY,
@@ -57,8 +57,6 @@ type RightPanel = "none" | "inspector" | "browser";
 export function StudioShell() {
   const [projectsSidebarOpen, setProjectsSidebarOpen] = useState(true);
   const [rightPanel, setRightPanel] = useState<RightPanel>("none");
-  const inspectorOpen = rightPanel === "inspector";
-  const browserOpen = rightPanel === "browser";
   const [sidePanelDragging, setSidePanelDragging] = useState(false);
   const sidePanelWidth = useSidePanelStore(selectSidePanelWidth);
   const setSidePanelWidth = useSidePanelStore((state) => state.setWidth);
@@ -85,6 +83,10 @@ export function StudioShell() {
   const diffPanelOpen = Boolean(selectedFileKey);
   const actionCreateDialogOpen = !settingsOpen && actionCreateProject != null;
   const shortcutsBlocked = settingsOpen || actionCreateDialogOpen;
+  const effectiveRightPanel: RightPanel =
+    rightPanel === "inspector" && !reviewEnvironment ? "none" : rightPanel;
+  const inspectorOpen = effectiveRightPanel === "inspector";
+  const browserOpen = effectiveRightPanel === "browser";
 
   const openSettingsDialog = useCallback(() => {
     setActionCreateProjectId(null);
@@ -128,12 +130,6 @@ export function StudioShell() {
     );
   }, [sidePanelWidth]);
 
-  useLayoutEffect(() => {
-    if (rightPanel === "inspector" && !reviewEnvironment) {
-      setRightPanel("none");
-    }
-  }, [reviewEnvironment, rightPanel]);
-
   useEffect(() => {
     void reconcileVoiceSessionSnapshot(workspaceSnapshot);
   }, [reconcileVoiceSessionSnapshot, workspaceSnapshot]);
@@ -162,7 +158,7 @@ export function StudioShell() {
     setTheme((t) => (t === "dark" ? "light" : "dark"));
   }
 
-  const rightPanelOpen = rightPanel !== "none";
+  const rightPanelOpen = effectiveRightPanel !== "none";
 
   return (
     <div
@@ -198,7 +194,10 @@ export function StudioShell() {
           onDraggingChange={setSidePanelDragging}
         />
       )}
-      <div className="studio-shell__right-panel" data-right-panel={rightPanel}>
+      <div
+        className="studio-shell__right-panel"
+        data-right-panel={effectiveRightPanel}
+      >
         <InspectorPanel collapsed={!inspectorOpen} />
         <BrowserPanel collapsed={!browserOpen} />
       </div>
