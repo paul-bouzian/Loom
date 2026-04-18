@@ -16,6 +16,7 @@ import type {
   AddProjectRequest,
   ArchiveThreadRequest,
   BootstrapStatus,
+  ChatThreadCreateResult,
   CommitGitInput,
   ComposerFileSearchResult,
   CodexRateLimitSnapshot,
@@ -387,6 +388,13 @@ export function createThread(
   input: CreateThreadRequest,
 ): Promise<ThreadRecord> {
   return invoke<ThreadRecord>("create_thread", { input });
+}
+
+export function createChatThread(input: {
+  title?: string;
+  overrides?: ThreadRecord["overrides"];
+}): Promise<ChatThreadCreateResult> {
+  return invoke<ChatThreadCreateResult>("create_chat_thread", { input });
 }
 
 export function renameThread(

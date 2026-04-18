@@ -1479,7 +1479,9 @@ mod tests {
 
         let requests = harness.requests().await;
         assert!(
-            requests.iter().any(|request| request.method == "model/list"),
+            requests
+                .iter()
+                .any(|request| request.method == "model/list"),
             "model/list request should be recorded"
         );
         assert!(
@@ -1514,10 +1516,12 @@ mod tests {
             .filter(|request| request.method == "collaborationMode/list")
             .count();
 
-        assert_eq!(model_list_count, 2, "read_capabilities should refresh model/list");
         assert_eq!(
-            collaboration_mode_count,
-            2,
+            model_list_count, 2,
+            "read_capabilities should refresh model/list"
+        );
+        assert_eq!(
+            collaboration_mode_count, 2,
             "read_capabilities should refresh collaborationMode/list"
         );
     }

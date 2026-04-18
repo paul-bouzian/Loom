@@ -73,7 +73,14 @@ export function StudioMain({
   const hasAnyPane = useWorkspaceStore(selectHasAnyPane);
   const setRowRatio = useWorkspaceStore((state) => state.setRowRatio);
   const setColRatio = useWorkspaceStore((state) => state.setColRatio);
-  const selectedEnvironmentId = effectiveEnvironment?.id ?? null;
+  const projectAffordancesEnabled =
+    selectedEnvironment !== null && selectedEnvironment.kind !== "chat";
+  const terminalEnabled =
+    effectiveEnvironment !== null && effectiveEnvironment.kind !== "chat";
+  const inspectorEnabled =
+    effectiveEnvironment !== null && effectiveEnvironment.kind !== "chat";
+  const selectedEnvironmentId =
+    terminalEnabled ? (effectiveEnvironment?.id ?? null) : null;
   const terminalSlot = useTerminalStore(selectTerminalSlot(selectedEnvironmentId));
   const hasAnyTerminalTabs = useTerminalStore(selectHasAnyTerminalTabs);
 
@@ -113,13 +120,23 @@ export function StudioMain({
         </div>
         <div className="studio-main__toolbar-actions">
           <EnvironmentActionControl
-            environmentId={selectedEnvironment?.id ?? null}
-            projectId={selectedProject?.id ?? null}
-            actions={selectedProject?.settings.manualActions ?? []}
+            environmentId={
+              projectAffordancesEnabled ? (selectedEnvironment?.id ?? null) : null
+            }
+            projectId={
+              projectAffordancesEnabled ? (selectedProject?.id ?? null) : null
+            }
+            actions={
+              projectAffordancesEnabled
+                ? (selectedProject?.settings.manualActions ?? [])
+                : []
+            }
             onAddAction={onOpenActionCreateDialog}
           />
           <OpenEnvironmentControl
-            environmentId={selectedEnvironment?.id ?? null}
+            environmentId={
+              projectAffordancesEnabled ? (selectedEnvironment?.id ?? null) : null
+            }
             settings={settings}
           />
           <Tooltip
@@ -167,14 +184,32 @@ export function StudioMain({
             </button>
           </Tooltip>
           <Tooltip
-            content={inspectorOpen ? "Hide inspector" : "Show inspector"}
+            content={
+              !inspectorEnabled
+                ? "Inspector is unavailable for chats"
+                : inspectorOpen
+                  ? "Hide inspector"
+                  : "Show inspector"
+            }
             side="bottom"
           >
             <button
               type="button"
-              aria-label={inspectorOpen ? "Hide inspector" : "Show inspector"}
+              aria-label={
+                !inspectorEnabled
+                  ? "Inspector is unavailable for chats"
+                  : inspectorOpen
+                    ? "Hide inspector"
+                    : "Show inspector"
+              }
               className={`studio-main__toggle-inspector ${inspectorOpen ? "studio-main__toggle-inspector--active" : ""}`}
-              onClick={onToggleInspector}
+              disabled={!inspectorEnabled}
+              onClick={() => {
+                if (!inspectorEnabled) {
+                  return;
+                }
+                onToggleInspector();
+              }}
             >
               <PanelRightIcon size={14} />
             </button>

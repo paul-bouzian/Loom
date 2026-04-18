@@ -97,7 +97,12 @@ describe("ThreadDraftComposer", () => {
   });
 
   it("loads the local environment capabilities before any thread is opened", async () => {
-    render(<ThreadDraftComposer projectId="project-1" paneId="topLeft" />);
+    render(
+      <ThreadDraftComposer
+        draft={{ kind: "project", projectId: "project-1" }}
+        paneId="topLeft"
+      />,
+    );
 
     await waitFor(() => {
       expect(mockedBridge.getEnvironmentCapabilities).toHaveBeenCalledWith(

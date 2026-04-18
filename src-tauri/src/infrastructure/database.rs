@@ -10,7 +10,7 @@ use crate::domain::conversation::{
 };
 use crate::error::{AppError, AppResult};
 
-const CURRENT_SCHEMA_VERSION: i32 = 5;
+const CURRENT_SCHEMA_VERSION: i32 = 6;
 
 #[derive(Debug, Clone)]
 pub struct AppDatabase {
@@ -64,6 +64,7 @@ impl AppDatabase {
                       id TEXT PRIMARY KEY,
                       name TEXT NOT NULL,
                       root_path TEXT NOT NULL UNIQUE,
+                      kind TEXT NOT NULL DEFAULT 'repository',
                       managed_worktree_dir TEXT,
                       settings_json TEXT NOT NULL DEFAULT '{}',
                       sort_order INTEGER NOT NULL DEFAULT 0,
@@ -107,7 +108,7 @@ impl AppDatabase {
                     CREATE UNIQUE INDEX idx_projects_managed_worktree_dir_active
                     ON projects(managed_worktree_dir)
                     WHERE archived_at IS NULL AND managed_worktree_dir IS NOT NULL;
-                    PRAGMA user_version = 5;
+                    PRAGMA user_version = 6;
                     COMMIT;
                     ",
                 )?;
@@ -121,6 +122,8 @@ impl AppDatabase {
                     ALTER TABLE projects
                     ADD COLUMN managed_worktree_dir TEXT;
                     ALTER TABLE projects
+                    ADD COLUMN kind TEXT NOT NULL DEFAULT 'repository';
+                    ALTER TABLE projects
                     ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
                     ALTER TABLE projects
                     ADD COLUMN sidebar_collapsed INTEGER NOT NULL DEFAULT 0;
@@ -160,7 +163,7 @@ impl AppDatabase {
                       FROM ranked_environments
                       WHERE ranked_environments.id = environments.id
                     );
-                    PRAGMA user_version = 5;
+                    PRAGMA user_version = 6;
                     COMMIT;
                     ",
                 )?;
@@ -172,6 +175,8 @@ impl AppDatabase {
                     ALTER TABLE projects
                     ADD COLUMN managed_worktree_dir TEXT;
                     ALTER TABLE projects
+                    ADD COLUMN kind TEXT NOT NULL DEFAULT 'repository';
+                    ALTER TABLE projects
                     ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
                     ALTER TABLE projects
                     ADD COLUMN sidebar_collapsed INTEGER NOT NULL DEFAULT 0;
@@ -211,7 +216,7 @@ impl AppDatabase {
                       FROM ranked_environments
                       WHERE ranked_environments.id = environments.id
                     );
-                    PRAGMA user_version = 5;
+                    PRAGMA user_version = 6;
                     COMMIT;
                     ",
                 )?;
@@ -220,6 +225,8 @@ impl AppDatabase {
                 connection.execute_batch(
                     "
                     BEGIN;
+                    ALTER TABLE projects
+                    ADD COLUMN kind TEXT NOT NULL DEFAULT 'repository';
                     ALTER TABLE projects
                     ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
                     ALTER TABLE projects
@@ -257,7 +264,7 @@ impl AppDatabase {
                       FROM ranked_environments
                       WHERE ranked_environments.id = environments.id
                     );
-                    PRAGMA user_version = 5;
+                    PRAGMA user_version = 6;
                     COMMIT;
                     ",
                 )?;
@@ -266,9 +273,22 @@ impl AppDatabase {
                 connection.execute_batch(
                     "
                     BEGIN;
+                    ALTER TABLE projects
+                    ADD COLUMN kind TEXT NOT NULL DEFAULT 'repository';
                     ALTER TABLE threads
                     ADD COLUMN composer_draft_json TEXT;
-                    PRAGMA user_version = 5;
+                    PRAGMA user_version = 6;
+                    COMMIT;
+                    ",
+                )?;
+            }
+            5 => {
+                connection.execute_batch(
+                    "
+                    BEGIN;
+                    ALTER TABLE projects
+                    ADD COLUMN kind TEXT NOT NULL DEFAULT 'repository';
+                    PRAGMA user_version = 6;
                     COMMIT;
                     ",
                 )?;
@@ -565,7 +585,7 @@ mod tests {
             )
             .expect("environment sort_order column should exist");
 
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert_eq!(default_settings, "'{}'");
         assert_eq!(managed_worktree_dir_default, None);
         assert_eq!(project_sort_order_default, "0");
@@ -668,7 +688,7 @@ mod tests {
             )
             .expect("environment sort_order column should exist");
 
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert_eq!(project_sort_order_default, "0");
         assert_eq!(environment_sort_order_default, "0");
         assert_eq!(
@@ -778,7 +798,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("environment order should collect");
 
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert_eq!(project_order, vec!["project-first", "project-second"]);
         assert_eq!(
             environment_order,
@@ -865,7 +885,7 @@ mod tests {
             )
             .expect("composer_draft_json column should exist");
 
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert_eq!(composer_draft_default, None);
 
         drop(connection);

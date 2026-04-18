@@ -105,6 +105,34 @@ function textContentList(elements: NodeListOf<Element>) {
   return Array.from(elements, (element) => element.textContent);
 }
 
+function repositoryProjectGroups(container: HTMLElement) {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(".project-group"),
+  ).filter((group) => !group.classList.contains("project-group--chat"));
+}
+
+function repositoryProjectHeaders(container: HTMLElement) {
+  return repositoryProjectGroups(container)
+    .map((group) =>
+      group.querySelector<HTMLElement>(".project-group__header-shell"),
+    )
+    .filter((header): header is HTMLElement => header !== null);
+}
+
+function repositoryProjectRows(container: HTMLElement) {
+  return repositoryProjectGroups(container)
+    .map((group) =>
+      group.querySelector<HTMLButtonElement>(".project-group__header"),
+    )
+    .filter((row): row is HTMLButtonElement => row !== null);
+}
+
+function repositoryProjectNames(container: HTMLElement) {
+  return repositoryProjectGroups(container).map(
+    (group) => group.querySelector(".project-group__name")?.textContent ?? "",
+  );
+}
+
 function stubVerticalRects(
   elements: HTMLElement[],
   { top = 0, height = 32, gap = 8 } = {},
@@ -1316,9 +1344,7 @@ describe("TreeSidebar", () => {
       screen.getByRole("button", { name: "Worktree: fuzzy-tiger" }),
     ).toBeInTheDocument();
 
-    await userEvent.click(
-      container.querySelector<HTMLElement>(".project-group__header-shell")!,
-    );
+    await userEvent.click(repositoryProjectHeaders(container)[0]!);
 
     expect(mockedBridge.setProjectSidebarCollapsed).toHaveBeenCalledWith({
       projectId: "project-1",
@@ -1345,9 +1371,7 @@ describe("TreeSidebar", () => {
     }));
 
     const { container } = renderSidebar();
-    const projectHeaders = container.querySelectorAll<HTMLElement>(
-      ".project-group__header-shell",
-    );
+    const projectHeaders = repositoryProjectHeaders(container);
 
     await userEvent.click(projectHeaders[0]);
 
@@ -1370,9 +1394,7 @@ describe("TreeSidebar", () => {
     }));
 
     const { container } = renderSidebar();
-    const projectHeader = container.querySelector<HTMLElement>(
-      ".project-group__header-shell",
-    );
+    const projectHeader = repositoryProjectHeaders(container)[0] ?? null;
 
     expect(projectHeader).not.toBeNull();
 
@@ -1432,8 +1454,7 @@ describe("TreeSidebar", () => {
 
   it("renders the project row without the local branch label or project indicator", () => {
     const { container } = renderSidebar();
-    const projectHeader =
-      container.querySelector<HTMLElement>(".project-group__header");
+    const projectHeader = repositoryProjectRows(container)[0] ?? null;
 
     expect(projectHeader).not.toBeNull();
     if (!projectHeader) {
@@ -1448,10 +1469,11 @@ describe("TreeSidebar", () => {
 
   it("toggles project collapse from the project button with Enter and Space", async () => {
     const { container } = renderSidebar();
-    const getProjectHeader = () =>
-      container.querySelector<HTMLButtonElement>(".project-group__header");
+    const getProjectHeader = () => repositoryProjectRows(container)[0] ?? null;
     const getChevronButton = () =>
-      container.querySelector<HTMLButtonElement>(".project-group__collapse");
+      repositoryProjectGroups(container)[0]?.querySelector<HTMLButtonElement>(
+        ".project-group__collapse",
+      ) ?? null;
 
     expect(getProjectHeader()).not.toBeNull();
 
@@ -1515,12 +1537,9 @@ describe("TreeSidebar", () => {
       }),
     }));
     const { container } = renderSidebar();
-    const projectGroups =
-      container.querySelectorAll<HTMLElement>(".project-group");
-    const projectHeaders = container.querySelectorAll<HTMLElement>(
-      ".project-group__header-shell",
-    );
-    stubVerticalRects(Array.from(projectGroups), { height: 40, gap: 10 });
+    const projectGroups = repositoryProjectGroups(container);
+    const projectHeaders = repositoryProjectHeaders(container);
+    stubVerticalRects(projectGroups, { height: 40, gap: 10 });
 
     fireEvent.pointerDown(projectHeaders[1], {
       button: 0,
@@ -1539,9 +1558,7 @@ describe("TreeSidebar", () => {
     });
 
     await waitFor(() => {
-      expect(
-        textContentList(container.querySelectorAll(".project-group__name")),
-      ).toEqual(["Second", "First"]);
+      expect(repositoryProjectNames(container)).toEqual(["Second", "First"]);
     });
     expect(projectGroups[1].style.transform).toContain("translate3d(");
     expect(mockedBridge.reorderProjects).not.toHaveBeenCalled();
@@ -1593,15 +1610,12 @@ describe("TreeSidebar", () => {
       }),
     }));
     const { container } = renderSidebar();
-    const projectGroups =
-      container.querySelectorAll<HTMLElement>(".project-group");
-    const projectHeaders = container.querySelectorAll<HTMLElement>(
-      ".project-group__header-shell",
-    );
+    const projectGroups = repositoryProjectGroups(container);
+    const projectHeaders = repositoryProjectHeaders(container);
     const projectList = container.querySelector<HTMLElement>(
       ".tree-sidebar__project-list",
     );
-    stubVerticalRects(Array.from(projectGroups), { height: 40, gap: 10 });
+    stubVerticalRects(projectGroups, { height: 40, gap: 10 });
 
     expect(projectList).not.toBeNull();
 
@@ -1683,12 +1697,8 @@ describe("TreeSidebar", () => {
     }));
 
     const { container } = renderSidebar();
-    const projectGroups = () =>
-      Array.from(container.querySelectorAll<HTMLElement>(".project-group"));
-    const projectHeaders = () =>
-      Array.from(
-        container.querySelectorAll<HTMLElement>(".project-group__header-shell"),
-      );
+    const projectGroups = () => repositoryProjectGroups(container);
+    const projectHeaders = () => repositoryProjectHeaders(container);
     stubVerticalRects(projectGroups(), { height: 40, gap: 10 });
 
     fireEvent.pointerDown(projectHeaders()[1], {
@@ -1708,9 +1718,7 @@ describe("TreeSidebar", () => {
     });
 
     await waitFor(() => {
-      expect(
-        textContentList(container.querySelectorAll(".project-group__name")),
-      ).toEqual(["Second", "First"]);
+      expect(repositoryProjectNames(container)).toEqual(["Second", "First"]);
     });
 
     fireEvent.pointerUp(window, {
@@ -1781,12 +1789,8 @@ describe("TreeSidebar", () => {
     }));
 
     const { container } = renderSidebar();
-    const projectGroups = () =>
-      Array.from(container.querySelectorAll<HTMLElement>(".project-group"));
-    const projectHeaders = () =>
-      Array.from(
-        container.querySelectorAll<HTMLElement>(".project-group__header-shell"),
-      );
+    const projectGroups = () => repositoryProjectGroups(container);
+    const projectHeaders = () => repositoryProjectHeaders(container);
     stubVerticalRects(projectGroups(), { height: 40, gap: 10 });
 
     fireEvent.pointerDown(projectHeaders()[1], {
@@ -1806,9 +1810,7 @@ describe("TreeSidebar", () => {
     });
 
     await waitFor(() => {
-      expect(
-        textContentList(container.querySelectorAll(".project-group__name")),
-      ).toEqual(["Second", "First"]);
+      expect(repositoryProjectNames(container)).toEqual(["Second", "First"]);
     });
 
     fireEvent.pointerUp(window, {
@@ -1866,12 +1868,9 @@ describe("TreeSidebar", () => {
     }));
 
     const { container } = renderSidebar();
-    const projectGroups =
-      container.querySelectorAll<HTMLElement>(".project-group");
-    const projectHeaders = container.querySelectorAll<HTMLElement>(
-      ".project-group__header-shell",
-    );
-    stubVerticalRects(Array.from(projectGroups), { height: 40, gap: 10 });
+    const projectGroups = repositoryProjectGroups(container);
+    const projectHeaders = repositoryProjectHeaders(container);
+    stubVerticalRects(projectGroups, { height: 40, gap: 10 });
 
     fireEvent.pointerDown(projectHeaders[1], {
       button: 0,
@@ -1890,9 +1889,7 @@ describe("TreeSidebar", () => {
     });
 
     await waitFor(() => {
-      expect(
-        textContentList(container.querySelectorAll(".project-group__name")),
-      ).toEqual(["Second", "First"]);
+      expect(repositoryProjectNames(container)).toEqual(["Second", "First"]);
     });
 
     fireEvent.pointerUp(window, {
@@ -1903,10 +1900,7 @@ describe("TreeSidebar", () => {
     });
 
     expect(
-      Array.from(
-        container.querySelectorAll<HTMLElement>(".project-group"),
-        (group) => group.style.transform,
-      ),
+      repositoryProjectGroups(container).map((group) => group.style.transform),
     ).toEqual(["", ""]);
 
     persist.resolve();
@@ -1968,12 +1962,8 @@ describe("TreeSidebar", () => {
     }));
 
     const { container } = renderSidebar();
-    const projectGroups = () =>
-      Array.from(container.querySelectorAll<HTMLElement>(".project-group"));
-    const projectHeaders = () =>
-      Array.from(
-        container.querySelectorAll<HTMLElement>(".project-group__header-shell"),
-      );
+    const projectGroups = () => repositoryProjectGroups(container);
+    const projectHeaders = () => repositoryProjectHeaders(container);
     stubVerticalRects(projectGroups(), { height: 40, gap: 10 });
 
     fireEvent.pointerDown(projectHeaders()[2], {
@@ -1993,9 +1983,11 @@ describe("TreeSidebar", () => {
     });
 
     await waitFor(() => {
-      expect(
-        textContentList(container.querySelectorAll(".project-group__name")),
-      ).toEqual(["Third", "First", "Second"]);
+      expect(repositoryProjectNames(container)).toEqual([
+        "Third",
+        "First",
+        "Second",
+      ]);
     });
 
     fireEvent.pointerUp(window, {
@@ -2023,17 +2015,21 @@ describe("TreeSidebar", () => {
     });
 
     await waitFor(() => {
-      expect(
-        textContentList(container.querySelectorAll(".project-group__name")),
-      ).toEqual(["Second", "Third", "First"]);
+      expect(repositoryProjectNames(container)).toEqual([
+        "Second",
+        "Third",
+        "First",
+      ]);
     });
 
     firstPersist.resolve();
 
     await waitFor(() => {
-      expect(
-        textContentList(container.querySelectorAll(".project-group__name")),
-      ).toEqual(["Second", "Third", "First"]);
+      expect(repositoryProjectNames(container)).toEqual([
+        "Second",
+        "Third",
+        "First",
+      ]);
     });
 
     fireEvent.pointerUp(window, {
@@ -2087,8 +2083,7 @@ describe("TreeSidebar", () => {
 
     const { container } = renderSidebar();
 
-    const projectRows =
-      container.querySelectorAll<HTMLButtonElement>(".project-group__header");
+    const projectRows = repositoryProjectRows(container);
     fireEvent.keyDown(projectRows[1], {
       key: "ArrowUp",
     });
@@ -2147,8 +2142,7 @@ describe("TreeSidebar", () => {
 
     const { container } = renderSidebar();
 
-    const projectRows =
-      container.querySelectorAll<HTMLButtonElement>(".project-group__header");
+    const projectRows = repositoryProjectRows(container);
     fireEvent.keyDown(projectRows[2], {
       key: "Home",
     });
@@ -2207,8 +2201,7 @@ describe("TreeSidebar", () => {
 
     const { container } = renderSidebar();
 
-    const projectRows =
-      container.querySelectorAll<HTMLButtonElement>(".project-group__header");
+    const projectRows = repositoryProjectRows(container);
     fireEvent.keyDown(projectRows[0], {
       key: "End",
     });

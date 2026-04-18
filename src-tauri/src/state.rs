@@ -26,10 +26,12 @@ impl AppState {
     pub fn new(app: &AppHandle) -> AppResult<Self> {
         let storage_paths = prepare_storage_paths(app)?;
         let app_data_dir = storage_paths.app_data_dir.clone();
+        std::fs::create_dir_all(storage_paths.app_home_dir.join("chats"))?;
         let database = AppDatabase::new(&storage_paths)?;
         let workspace = WorkspaceService::new(
             database,
             storage_paths.app_home_dir.join("worktrees"),
+            storage_paths.app_home_dir.join("chats"),
             WorktreeScriptService::new(app.clone(), app_data_dir.clone()),
         );
 

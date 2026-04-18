@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+import skeinAppIcon from "../../../../src-tauri/icons/icon.png";
 import * as bridge from "../../../lib/bridge";
 import type {
   CollaborationModeOption,
@@ -11,29 +13,30 @@ import type {
   ModelOption,
   ReasoningEffort,
 } from "../../../lib/types";
-import skeinAppIcon from "../../../../src-tauri/icons/icon.png";
 import { useConversationStore } from "../../../stores/conversation-store";
 import {
+  selectChatWorkspace,
   selectProjects,
   selectSettings,
   useWorkspaceStore,
   type SlotKey,
+  type ThreadDraftState,
 } from "../../../stores/workspace-store";
 import { InlineComposer } from "../composer/InlineComposer";
-import "../ThreadConversation.css";
 import { sendThreadDraft } from "../studioActions";
-import { EnvironmentSelector, type EnvSelection } from "./EnvironmentSelector";
+import {
+  EnvironmentSelector,
+  type DraftLocationSelection,
+  type EnvSelection,
+} from "./EnvironmentSelector";
+import "../ThreadConversation.css";
 import "./ThreadDraftComposer.css";
 
 type Props = {
-  projectId: string;
+  draft: ThreadDraftState;
   paneId: SlotKey;
 };
 
-// Used only when the workspace has not yet loaded its global settings.
-// Once settings are available we seed the draft composer from them so the
-// user's configured defaults (model, effort, mode, approval, tier) take
-// precedence over these hard-coded fallbacks.
 const BOOTSTRAP_COMPOSER: ConversationComposerSettings = {
   model: "gpt-5.4",
   reasoningEffort: "high",
@@ -54,10 +57,6 @@ const FALLBACK_EFFORT_OPTIONS: ReasoningEffort[] = [
   "xhigh",
 ];
 
-// Keeps the draft composer's model/effort/tier toggles accurate before any
-// thread has been opened (and therefore before real env capabilities have
-// been hydrated into the conversation store). The fallback mirrors the
-// defaults the backend advertises for Codex, including fast-mode support.
 const FALLBACK_MODEL_OPTIONS: ModelOption[] = [
   {
     id: "gpt-5.4",
@@ -90,7 +89,7 @@ function orderBranchesWithDefaults(branches: string[]): string[] {
   const priority = PRIORITY_BRANCHES.filter((name) => branches.includes(name));
   const rest = branches
     .filter((name) => !PRIORITY_SET.has(name))
-    .sort((a, b) => a.localeCompare(b));
+    .sort((left, right) => left.localeCompare(right));
   return [...priority, ...rest];
 }
 
@@ -105,11 +104,16 @@ function findLatestActiveThreadId(environment: EnvironmentRecord | null): string
   );
 }
 
-export function ThreadDraftComposer({ projectId, paneId }: Props) {
-  const project = useWorkspaceStore((state) =>
-    selectProjects(state).find((candidate) => candidate.id === projectId),
-  );
+export function ThreadDraftComposer({ draft, paneId }: Props) {
+  const projects = useWorkspaceStore(selectProjects);
+  const chatWorkspace = useWorkspaceStore(selectChatWorkspace);
   const settings = useWorkspaceStore(selectSettings);
+  const updateThreadDraftTarget = useWorkspaceStore(
+    (state) => state.updateThreadDraftTarget,
+  );
+  const tryLoadEnvironmentCapabilities = useConversationStore(
+    (state) => state.tryLoadEnvironmentCapabilities,
+  );
   const [text, setText] = useState("");
   const [images, setImages] = useState<ConversationImageAttachment[]>([]);
   const [mentionBindings, setMentionBindings] = useState<
@@ -118,24 +122,64 @@ export function ThreadDraftComposer({ projectId, paneId }: Props) {
   const [composer, setComposer] = useState<ConversationComposerSettings>(() =>
     settings ? composerFromSettings(settings) : BOOTSTRAP_COMPOSER,
   );
-  const [selection, setSelection] = useState<EnvSelection>({ kind: "local" });
+  const [projectSelections, setProjectSelections] = useState<
+    Record<string, EnvSelection>
+  >({});
+  const [lastProjectId, setLastProjectId] = useState<string | null>(
+    draft.kind === "project" ? draft.projectId : (projects[0]?.id ?? null),
+  );
   const [branches, setBranches] = useState<string[]>([]);
-  const [branchesLoaded, setBranchesLoaded] = useState(false);
+  const [branchesLoaded, setBranchesLoaded] = useState(draft.kind === "chat");
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const tryLoadEnvironmentCapabilities = useConversationStore(
-    (state) => state.tryLoadEnvironmentCapabilities,
-  );
-
-  const localEnvironment =
-    project?.environments.find((env) => env.kind === "local") ?? null;
-  const worktreeEnvironments =
-    project?.environments.filter((env) => env.kind !== "local") ?? [];
 
   useEffect(() => {
+    if (draft.kind === "project") {
+      setLastProjectId(draft.projectId);
+      setProjectSelections((current) =>
+        current[draft.projectId]
+          ? current
+          : { ...current, [draft.projectId]: { kind: "local" } },
+      );
+      return;
+    }
+    if (!lastProjectId && projects[0]) {
+      setLastProjectId(projects[0].id);
+    }
+  }, [draft, lastProjectId, projects]);
+
+  const activeProjectId = draft.kind === "project" ? draft.projectId : lastProjectId;
+  const project = useMemo(
+    () =>
+      activeProjectId
+        ? (projects.find((candidate) => candidate.id === activeProjectId) ?? null)
+        : null,
+    [activeProjectId, projects],
+  );
+
+  const selection = useMemo<EnvSelection>(() => {
+    if (!activeProjectId) {
+      return { kind: "local" };
+    }
+    return projectSelections[activeProjectId] ?? { kind: "local" };
+  }, [activeProjectId, projectSelections]);
+
+  const localEnvironment =
+    project?.environments.find((environment) => environment.kind === "local") ?? null;
+  const worktreeEnvironments =
+    project?.environments.filter((environment) => environment.kind !== "local") ?? [];
+
+  useEffect(() => {
+    if (draft.kind !== "project" || !draft.projectId) {
+      setBranches([]);
+      setBranchesLoaded(true);
+      return;
+    }
+
     let cancelled = false;
+    setBranchesLoaded(false);
     bridge
-      .listProjectBranches(projectId)
+      .listProjectBranches(draft.projectId)
       .then((next) => {
         if (cancelled) return;
         setBranches(orderBranchesWithDefaults(next));
@@ -143,48 +187,51 @@ export function ThreadDraftComposer({ projectId, paneId }: Props) {
       })
       .catch(() => {
         if (cancelled) return;
+        setBranches([]);
         setBranchesLoaded(true);
       });
+
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [draft]);
 
-  // Branches are already ordered with main/master first, so branches[0]
-  // naturally gives the preferred default.
-  const defaultBaseBranch =
-    branches[0] ?? localEnvironment?.gitBranch ?? null;
+  const defaultBaseBranch = branches[0] ?? localEnvironment?.gitBranch ?? null;
 
-  // Realign the selection's baseBranch when the user's previously-picked
-  // branch disappears from the listing. An empty baseBranch is a valid
-  // state — it tells the backend to pick the repository default, which is
-  // how detached-HEAD / no-local-branch repos still land on a sensible
-  // base.
   useEffect(() => {
-    if (selection.kind !== "new" || !branchesLoaded) return;
+    if (draft.kind !== "project" || selection.kind !== "new" || !branchesLoaded) return;
     if (selection.baseBranch.length === 0) return;
     if (branches.includes(selection.baseBranch)) return;
     const fallback = defaultBaseBranch ?? "";
     if (fallback === selection.baseBranch) return;
-    setSelection({ ...selection, baseBranch: fallback });
-  }, [selection, branches, branchesLoaded, defaultBaseBranch]);
+    setProjectSelections((current) => ({
+      ...current,
+      [draft.projectId]: { ...selection, baseBranch: fallback },
+    }));
+  }, [branches, branchesLoaded, defaultBaseBranch, draft, selection]);
 
   const resolvedComposerEnvId =
-    (selection.kind === "existing"
-      ? selection.environmentId
-      : localEnvironment?.id) ?? "draft";
+    draft.kind === "project"
+      ? ((selection.kind === "existing"
+          ? selection.environmentId
+          : localEnvironment?.id) ?? "draft")
+      : "draft";
   const composerCapabilityEnvironmentId =
-    selection.kind === "existing"
-      ? selection.environmentId
-      : (localEnvironment?.id ?? null);
+    draft.kind === "project"
+      ? selection.kind === "existing"
+        ? selection.environmentId
+        : (localEnvironment?.id ?? null)
+      : null;
   const selectedComposerEnvironment =
-    selection.kind === "existing"
-      ? (worktreeEnvironments.find(
-          (environment) => environment.id === selection.environmentId,
-        ) ?? null)
-      : selection.kind === "local"
-        ? localEnvironment
-        : null;
+    draft.kind === "project"
+      ? selection.kind === "existing"
+        ? (worktreeEnvironments.find(
+            (environment) => environment.id === selection.environmentId,
+          ) ?? null)
+        : selection.kind === "local"
+          ? localEnvironment
+          : null
+      : null;
   const composerTransportThreadId =
     findLatestActiveThreadId(selectedComposerEnvironment);
 
@@ -203,7 +250,6 @@ export function ThreadDraftComposer({ projectId, paneId }: Props) {
   }, [composerCapabilityEnvironmentId, tryLoadEnvironmentCapabilities]);
 
   const cachedModels = capabilities?.models ?? [];
-  // Keep the draft composer interactive if the runtime capability read fails.
   const modelOptions: ModelOption[] =
     cachedModels.length > 0 ? cachedModels : FALLBACK_MODEL_OPTIONS;
   const collaborationModes: CollaborationModeOption[] =
@@ -212,6 +258,23 @@ export function ThreadDraftComposer({ projectId, paneId }: Props) {
     modelOptions.find((candidate) => candidate.id === composer.model) ?? null;
   const effortOptions: ReasoningEffort[] =
     selectedModel?.supportedReasoningEfforts ?? FALLBACK_EFFORT_OPTIONS;
+
+  function handleLocationChange(next: DraftLocationSelection) {
+    if (next.kind === "chat") {
+      updateThreadDraftTarget(paneId, { kind: "chat" });
+      return;
+    }
+
+    setLastProjectId(next.projectId);
+    setProjectSelections((current) => ({
+      ...current,
+      [next.projectId]: next.target,
+    }));
+    updateThreadDraftTarget(paneId, {
+      kind: "project",
+      projectId: next.projectId,
+    });
+  }
 
   async function handleSend(
     sendText: string,
@@ -224,8 +287,8 @@ export function ThreadDraftComposer({ projectId, paneId }: Props) {
     try {
       const result = await sendThreadDraft({
         paneId,
-        projectId,
-        selection,
+        draft,
+        projectSelection: selection,
         text: sendText,
         images: sendImages,
         mentionBindings: sendMentionBindings,
@@ -235,8 +298,6 @@ export function ThreadDraftComposer({ projectId, paneId }: Props) {
         setError(result.error);
         setIsSending(false);
       }
-      // On success, the pane switches to the thread view — this component
-      // unmounts before setIsSending(false) runs.
     } catch (cause: unknown) {
       setError(
         cause instanceof Error ? cause.message : "Failed to send message",
@@ -245,7 +306,7 @@ export function ThreadDraftComposer({ projectId, paneId }: Props) {
     }
   }
 
-  if (!project) {
+  if (draft.kind === "project" && !project) {
     return (
       <div className="tx-conversation thread-draft">
         <p className="thread-draft__empty">Project not found.</p>
@@ -262,8 +323,14 @@ export function ThreadDraftComposer({ projectId, paneId }: Props) {
             alt=""
             className="thread-draft__welcome-logo"
           />
-          <h2 className="thread-draft__welcome-heading">Let's build</h2>
-          <p className="thread-draft__welcome-project">{project.name}</p>
+          <h2 className="thread-draft__welcome-heading">
+            {draft.kind === "chat" ? "Ask Codex anything" : "Let's build"}
+          </h2>
+          <p className="thread-draft__welcome-project">
+            {draft.kind === "chat"
+              ? chatWorkspace?.title ?? "Chats"
+              : project?.name ?? "Project"}
+          </p>
         </div>
       </div>
       <InlineComposer
@@ -283,7 +350,7 @@ export function ThreadDraftComposer({ projectId, paneId }: Props) {
         modelOptions={modelOptions}
         transportEnabled={composerTransportThreadId !== null}
         transportThreadId={composerTransportThreadId}
-        voiceEnabled={resolvedComposerEnvId !== "draft"}
+        voiceEnabled={draft.kind === "project" && resolvedComposerEnvId !== "draft"}
         onChangeImages={setImages}
         tokenUsage={null}
         onCancelRefine={() => undefined}
@@ -301,13 +368,22 @@ export function ThreadDraftComposer({ projectId, paneId }: Props) {
         }
       />
       <EnvironmentSelector
-        localEnvironment={localEnvironment}
-        worktreeEnvironments={worktreeEnvironments}
+        projects={projects}
+        localEnvironment={draft.kind === "project" ? localEnvironment : null}
+        worktreeEnvironments={draft.kind === "project" ? worktreeEnvironments : []}
         availableBranches={branches}
         branchesLoading={!branchesLoaded}
         defaultBaseBranch={defaultBaseBranch}
-        value={selection}
-        onChange={setSelection}
+        value={
+          draft.kind === "chat"
+            ? { kind: "chat" }
+            : {
+                kind: "project",
+                projectId: draft.projectId,
+                target: selection,
+              }
+        }
+        onChange={handleLocationChange}
         disabled={isSending}
       />
       {error ? <p className="thread-draft__error">{error}</p> : null}

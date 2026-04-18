@@ -40,9 +40,7 @@ export function StudioPane({
   let isThreadView = false;
   let isDraftView = false;
   const closeHandler = isSplit ? () => closePane(paneId) : null;
-  if (projects.length === 0) {
-    content = <StudioWelcome />;
-  } else if (thread && environment) {
+  if (thread && environment) {
     isThreadView = true;
     content = (
       <ThreadConversation
@@ -57,11 +55,12 @@ export function StudioPane({
     isDraftView = true;
     content = (
       <ThreadDraftComposer
-        key={`${paneId}:${draft.projectId}`}
-        projectId={draft.projectId}
+        draft={draft}
         paneId={paneId}
       />
     );
+  } else if (projects.length === 0) {
+    content = <StudioWelcome />;
   } else {
     content = <OverviewView projects={projects} />;
   }

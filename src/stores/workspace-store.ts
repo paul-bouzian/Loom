@@ -8,6 +8,7 @@ import {
 import * as bridge from "../lib/bridge";
 import type {
   BootstrapStatus,
+  ChatWorkspaceSnapshot,
   EnvironmentRecord,
   GlobalSettings,
   ProjectSettingsPatch,
@@ -58,9 +59,9 @@ export type PaneSelection = {
 
 type ThreadSelectionStrategy = "focusedSlot" | "preferVisiblePane";
 
-export type ThreadDraftState = {
-  projectId: string;
-};
+export type ThreadDraftState =
+  | { kind: "project"; projectId: string }
+  | { kind: "chat" };
 
 export type WorkspaceLayout = {
   slots: Record<SlotKey, PaneSelection | null>;
@@ -157,7 +158,12 @@ type WorkspaceState = {
   ) => void;
 
   // Thread draft composer orchestration.
-  openThreadDraft: (projectId: string, slot?: SlotKey) => SlotKey | null;
+  openThreadDraft: (
+    target: string | ThreadDraftState,
+    slot?: SlotKey,
+  ) => SlotKey | null;
+  openChatDraft: (slot?: SlotKey) => SlotKey | null;
+  updateThreadDraftTarget: (slot: SlotKey, target: ThreadDraftState) => void;
   closeThreadDraft: (slot: SlotKey) => void;
 };
 
@@ -567,9 +573,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       );
     }),
 
-  openThreadDraft: (projectId, requestedSlot) => {
+  openThreadDraft: (targetInput, requestedSlot) => {
     let opened: SlotKey | null = null;
     set((state) => {
+      const draftTarget = normalizeDraftTarget(targetInput);
       const slot: SlotKey =
         requestedSlot ??
         state.layout.focusedSlot ??
@@ -577,12 +584,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         "topLeft";
       opened = slot;
       const selection: PaneSelection = {
-        projectId,
+        projectId:
+          draftTarget.kind === "project"
+            ? draftTarget.projectId
+            : (state.snapshot?.chat.projectId ?? null),
         environmentId: null,
         threadId: null,
       };
       const slots = { ...state.layout.slots, [slot]: selection };
-      const nextDrafts = { ...state.draftBySlot, [slot]: { projectId } };
+      const nextDrafts = { ...state.draftBySlot, [slot]: draftTarget };
       return withLayoutAndDrafts(
         { ...state.layout, slots, focusedSlot: slot },
         state.snapshot,
@@ -591,6 +601,34 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     });
     return opened;
   },
+
+  openChatDraft: (slot) => get().openThreadDraft({ kind: "chat" }, slot),
+
+  updateThreadDraftTarget: (slot, target) =>
+    set((state) => {
+      if (!state.draftBySlot[slot]) {
+        return state;
+      }
+      const selection: PaneSelection = {
+        projectId:
+          target.kind === "project"
+            ? target.projectId
+            : (state.snapshot?.chat.projectId ?? null),
+        environmentId: null,
+        threadId: null,
+      };
+      const slots = { ...state.layout.slots, [slot]: selection };
+      const nextDrafts = { ...state.draftBySlot, [slot]: target };
+      return withLayoutAndDrafts(
+        {
+          ...state.layout,
+          slots,
+          focusedSlot: state.layout.focusedSlot ?? slot,
+        },
+        state.snapshot,
+        nextDrafts,
+      );
+    }),
 
   closeThreadDraft: (slot) =>
     set((state) => {
@@ -655,6 +693,12 @@ async function runWorkspaceRefresh(get: () => WorkspaceState): Promise<boolean> 
 
 export function selectProjects(s: WorkspaceState): ProjectRecord[] {
   return s.snapshot?.projects ?? [];
+}
+
+export function selectChatWorkspace(
+  s: WorkspaceState,
+): ChatWorkspaceSnapshot | null {
+  return s.snapshot?.chat ?? null;
 }
 
 async function runWorkspaceMutation(
@@ -734,14 +778,7 @@ export function selectEffectiveEnvironment(
 }
 
 export function selectSelectedThread(s: WorkspaceState): ThreadRecord | null {
-  if (!s.selectedThreadId || !s.snapshot) return null;
-  for (const project of s.snapshot.projects) {
-    for (const env of project.environments) {
-      const thread = env.threads.find((t) => t.id === s.selectedThreadId);
-      if (thread) return thread;
-    }
-  }
-  return null;
+  return findThreadInWorkspace(s.snapshot, s.selectedThreadId)?.thread ?? null;
 }
 
 export function selectLayout(s: WorkspaceState): WorkspaceLayout {
@@ -789,13 +826,7 @@ export function selectPaneEnvironment(slot: SlotKey | null) {
     if (!slot || !s.snapshot) return null;
     const selection = s.layout.slots[slot];
     if (!selection?.environmentId) return null;
-    for (const project of s.snapshot.projects) {
-      const env = project.environments.find(
-        (e) => e.id === selection.environmentId,
-      );
-      if (env) return env;
-    }
-    return null;
+    return findEnvironment(s.snapshot, selection.environmentId)?.environment ?? null;
   };
 }
 
@@ -804,13 +835,7 @@ export function selectPaneThread(slot: SlotKey | null) {
     if (!slot || !s.snapshot) return null;
     const selection = s.layout.slots[slot];
     if (!selection?.threadId) return null;
-    for (const project of s.snapshot.projects) {
-      for (const env of project.environments) {
-        const thread = env.threads.find((t) => t.id === selection.threadId);
-        if (thread) return thread;
-      }
-    }
-    return null;
+    return findThreadInWorkspace(s.snapshot, selection.threadId)?.thread ?? null;
   };
 }
 
@@ -829,6 +854,12 @@ function omitSlot(
   const next = { ...drafts };
   delete next[slot];
   return next;
+}
+
+function normalizeDraftTarget(
+  target: string | ThreadDraftState,
+): ThreadDraftState {
+  return typeof target === "string" ? { kind: "project", projectId: target } : target;
 }
 
 function findSlotWithThread(
@@ -957,6 +988,9 @@ function effectiveEnvironmentIdForLayout(
     return selection.environmentId;
   }
   if (!draft || !snapshot) {
+    return null;
+  }
+  if (draft.kind === "chat") {
     return null;
   }
   const project = findProject(snapshot, draft.projectId);
@@ -1235,7 +1269,7 @@ function resolveThreadSelection(
   const found = findThreadInWorkspace(snapshot, threadId);
   if (!found) return null;
   return {
-    projectId: found.project.id,
+    projectId: found.projectId,
     environmentId: found.environment.id,
     threadId: found.thread.id,
   };
@@ -1261,13 +1295,20 @@ function reconcileLayout(
     // `ThreadConversation` and wipe the in-progress draft composer.
     if (draftBySlot[key]) {
       const draft = draftBySlot[key];
-      nextSlots[key] = findProject(snapshot, draft.projectId)
-        ? {
-            projectId: draft.projectId,
-            environmentId: null,
-            threadId: null,
-          }
-        : null;
+      nextSlots[key] =
+        draft.kind === "chat"
+          ? {
+              projectId: snapshot.chat.projectId,
+              environmentId: null,
+              threadId: null,
+            }
+          : findProject(snapshot, draft.projectId)
+            ? {
+                projectId: draft.projectId,
+                environmentId: null,
+                threadId: null,
+              }
+            : null;
       continue;
     }
     nextSlots[key] = reconcilePaneSelection(snapshot, selection);
@@ -1351,8 +1392,8 @@ function reconcilePaneSelection(
 
   const projectId =
     selectedProject?.id ??
-    selectedEnvironment?.project.id ??
-    selectedThread?.project.id ??
+    selectedEnvironment?.projectId ??
+    selectedThread?.projectId ??
     null;
 
   const environmentId =
@@ -1413,7 +1454,7 @@ function buildEnvironmentPane(
   }
   const thread = findLatestActiveThread(resolved.environment);
   return {
-    projectId: resolved.project.id,
+    projectId: resolved.projectId,
     environmentId: resolved.environment.id,
     threadId: thread?.id ?? null,
   };
@@ -1451,8 +1492,18 @@ function findEnvironment(
       (candidate) => candidate.id === environmentId,
     );
     if (environment) {
-      return { environment, project };
+      return { environment, project, projectId: project.id };
     }
+  }
+  const chatEnvironment = snapshot.chat.environments.find(
+    (candidate) => candidate.id === environmentId,
+  );
+  if (chatEnvironment) {
+    return {
+      environment: chatEnvironment,
+      project: null,
+      projectId: snapshot.chat.projectId,
+    };
   }
   return null;
 }
@@ -1479,8 +1530,19 @@ export function findThreadInWorkspace(
         (candidate) => candidate.id === threadId,
       );
       if (thread) {
-        return { thread, environment, project };
+        return { thread, environment, project, projectId: project.id };
       }
+    }
+  }
+  for (const environment of snapshot.chat.environments) {
+    const thread = environment.threads.find((candidate) => candidate.id === threadId);
+    if (thread) {
+      return {
+        thread,
+        environment,
+        project: null,
+        projectId: snapshot.chat.projectId,
+      };
     }
   }
   return null;
@@ -1522,10 +1584,30 @@ function removeThreadFromSnapshot(
       environments: nextEnvironments,
     };
   });
+  let chatChanged = false;
+  const nextChatEnvironments = snapshot.chat.environments.map((environment) => {
+    const nextThreads = environment.threads.filter((thread) => thread.id !== threadId);
+    if (nextThreads.length === environment.threads.length) {
+      return environment;
+    }
+    removed = true;
+    chatChanged = true;
+    return {
+      ...environment,
+      threads: nextThreads,
+    };
+  });
+  const nextChat = chatChanged
+    ? {
+        ...snapshot.chat,
+        environments: nextChatEnvironments,
+      }
+    : snapshot.chat;
 
   return removed
     ? {
         ...snapshot,
+        chat: nextChat,
         projects: nextProjects,
       }
     : snapshot;

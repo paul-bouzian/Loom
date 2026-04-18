@@ -462,6 +462,7 @@ describe("useStudioShortcuts", () => {
     });
 
     expect(useWorkspaceStore.getState().draftBySlot.topLeft).toEqual({
+      kind: "project",
       projectId: "project-1",
     });
     expect(useWorkspaceStore.getState().selectedThreadId).toBeNull();

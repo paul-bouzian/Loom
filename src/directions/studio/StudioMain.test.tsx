@@ -42,9 +42,27 @@ vi.mock("./ThreadConversation", () => ({
   ThreadConversation: () => <div data-testid="thread-conversation" />,
 }));
 
-vi.mock("./draft/ThreadDraftComposer", () => ({
-  ThreadDraftComposer: () => <div data-testid="thread-draft-composer" />,
-}));
+vi.mock("./draft/ThreadDraftComposer", async () => {
+  const React = await import("react");
+
+  return {
+    ThreadDraftComposer: ({
+      draft,
+    }: {
+      draft: { kind: "chat" } | { kind: "project"; projectId: string };
+    }) => {
+      const instanceId = React.useRef(Math.random().toString(36).slice(2)).current;
+      return (
+        <div
+          data-testid="thread-draft-composer"
+          data-instance-id={instanceId}
+          data-draft-kind={draft.kind}
+          data-project-id={draft.kind === "project" ? draft.projectId : ""}
+        />
+      );
+    },
+  };
+});
 
 vi.mock("./StudioWelcome", () => ({
   StudioWelcome: () => <div data-testid="studio-welcome" />,
@@ -226,6 +244,62 @@ describe("StudioMain", () => {
     expect(
       screen.getByRole("button", { name: "Show terminal" }),
     ).not.toBeDisabled();
+  });
+
+  it("keeps the same draft composer instance when the draft destination changes", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      layout: {
+        slots: {
+          topLeft: {
+            projectId: "skein-chat-workspace",
+            environmentId: null,
+            threadId: null,
+          },
+          topRight: null,
+          bottomLeft: null,
+          bottomRight: null,
+        },
+        focusedSlot: "topLeft",
+        rowRatio: 0.5,
+        colRatio: 0.5,
+      },
+      draftBySlot: {
+        topLeft: { kind: "chat" },
+      },
+      selectedProjectId: "skein-chat-workspace",
+      selectedEnvironmentId: null,
+      selectedThreadId: null,
+    }));
+
+    render(
+      <StudioMain
+        theme="dark"
+        projectsSidebarOpen={false}
+        inspectorOpen={false}
+        browserOpen={false}
+        composerFocusKey={0}
+        approveOrSubmitKey={0}
+        onToggleProjectsSidebar={() => {}}
+        onToggleInspector={() => {}}
+        onToggleBrowser={() => {}}
+      />,
+    );
+
+    const initialComposer = screen.getByTestId("thread-draft-composer");
+    const initialInstanceId = initialComposer.getAttribute("data-instance-id");
+
+    act(() => {
+      useWorkspaceStore.getState().updateThreadDraftTarget("topLeft", {
+        kind: "project",
+        projectId: "project-1",
+      });
+    });
+
+    const updatedComposer = screen.getByTestId("thread-draft-composer");
+    expect(updatedComposer.getAttribute("data-instance-id")).toBe(initialInstanceId);
+    expect(updatedComposer.getAttribute("data-draft-kind")).toBe("project");
+    expect(updatedComposer.getAttribute("data-project-id")).toBe("project-1");
   });
 
   it("renders the browser toggle button between terminal and inspector", () => {

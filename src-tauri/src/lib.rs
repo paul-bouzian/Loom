@@ -36,13 +36,16 @@ pub fn run() {
     let proxy_client = browser_proxy::build_client();
 
     let app = builder
-        .register_asynchronous_uri_scheme_protocol(PREVIEW_SCHEME, move |_ctx, request, responder| {
-            let client = proxy_client.clone();
-            tauri::async_runtime::spawn(async move {
-                let response = browser_proxy::handle_request(request, &client).await;
-                responder.respond(response);
-            });
-        })
+        .register_asynchronous_uri_scheme_protocol(
+            PREVIEW_SCHEME,
+            move |_ctx, request, responder| {
+                let client = proxy_client.clone();
+                tauri::async_runtime::spawn(async move {
+                    let response = browser_proxy::handle_request(request, &client).await;
+                    responder.respond(response);
+                });
+            },
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -130,6 +133,7 @@ pub fn run() {
             commands::workspace::list_project_branches,
             commands::workspace::delete_worktree_environment,
             commands::workspace::create_thread,
+            commands::workspace::create_chat_thread,
             commands::workspace::rename_thread,
             commands::workspace::archive_thread,
             commands::workspace::start_environment_runtime,

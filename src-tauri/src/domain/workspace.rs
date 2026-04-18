@@ -16,6 +16,7 @@ pub enum EnvironmentKind {
     Local,
     ManagedWorktree,
     PermanentWorktree,
+    Chat,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -272,14 +273,31 @@ pub struct ProjectRecord {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ChatWorkspaceSnapshot {
+    pub project_id: String,
+    pub title: String,
+    pub root_path: String,
+    pub environments: Vec<EnvironmentRecord>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceSnapshot {
     pub settings: GlobalSettings,
+    pub chat: ChatWorkspaceSnapshot,
     pub projects: Vec<ProjectRecord>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedWorktreeCreateResult {
+    pub environment: EnvironmentRecord,
+    pub thread: ThreadRecord,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatThreadCreateResult {
     pub environment: EnvironmentRecord,
     pub thread: ThreadRecord,
 }

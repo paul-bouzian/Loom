@@ -185,6 +185,12 @@ export function makeWorkspaceSnapshot(
 ): WorkspaceSnapshot {
   return {
     settings: makeGlobalSettings(),
+    chat: {
+      projectId: "skein-chat-workspace",
+      title: "Chats",
+      rootPath: "/tmp/.skein/chats",
+      environments: [],
+    },
     projects: [makeProject()],
     ...overrides,
   };

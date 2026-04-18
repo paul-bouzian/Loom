@@ -11,16 +11,26 @@ use crate::domain::conversation::{ConversationComposerDraft, ConversationCompose
 use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch, OpenTarget};
 use crate::domain::shortcuts::ShortcutSettings;
 use crate::domain::workspace::{
-    EnvironmentKind, EnvironmentPullRequestSnapshot, EnvironmentRecord,
-    FirstPromptRenameFailureEvent, ManagedWorktreeCreateResult, ProjectManualAction, ProjectRecord,
-    ProjectSettings, ProjectSettingsPatch, RuntimeState, RuntimeStatusSnapshot, ThreadOverrides,
-    ThreadRecord, ThreadStatus, WorkspaceSnapshot, WorktreeScriptTrigger,
+    ChatThreadCreateResult, ChatWorkspaceSnapshot, EnvironmentKind, EnvironmentPullRequestSnapshot,
+    EnvironmentRecord, FirstPromptRenameFailureEvent, ManagedWorktreeCreateResult,
+    ProjectManualAction, ProjectRecord, ProjectSettings, ProjectSettingsPatch, RuntimeState,
+    RuntimeStatusSnapshot, ThreadOverrides, ThreadRecord, ThreadStatus, WorkspaceSnapshot,
+    WorktreeScriptTrigger,
 };
 use crate::error::{AppError, AppResult};
 use crate::infrastructure::database::AppDatabase;
 use crate::services::git::{self, GitEnvironmentContext};
 use crate::services::worktree_scripts::{WorktreeScriptRequest, WorktreeScriptService};
 use crate::services::{prompt_naming, thread_titles, worktree_names};
+
+const CHAT_WORKSPACE_PROJECT_ID: &str = "skein-chat-workspace";
+const CHAT_WORKSPACE_TITLE: &str = "Chats";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectKind {
+    Repository,
+    ChatWorkspace,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +43,13 @@ pub struct AddProjectRequest {
 #[serde(rename_all = "camelCase")]
 pub struct CreateThreadRequest {
     pub environment_id: String,
+    pub title: Option<String>,
+    pub overrides: Option<ThreadOverrides>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateChatThreadRequest {
     pub title: Option<String>,
     pub overrides: Option<ThreadOverrides>,
 }
@@ -128,6 +145,7 @@ pub struct ArchiveThreadResult {
 pub struct WorkspaceService {
     database: AppDatabase,
     managed_worktrees_root: PathBuf,
+    chats_root: PathBuf,
     worktree_scripts: WorktreeScriptService,
 }
 
@@ -194,17 +212,84 @@ impl WorkspaceService {
     pub fn new(
         database: AppDatabase,
         managed_worktrees_root: PathBuf,
+        chats_root: PathBuf,
         worktree_scripts: WorktreeScriptService,
     ) -> Self {
         Self {
             database,
             managed_worktrees_root,
+            chats_root,
             worktree_scripts,
         }
     }
 
     pub fn database_path(&self) -> PathBuf {
         self.database.path().to_path_buf()
+    }
+
+    fn ensure_chat_workspace(&self, connection: &rusqlite::Connection) -> AppResult<()> {
+        std::fs::create_dir_all(&self.chats_root)?;
+        let now = Utc::now();
+        let root_path = self.chats_root.to_string_lossy().to_string();
+        let settings_json = serde_json::to_string(&ProjectSettings::default())
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+
+        connection.execute(
+            "
+            INSERT INTO projects (
+              id, name, root_path, kind, managed_worktree_dir, settings_json, sort_order, sidebar_collapsed, created_at, updated_at, archived_at
+            )
+            VALUES (?1, ?2, ?3, ?4, NULL, ?5, -1, 0, ?6, ?6, NULL)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              root_path = excluded.root_path,
+              kind = excluded.kind,
+              archived_at = NULL,
+              updated_at = excluded.updated_at
+            WHERE projects.name <> excluded.name
+               OR projects.root_path <> excluded.root_path
+               OR projects.kind <> excluded.kind
+               OR projects.archived_at IS NOT NULL
+            ",
+            params![
+                CHAT_WORKSPACE_PROJECT_ID,
+                CHAT_WORKSPACE_TITLE,
+                root_path,
+                project_kind_value(ProjectKind::ChatWorkspace),
+                settings_json,
+                now,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    fn ensure_repository_project_with_connection(
+        &self,
+        connection: &rusqlite::Connection,
+        project_id: &str,
+    ) -> AppResult<()> {
+        validate_non_blank_id(project_id, "project")?;
+        let project_kind = connection
+            .query_row(
+                "
+                SELECT kind
+                FROM projects
+                WHERE id = ?1 AND archived_at IS NULL
+                ",
+                params![project_id],
+                |row| project_kind_from_str(&row.get::<_, String>(0)?),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::NotFound("Project not found.".to_string()))?;
+
+        if matches!(project_kind, ProjectKind::ChatWorkspace) {
+            return Err(AppError::Validation(
+                "Chat is managed by Skein and cannot be modified.".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 
     pub fn snapshot(
@@ -220,15 +305,20 @@ impl WorkspaceService {
         pull_requests: &HashMap<String, EnvironmentPullRequestSnapshot>,
     ) -> AppResult<WorkspaceSnapshot> {
         let connection = self.database.open()?;
+        self.ensure_chat_workspace(&connection)?;
         let settings = self.read_or_seed_settings(&connection)?;
         let runtime_map = runtime_statuses
             .into_iter()
             .map(|status| (status.environment_id.clone(), status))
             .collect::<HashMap<_, _>>();
 
-        let projects = self.read_projects(&connection, &runtime_map, pull_requests)?;
+        let (chat, projects) = self.read_projects(&connection, &runtime_map, pull_requests)?;
 
-        Ok(WorkspaceSnapshot { settings, projects })
+        Ok(WorkspaceSnapshot {
+            settings,
+            chat,
+            projects,
+        })
     }
 
     pub fn pull_request_watch_targets(&self) -> AppResult<Vec<PullRequestWatchTarget>> {
@@ -339,7 +429,13 @@ impl WorkspaceService {
         let transaction = connection.transaction()?;
         let existing_project_id = transaction
             .query_row(
-                "SELECT id FROM projects WHERE root_path = ?1 AND archived_at IS NULL",
+                "
+                SELECT id
+                FROM projects
+                WHERE root_path = ?1
+                  AND archived_at IS NULL
+                  AND kind = 'repository'
+                ",
                 params![root_path_string],
                 |row| row.get::<_, String>(0),
             )
@@ -357,14 +453,15 @@ impl WorkspaceService {
             transaction.execute(
                 "
                 INSERT INTO projects (
-                  id, name, root_path, managed_worktree_dir, settings_json, sort_order, sidebar_collapsed, created_at, updated_at, archived_at
+                  id, name, root_path, kind, managed_worktree_dir, settings_json, sort_order, sidebar_collapsed, created_at, updated_at, archived_at
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, NULL)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, NULL)
                 ",
                 params![
                     project_id,
                     project_name,
                     root_path_string,
+                    project_kind_value(ProjectKind::Repository),
                     managed_worktree_dir,
                     project_settings_json,
                     sort_order,
@@ -391,8 +488,13 @@ impl WorkspaceService {
 
     pub fn rename_project(&self, input: RenameProjectRequest) -> AppResult<ProjectRecord> {
         let connection = self.database.open()?;
+        self.ensure_repository_project_with_connection(&connection, &input.project_id)?;
         let affected = connection.execute(
-            "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3 AND archived_at IS NULL",
+            "
+            UPDATE projects
+            SET name = ?1, updated_at = ?2
+            WHERE id = ?3 AND archived_at IS NULL AND kind = 'repository'
+            ",
             params![input.name.trim(), Utc::now(), input.project_id],
         )?;
 
@@ -408,11 +510,16 @@ impl WorkspaceService {
         input: UpdateProjectSettingsRequest,
     ) -> AppResult<ProjectRecord> {
         let mut connection = self.database.open()?;
+        self.ensure_repository_project_with_connection(&connection, &input.project_id)?;
         let transaction = connection.transaction()?;
         let global_settings = self.read_or_seed_stored_settings(&transaction)?;
         let settings_json = transaction
             .query_row(
-                "SELECT settings_json FROM projects WHERE id = ?1 AND archived_at IS NULL",
+                "
+                SELECT settings_json
+                FROM projects
+                WHERE id = ?1 AND archived_at IS NULL AND kind = 'repository'
+                ",
                 params![input.project_id],
                 |row| row.get::<_, String>(0),
             )
@@ -429,7 +536,7 @@ impl WorkspaceService {
             "
             UPDATE projects
             SET settings_json = ?1, updated_at = ?2
-            WHERE id = ?3 AND archived_at IS NULL
+            WHERE id = ?3 AND archived_at IS NULL AND kind = 'repository'
             ",
             params![payload, Utc::now(), input.project_id],
         )?;
@@ -445,6 +552,11 @@ impl WorkspaceService {
         validate_non_blank_id(&input.environment_id, "environment")?;
         validate_non_blank_id(&input.action_id, "action")?;
         let metadata = self.project_action_environment_metadata(&input.environment_id)?;
+        if matches!(metadata.kind, EnvironmentKind::Chat) {
+            return Err(AppError::Validation(
+                "Chat does not expose project actions.".to_string(),
+            ));
+        }
         let action = metadata
             .project_settings
             .manual_actions
@@ -504,14 +616,14 @@ impl WorkspaceService {
         &self,
         input: SetProjectSidebarCollapsedRequest,
     ) -> AppResult<()> {
-        validate_non_blank_id(&input.project_id, "project")?;
         let connection = self.database.open()?;
+        self.ensure_repository_project_with_connection(&connection, &input.project_id)?;
         let collapsed = if input.collapsed { 1_i64 } else { 0_i64 };
         let affected = connection.execute(
             "
             UPDATE projects
             SET sidebar_collapsed = ?1
-            WHERE id = ?2 AND archived_at IS NULL
+            WHERE id = ?2 AND archived_at IS NULL AND kind = 'repository'
             ",
             params![collapsed, input.project_id],
         )?;
@@ -549,7 +661,7 @@ impl WorkspaceService {
                 "
                 SELECT managed_worktree_dir
                 FROM projects
-                WHERE id = ?1 AND archived_at IS NULL
+                WHERE id = ?1 AND archived_at IS NULL AND kind = 'repository'
                 ",
                 params![project_id],
                 |row| row.get::<_, Option<String>>(0),
@@ -558,7 +670,7 @@ impl WorkspaceService {
             .ok_or_else(|| AppError::NotFound("Project not found.".to_string()))?;
 
         let affected = connection.execute(
-            "DELETE FROM projects WHERE id = ?1 AND archived_at IS NULL",
+            "DELETE FROM projects WHERE id = ?1 AND archived_at IS NULL AND kind = 'repository'",
             params![project_id],
         )?;
 
@@ -590,6 +702,12 @@ impl WorkspaceService {
     ) -> AppResult<ManagedWorktreeCreateResult> {
         let project_id = input.project_id.as_str();
         let project = self.project_metadata(project_id)?;
+        if matches!(project.kind, ProjectKind::ChatWorkspace) {
+            return Err(AppError::Validation(
+                "Chats cannot create worktrees until they are moved into a project draft."
+                    .to_string(),
+            ));
+        }
 
         let base_branch = if let Some(provided) = input.base_branch.as_deref() {
             let trimmed = provided.trim();
@@ -725,6 +843,114 @@ impl WorkspaceService {
         })
     }
 
+    pub fn create_chat_thread(
+        &self,
+        input: CreateChatThreadRequest,
+    ) -> AppResult<ChatThreadCreateResult> {
+        std::fs::create_dir_all(&self.chats_root)?;
+        let environment_id = Uuid::now_v7().to_string();
+        let environment_path = self.chats_root.join(&environment_id);
+        std::fs::create_dir_all(&environment_path)?;
+
+        let thread_title = input
+            .title
+            .unwrap_or_else(|| "Thread 1".to_string())
+            .trim()
+            .to_string();
+        let overrides = input.overrides.unwrap_or_default();
+        let overrides_json = serde_json::to_string(&overrides)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        let thread_id = Uuid::now_v7().to_string();
+        let now = Utc::now();
+
+        let mut connection = self.database.open()?;
+        let transaction_result = (|| -> AppResult<()> {
+            let transaction = connection.transaction()?;
+            self.ensure_chat_workspace(&transaction)?;
+            let sort_order = next_environment_sort_order(&transaction, CHAT_WORKSPACE_PROJECT_ID)?;
+
+            transaction.execute(
+                "
+                INSERT INTO environments (
+                  id, project_id, name, kind, path, git_branch, base_branch, is_default, sort_order, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, 0, ?6, ?7, ?7)
+                ",
+                params![
+                    environment_id,
+                    CHAT_WORKSPACE_PROJECT_ID,
+                    "Chat",
+                    environment_kind_value(EnvironmentKind::Chat),
+                    environment_path.to_string_lossy().to_string(),
+                    sort_order,
+                    now,
+                ],
+            )?;
+
+            transaction.execute(
+                "
+                INSERT INTO threads (
+                  id, environment_id, title, status, codex_thread_id, overrides_json, created_at, updated_at, archived_at
+                ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?6, NULL)
+                ",
+                params![
+                    thread_id,
+                    environment_id,
+                    thread_title,
+                    thread_status_value(ThreadStatus::Active),
+                    overrides_json,
+                    now,
+                ],
+            )?;
+
+            transaction.commit()?;
+            Ok(())
+        })();
+
+        if let Err(error) = transaction_result {
+            let _ = std::fs::remove_dir_all(&environment_path);
+            return Err(error);
+        }
+
+        let thread = ThreadRecord {
+            id: thread_id,
+            environment_id: environment_id.clone(),
+            title: thread_title,
+            status: ThreadStatus::Active,
+            codex_thread_id: None,
+            overrides,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+        };
+        let environment = EnvironmentRecord {
+            id: environment_id.clone(),
+            project_id: CHAT_WORKSPACE_PROJECT_ID.to_string(),
+            name: "Chat".to_string(),
+            kind: EnvironmentKind::Chat,
+            path: environment_path.to_string_lossy().to_string(),
+            git_branch: None,
+            base_branch: None,
+            is_default: false,
+            pull_request: None,
+            created_at: now,
+            updated_at: now,
+            threads: vec![thread.clone()],
+            runtime: RuntimeStatusSnapshot {
+                environment_id,
+                state: RuntimeState::Stopped,
+                pid: None,
+                binary_path: None,
+                started_at: None,
+                last_exit_code: None,
+            },
+        };
+
+        Ok(ChatThreadCreateResult {
+            environment,
+            thread,
+        })
+    }
+
     pub fn delete_worktree_environment(&self, environment_id: &str) -> AppResult<()> {
         let metadata = self.deletable_worktree_environment_metadata(environment_id)?;
         if matches!(metadata.kind, EnvironmentKind::ManagedWorktree) {
@@ -779,17 +1005,21 @@ impl WorkspaceService {
 
     pub fn create_thread(&self, input: CreateThreadRequest) -> AppResult<ThreadRecord> {
         let connection = self.database.open()?;
-        let environment_exists = connection
+        let environment_kind = connection
             .query_row(
-                "SELECT 1 FROM environments WHERE id = ?1",
+                "SELECT kind FROM environments WHERE id = ?1",
                 params![input.environment_id],
-                |_| Ok(()),
+                |row| environment_kind_from_str(&row.get::<_, String>(0)?),
             )
-            .optional()?
-            .is_some();
+            .optional()?;
 
-        if !environment_exists {
+        let Some(environment_kind) = environment_kind else {
             return Err(AppError::NotFound("Environment not found.".to_string()));
+        };
+        if matches!(environment_kind, EnvironmentKind::Chat) {
+            return Err(AppError::Validation(
+                "Chat environments only allow the initial chat thread.".to_string(),
+            ));
         }
 
         let count: i64 = connection.query_row(
@@ -889,6 +1119,10 @@ impl WorkspaceService {
         if !matches!(metadata.kind, EnvironmentKind::ManagedWorktree) {
             return Ok(None);
         }
+        let current_branch_name = metadata
+            .branch_name
+            .clone()
+            .ok_or_else(|| AppError::Runtime("Managed worktree branch is missing.".to_string()))?;
         if !prompt_naming::is_auto_generated_worktree_name(&metadata.environment_name) {
             return Ok(None);
         }
@@ -913,9 +1147,9 @@ impl WorkspaceService {
         let next_branch_name =
             prompt_naming::ensure_unique_branch_slug(&suggestion.branch_slug, |candidate| {
                 let branch_taken =
-                    candidate != metadata.branch_name && branch_ref_exists(&branch_refs, candidate);
-                let path_taken = candidate != metadata.branch_name
-                    && environment_parent.join(candidate).exists();
+                    candidate != current_branch_name && branch_ref_exists(&branch_refs, candidate);
+                let path_taken =
+                    candidate != current_branch_name && environment_parent.join(candidate).exists();
                 branch_taken || path_taken
             });
         let next_environment_path = environment_parent.join(&next_branch_name);
@@ -931,7 +1165,7 @@ impl WorkspaceService {
                 .filter(|value| value != &metadata.thread_title);
 
         let environment_renamed = next_environment_name != metadata.environment_name
-            || next_branch_name != metadata.branch_name
+            || next_branch_name != current_branch_name
             || next_environment_path != metadata.environment_path;
         let thread_renamed = next_thread_title.is_some();
         if !environment_renamed && !thread_renamed {
@@ -941,10 +1175,10 @@ impl WorkspaceService {
         let mut branch_renamed = false;
         let mut worktree_moved = false;
 
-        if next_branch_name != metadata.branch_name {
+        if next_branch_name != current_branch_name {
             git::rename_branch(
                 &metadata.project_root,
-                &metadata.branch_name,
+                &current_branch_name,
                 &next_branch_name,
             )?;
             branch_renamed = true;
@@ -960,7 +1194,7 @@ impl WorkspaceService {
                     rollback_branch_rename(
                         &metadata.project_root,
                         &next_branch_name,
-                        &metadata.branch_name,
+                        &current_branch_name,
                     );
                 }
                 return Err(error);
@@ -1016,7 +1250,7 @@ impl WorkspaceService {
                 rollback_branch_rename(
                     &metadata.project_root,
                     &next_branch_name,
-                    &metadata.branch_name,
+                    &current_branch_name,
                 );
             }
             return Err(error);
@@ -1159,14 +1393,24 @@ impl WorkspaceService {
         target_id: Option<&str>,
     ) -> AppResult<EnvironmentOpenContext> {
         let connection = self.database.open()?;
-        let environment_path = connection
+        let (environment_path, environment_kind) = connection
             .query_row(
-                "SELECT path FROM environments WHERE id = ?1",
+                "SELECT path, kind FROM environments WHERE id = ?1",
                 params![environment_id],
-                |row| row.get::<_, String>(0),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        environment_kind_from_str(&row.get::<_, String>(1)?)?,
+                    ))
+                },
             )
             .optional()?
             .ok_or_else(|| AppError::NotFound("Environment not found.".to_string()))?;
+        if matches!(environment_kind, EnvironmentKind::Chat) {
+            return Err(AppError::Validation(
+                "Chat does not expose an open-environment action.".to_string(),
+            ));
+        }
         let settings = self.read_or_seed_settings(&connection)?;
         let target = settings
             .resolve_open_target(target_id)
@@ -1184,28 +1428,42 @@ impl WorkspaceService {
     ) -> AppResult<GitEnvironmentContext> {
         let connection = self.database.open()?;
         let settings = self.read_or_seed_settings(&connection)?;
-
-        connection
-            .query_row(
-                "
-                SELECT id, path, git_branch, base_branch
+        let (environment_id, environment_path, current_branch, base_branch, environment_kind) =
+            connection
+                .query_row(
+                    "
+                SELECT id, path, git_branch, base_branch, kind
                 FROM environments
                 WHERE id = ?1
                 ",
-                params![environment_id],
-                |row| {
-                    Ok(GitEnvironmentContext {
-                        environment_id: row.get(0)?,
-                        environment_path: row.get(1)?,
-                        current_branch: row.get(2)?,
-                        base_branch: row.get(3)?,
-                        codex_binary_path: settings.codex_binary_path.clone(),
-                        default_model: settings.default_model.clone(),
-                    })
-                },
-            )
-            .optional()?
-            .ok_or_else(|| AppError::NotFound("Environment not found.".to_string()))
+                    params![environment_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            environment_kind_from_str(&row.get::<_, String>(4)?)?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or_else(|| AppError::NotFound("Environment not found.".to_string()))?;
+
+        if matches!(environment_kind, EnvironmentKind::Chat) {
+            return Err(AppError::Validation(
+                "Chat environments do not expose git context.".to_string(),
+            ));
+        }
+
+        Ok(GitEnvironmentContext {
+            environment_id,
+            environment_path,
+            current_branch,
+            base_branch,
+            codex_binary_path: settings.codex_binary_path.clone(),
+            default_model: settings.default_model.clone(),
+        })
     }
 
     pub fn thread_runtime_context(&self, thread_id: &str) -> AppResult<ThreadRuntimeContext> {
@@ -1405,20 +1663,21 @@ impl WorkspaceService {
         runtime_status: RuntimeStatusSnapshot,
     ) -> AppResult<EnvironmentRecord> {
         let snapshot = self.snapshot(vec![runtime_status])?;
-        snapshot
-            .projects
+        let WorkspaceSnapshot { projects, chat, .. } = snapshot;
+        projects
             .into_iter()
             .flat_map(|project| project.environments.into_iter())
+            .chain(chat.environments)
             .find(|environment| environment.id == environment_id)
             .ok_or_else(|| AppError::NotFound("Environment not found.".to_string()))
     }
 
     fn thread_by_id(&self, thread_id: &str) -> AppResult<ThreadRecord> {
-        let snapshot = self.snapshot(Vec::new())?;
-        snapshot
-            .projects
+        let WorkspaceSnapshot { projects, chat, .. } = self.snapshot(Vec::new())?;
+        projects
             .into_iter()
             .flat_map(|project| project.environments.into_iter())
+            .chain(chat.environments)
             .flat_map(|environment| environment.threads.into_iter())
             .find(|thread| thread.id == thread_id)
             .ok_or_else(|| AppError::NotFound("Thread not found.".to_string()))
@@ -1623,18 +1882,7 @@ impl WorkspaceService {
         connection: &rusqlite::Connection,
         project_id: &str,
     ) -> AppResult<()> {
-        let project_exists = connection
-            .query_row(
-                "SELECT 1 FROM projects WHERE id = ?1 AND archived_at IS NULL",
-                params![project_id],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some();
-
-        if !project_exists {
-            return Err(AppError::NotFound("Project not found.".to_string()));
-        }
+        self.ensure_repository_project_with_connection(connection, project_id)?;
 
         if self.project_has_managed_worktrees(connection, project_id)? {
             return Err(AppError::Validation(
@@ -1650,16 +1898,17 @@ impl WorkspaceService {
         connection
             .query_row(
                 "
-                SELECT name, root_path, settings_json
+                SELECT kind, name, root_path, settings_json
                 FROM projects
                 WHERE id = ?1 AND archived_at IS NULL
                 ",
                 params![project_id],
                 |row| {
                     Ok(ProjectMetadata {
-                        name: row.get(0)?,
-                        root_path: PathBuf::from(row.get::<_, String>(1)?),
-                        settings: project_settings_from_json(&row.get::<_, String>(2)?, 2)?,
+                        kind: project_kind_from_str(&row.get::<_, String>(0)?)?,
+                        name: row.get(1)?,
+                        root_path: PathBuf::from(row.get::<_, String>(2)?),
+                        settings: project_settings_from_json(&row.get::<_, String>(3)?, 3)?,
                     })
                 },
             )
@@ -1813,6 +2062,11 @@ impl WorkspaceService {
 
     pub fn list_project_branches(&self, project_id: &str) -> AppResult<Vec<String>> {
         let project = self.project_metadata(project_id)?;
+        if matches!(project.kind, ProjectKind::ChatWorkspace) {
+            return Err(AppError::Validation(
+                "Chat does not expose project branches.".to_string(),
+            ));
+        }
         let mut branches = git::list_local_branches(&project.root_path)?;
         branches.sort();
         branches.dedup();
@@ -1887,6 +2141,11 @@ impl WorkspaceService {
         environment_id: &str,
     ) -> AppResult<WorktreeEnvironmentMetadata> {
         let metadata = self.worktree_environment_metadata(environment_id)?;
+        if matches!(metadata.kind, EnvironmentKind::Chat) {
+            return Err(AppError::Validation(
+                "Chat environments cannot be deleted directly.".to_string(),
+            ));
+        }
         if matches!(metadata.kind, EnvironmentKind::Local) {
             return Err(AppError::Validation(
                 "The local environment cannot be deleted.".to_string(),
@@ -1929,11 +2188,7 @@ impl WorkspaceService {
                         environment_name: row.get(4)?,
                         kind: environment_kind_from_str(&row.get::<_, String>(5)?)?,
                         environment_path: PathBuf::from(row.get::<_, String>(6)?),
-                        branch_name: row.get::<_, Option<String>>(7)?.ok_or_else(|| {
-                            rusqlite::Error::InvalidParameterName(
-                                "Environment branch is missing.".to_string(),
-                            )
-                        })?,
+                        branch_name: row.get(7)?,
                         project_root: PathBuf::from(row.get::<_, String>(8)?),
                         first_thread_id: String::new(),
                         started_thread_count: 0,
@@ -2005,33 +2260,58 @@ impl WorkspaceService {
         connection: &rusqlite::Connection,
         runtime_map: &HashMap<String, RuntimeStatusSnapshot>,
         pull_requests: &HashMap<String, EnvironmentPullRequestSnapshot>,
-    ) -> AppResult<Vec<ProjectRecord>> {
+    ) -> AppResult<(ChatWorkspaceSnapshot, Vec<ProjectRecord>)> {
         let mut project_statement = connection.prepare(
             "
-            SELECT id, name, root_path, settings_json, sidebar_collapsed, created_at, updated_at
+            SELECT id, name, root_path, kind, settings_json, sidebar_collapsed, created_at, updated_at
             FROM projects
             WHERE archived_at IS NULL
-            ORDER BY sort_order ASC, id ASC
+            ORDER BY
+              CASE kind WHEN 'chatWorkspace' THEN 0 ELSE 1 END,
+              sort_order ASC,
+              id ASC
             ",
         )?;
         let project_rows = project_statement.query_map([], |row| {
-            Ok(ProjectRecord {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                root_path: row.get(2)?,
-                settings: project_settings_from_json(&row.get::<_, String>(3)?, 3)?,
-                sidebar_collapsed: row.get::<_, i64>(4)? == 1,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-                environments: Vec::new(),
+            Ok(ProjectSnapshotRow {
+                kind: project_kind_from_str(&row.get::<_, String>(3)?)?,
+                project: ProjectRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    root_path: row.get(2)?,
+                    settings: project_settings_from_json(&row.get::<_, String>(4)?, 4)?,
+                    sidebar_collapsed: row.get::<_, i64>(5)? == 1,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                    environments: Vec::new(),
+                },
             })
         })?;
 
-        let mut projects = project_rows.collect::<Result<Vec<_>, _>>()?;
+        let mut projects = Vec::new();
+        let mut chat = None;
         let mut project_index = HashMap::new();
-        for (index, project) in projects.iter().enumerate() {
-            project_index.insert(project.id.clone(), index);
+        for row in project_rows.collect::<Result<Vec<_>, _>>()? {
+            match row.kind {
+                ProjectKind::Repository => {
+                    let index = projects.len();
+                    project_index.insert(row.project.id.clone(), index);
+                    projects.push(row.project);
+                }
+                ProjectKind::ChatWorkspace => {
+                    chat = Some(ChatWorkspaceSnapshot {
+                        project_id: row.project.id,
+                        title: row.project.name,
+                        root_path: row.project.root_path,
+                        environments: Vec::new(),
+                    });
+                }
+            }
         }
+        let chat_project_id = chat
+            .as_ref()
+            .map(|workspace| workspace.project_id.clone())
+            .ok_or_else(|| AppError::Runtime("Chat workspace is missing.".to_string()))?;
 
         let mut thread_map = self.read_threads(connection)?;
         let mut environment_statement = connection.prepare(
@@ -2070,12 +2350,21 @@ impl WorkspaceService {
         })?;
 
         for environment in environment_rows.collect::<Result<Vec<_>, _>>()? {
+            if environment.project_id == chat_project_id {
+                if let Some(chat_workspace) = chat.as_mut() {
+                    chat_workspace.environments.push(environment);
+                }
+                continue;
+            }
             if let Some(index) = project_index.get(&environment.project_id) {
                 projects[*index].environments.push(environment);
             }
         }
 
-        Ok(projects)
+        Ok((
+            chat.ok_or_else(|| AppError::Runtime("Chat workspace is missing.".to_string()))?,
+            projects,
+        ))
     }
 
     fn read_threads(
@@ -2191,9 +2480,16 @@ impl WorkspaceService {
 
 #[derive(Debug)]
 struct ProjectMetadata {
+    kind: ProjectKind,
     name: String,
     root_path: PathBuf,
     settings: ProjectSettings,
+}
+
+#[derive(Debug)]
+struct ProjectSnapshotRow {
+    kind: ProjectKind,
+    project: ProjectRecord,
 }
 
 #[derive(Debug)]
@@ -2237,7 +2533,7 @@ struct FirstPromptNamingMetadata {
     environment_name: String,
     kind: EnvironmentKind,
     environment_path: PathBuf,
-    branch_name: String,
+    branch_name: Option<String>,
     project_root: PathBuf,
     first_thread_id: String,
     started_thread_count: i64,
@@ -2321,6 +2617,7 @@ fn active_project_ids(connection: &rusqlite::Connection) -> AppResult<Vec<String
         SELECT id
         FROM projects
         WHERE archived_at IS NULL
+          AND kind = 'repository'
         ORDER BY sort_order ASC, id ASC
         ",
     )?;
@@ -2335,6 +2632,7 @@ fn next_project_sort_order(connection: &rusqlite::Connection) -> AppResult<i64> 
             SELECT COALESCE(MAX(sort_order), -1) + 1
             FROM projects
             WHERE archived_at IS NULL
+              AND kind = 'repository'
             ",
             [],
             |row| row.get(0),
@@ -2384,6 +2682,7 @@ fn environment_kind_value(kind: EnvironmentKind) -> &'static str {
         EnvironmentKind::Local => "local",
         EnvironmentKind::ManagedWorktree => "managedWorktree",
         EnvironmentKind::PermanentWorktree => "permanentWorktree",
+        EnvironmentKind::Chat => "chat",
     }
 }
 
@@ -2392,6 +2691,22 @@ fn environment_kind_from_str(value: &str) -> Result<EnvironmentKind, rusqlite::E
         "local" => Ok(EnvironmentKind::Local),
         "managedWorktree" => Ok(EnvironmentKind::ManagedWorktree),
         "permanentWorktree" => Ok(EnvironmentKind::PermanentWorktree),
+        "chat" => Ok(EnvironmentKind::Chat),
+        other => Err(rusqlite::Error::InvalidParameterName(other.to_string())),
+    }
+}
+
+fn project_kind_value(kind: ProjectKind) -> &'static str {
+    match kind {
+        ProjectKind::Repository => "repository",
+        ProjectKind::ChatWorkspace => "chatWorkspace",
+    }
+}
+
+fn project_kind_from_str(value: &str) -> Result<ProjectKind, rusqlite::Error> {
+    match value {
+        "repository" => Ok(ProjectKind::Repository),
+        "chatWorkspace" => Ok(ProjectKind::ChatWorkspace),
         other => Err(rusqlite::Error::InvalidParameterName(other.to_string())),
     }
 }
@@ -2466,9 +2781,9 @@ mod tests {
 
     use super::{
         AddProjectRequest, ArchiveThreadRequest, AutoRenameFirstPromptRequest,
-        CreateManagedWorktreeRequest, CreateThreadRequest, ReorderProjectsRequest,
-        RunProjectActionRequest, SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest,
-        WorkspaceService,
+        CreateChatThreadRequest, CreateManagedWorktreeRequest, CreateThreadRequest,
+        ReorderProjectsRequest, RunProjectActionRequest, SetProjectSidebarCollapsedRequest,
+        UpdateProjectSettingsRequest, WorkspaceService, CHAT_WORKSPACE_PROJECT_ID,
     };
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
@@ -2481,7 +2796,7 @@ mod tests {
     };
     use crate::domain::shortcuts::{ShortcutSettings, ShortcutSettingsPatch};
     use crate::domain::workspace::{
-        EnvironmentPullRequestSnapshot, ProjectActionIcon, ProjectManualAction,
+        EnvironmentKind, EnvironmentPullRequestSnapshot, ProjectActionIcon, ProjectManualAction,
         ProjectSettingsPatch, PullRequestState, ThreadStatus,
     };
     use crate::services::git;
@@ -3077,6 +3392,76 @@ mod tests {
         assert_eq!(
             result.runtime_environment_to_stop.as_deref(),
             Some(environment_id.as_str())
+        );
+    }
+
+    #[test]
+    fn create_chat_thread_returns_the_created_chat_environment_and_thread() {
+        let harness = WorkspaceHarness::new().expect("harness");
+
+        let result = harness
+            .service
+            .create_chat_thread(CreateChatThreadRequest {
+                title: Some("Bonjour".to_string()),
+                overrides: None,
+            })
+            .expect("chat thread should be created");
+
+        assert_eq!(result.thread.environment_id, result.environment.id);
+        assert_eq!(result.thread.title, "Bonjour");
+        assert!(matches!(result.environment.kind, EnvironmentKind::Chat));
+        assert_eq!(result.environment.project_id, CHAT_WORKSPACE_PROJECT_ID);
+        assert_eq!(
+            Path::new(&result.environment.path),
+            harness.temp_root.join("chats").join(&result.environment.id)
+        );
+    }
+
+    #[test]
+    fn first_prompt_auto_rename_skips_chat_threads() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let result = harness
+            .service
+            .create_chat_thread(CreateChatThreadRequest {
+                title: Some("Bonjour".to_string()),
+                overrides: None,
+            })
+            .expect("chat thread should be created");
+
+        let rename = harness
+            .service
+            .maybe_auto_rename_first_prompt_environment(AutoRenameFirstPromptRequest {
+                thread_id: result.thread.id,
+                message: "Salut, ca va ?".to_string(),
+                codex_binary_path: None,
+            })
+            .expect("chat threads should skip first-prompt auto rename");
+
+        assert!(rename.is_none());
+    }
+
+    #[test]
+    fn archive_chat_thread_returns_the_archived_thread() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let result = harness
+            .service
+            .create_chat_thread(CreateChatThreadRequest {
+                title: Some("Bonjour".to_string()),
+                overrides: None,
+            })
+            .expect("chat thread should be created");
+
+        let archived = harness
+            .service
+            .archive_thread(ArchiveThreadRequest {
+                thread_id: result.thread.id,
+            })
+            .expect("chat thread should archive");
+
+        assert!(matches!(archived.thread.status, ThreadStatus::Archived));
+        assert_eq!(
+            archived.runtime_environment_to_stop.as_deref(),
+            Some(result.environment.id.as_str())
         );
     }
 
@@ -4483,9 +4868,12 @@ mod tests {
             )?;
             let managed_root = temp_root.join("managed-worktrees");
             fs::create_dir_all(&managed_root)?;
+            let chats_root = temp_root.join("chats");
+            fs::create_dir_all(&chats_root)?;
             let service = WorkspaceService::new(
                 database,
                 managed_root.clone(),
+                chats_root,
                 WorktreeScriptService::for_test(temp_root.clone()),
             );
 
