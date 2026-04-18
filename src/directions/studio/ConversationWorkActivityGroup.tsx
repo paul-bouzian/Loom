@@ -30,7 +30,7 @@ export function ConversationWorkActivityGroup({ group }: Props) {
       if (body) {
         body.scrollTop = body.scrollHeight;
       }
-      sectionRef.current?.scrollIntoView?.({ block: "nearest" });
+      sectionRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [expanded]);
@@ -61,6 +61,7 @@ export function ConversationWorkActivityGroup({ group }: Props) {
       <div
         className={`tx-work-activity__body-wrap ${expanded ? "tx-work-activity__body-wrap--open" : ""}`}
         aria-hidden={!expanded}
+        inert={!expanded || undefined}
       >
         <div ref={bodyRef} className="tx-work-activity__body">
           {group.taskPlan ? <ConversationTaskCard taskPlan={group.taskPlan} compact /> : null}
