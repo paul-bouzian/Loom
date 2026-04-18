@@ -306,7 +306,7 @@ export async function archiveThreadWithConfirmation(threadId: string) {
   }
 
   const archivedEnvironmentId = latestTarget.environment.id;
-  const shouldDeleteWorktree =
+  const wantsWorktreeDeletion =
     willEmptyWorktree &&
     isLastActiveWorktreeThread(latestTarget.environment, threadId);
 
@@ -314,8 +314,16 @@ export async function archiveThreadWithConfirmation(threadId: string) {
   useWorkspaceStore.getState().removeThread(latestTarget.thread.id);
   const refreshed = await useWorkspaceStore.getState().refreshSnapshot();
 
-  if (refreshed && shouldDeleteWorktree) {
-    await deleteEmptyWorktreeQuietly(archivedEnvironmentId);
+  if (refreshed && wantsWorktreeDeletion) {
+    // Re-check against the refreshed snapshot: a concurrent thread creation
+    // could have repopulated the environment while we awaited the archive.
+    const refreshedEnv = findEnvironmentInWorkspace(
+      useWorkspaceStore.getState().snapshot,
+      archivedEnvironmentId,
+    );
+    if (refreshedEnv && environmentHasNoActiveThreads(refreshedEnv)) {
+      await deleteEmptyWorktreeQuietly(archivedEnvironmentId);
+    }
   }
 
   return refreshed;
@@ -330,6 +338,25 @@ function isLastActiveWorktreeThread(
     (thread) => thread.status === "active" && thread.id !== archivedThreadId,
   );
   return remainingActive.length === 0;
+}
+
+function environmentHasNoActiveThreads(environment: EnvironmentRecord) {
+  if (environment.kind === "local" || environment.kind === "chat") return false;
+  return !environment.threads.some((thread) => thread.status === "active");
+}
+
+function findEnvironmentInWorkspace(
+  snapshot: WorkspaceSnapshot | null,
+  environmentId: string,
+): EnvironmentRecord | null {
+  if (!snapshot) return null;
+  for (const project of snapshot.projects) {
+    const match = project.environments.find(
+      (environment) => environment.id === environmentId,
+    );
+    if (match) return match;
+  }
+  return null;
 }
 
 async function deleteEmptyWorktreeQuietly(environmentId: string) {
