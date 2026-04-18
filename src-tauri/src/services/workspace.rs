@@ -854,8 +854,10 @@ impl WorkspaceService {
 
         let thread_title = input
             .title
-            .unwrap_or_else(|| "Thread 1".to_string())
-            .trim()
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Thread 1")
             .to_string();
         let overrides = input.overrides.unwrap_or_default();
         let overrides_json = serde_json::to_string(&overrides)
@@ -3415,6 +3417,21 @@ mod tests {
             Path::new(&result.environment.path),
             harness.temp_root.join("chats").join(&result.environment.id)
         );
+    }
+
+    #[test]
+    fn create_chat_thread_normalizes_blank_titles() {
+        let harness = WorkspaceHarness::new().expect("harness");
+
+        let result = harness
+            .service
+            .create_chat_thread(CreateChatThreadRequest {
+                title: Some("   ".to_string()),
+                overrides: None,
+            })
+            .expect("chat thread should be created");
+
+        assert_eq!(result.thread.title, "Thread 1");
     }
 
     #[test]

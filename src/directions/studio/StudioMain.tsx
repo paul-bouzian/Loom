@@ -10,7 +10,6 @@ import {
   selectEffectiveEnvironment,
   selectHasAnyPane,
   selectLayout,
-  selectSelectedEnvironment,
   selectSelectedProject,
   selectSettings,
   useWorkspaceStore,
@@ -66,7 +65,6 @@ export function StudioMain({
   onToggleBrowser,
 }: Props) {
   const selectedProject = useWorkspaceStore(selectSelectedProject);
-  const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
   const effectiveEnvironment = useWorkspaceStore(selectEffectiveEnvironment);
   const settings = useWorkspaceStore(selectSettings);
   const layout = useWorkspaceStore(selectLayout);
@@ -74,7 +72,9 @@ export function StudioMain({
   const setRowRatio = useWorkspaceStore((state) => state.setRowRatio);
   const setColRatio = useWorkspaceStore((state) => state.setColRatio);
   const projectAffordancesEnabled =
-    selectedEnvironment !== null && selectedEnvironment.kind !== "chat";
+    selectedProject !== null &&
+    effectiveEnvironment !== null &&
+    effectiveEnvironment.kind !== "chat";
   const terminalEnabled =
     effectiveEnvironment !== null && effectiveEnvironment.kind !== "chat";
   const inspectorEnabled =
@@ -121,7 +121,7 @@ export function StudioMain({
         <div className="studio-main__toolbar-actions">
           <EnvironmentActionControl
             environmentId={
-              projectAffordancesEnabled ? (selectedEnvironment?.id ?? null) : null
+              projectAffordancesEnabled ? (effectiveEnvironment?.id ?? null) : null
             }
             projectId={
               projectAffordancesEnabled ? (selectedProject?.id ?? null) : null
@@ -135,7 +135,7 @@ export function StudioMain({
           />
           <OpenEnvironmentControl
             environmentId={
-              projectAffordancesEnabled ? (selectedEnvironment?.id ?? null) : null
+              projectAffordancesEnabled ? (effectiveEnvironment?.id ?? null) : null
             }
             settings={settings}
           />

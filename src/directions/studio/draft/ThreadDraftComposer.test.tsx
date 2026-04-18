@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as bridge from "../../../lib/bridge";
@@ -15,6 +15,11 @@ import {
   makeWorkspaceSnapshot,
 } from "../../../test/fixtures/conversation";
 import { ThreadDraftComposer } from "./ThreadDraftComposer";
+
+let latestEnvironmentSelectorProps: {
+  value: unknown;
+  onChange: (value: unknown) => void;
+} | null = null;
 
 vi.mock("../../../lib/bridge", () => ({
   getEnvironmentCapabilities: vi.fn(),
@@ -34,7 +39,13 @@ vi.mock("../composer/InlineComposer", () => ({
 }));
 
 vi.mock("./EnvironmentSelector", () => ({
-  EnvironmentSelector: () => <div data-testid="env-selector" />,
+  EnvironmentSelector: (props: {
+    value: unknown;
+    onChange: (value: unknown) => void;
+  }) => {
+    latestEnvironmentSelectorProps = props;
+    return <div data-testid="env-selector" />;
+  },
 }));
 
 vi.mock("../studioActions", () => ({
@@ -55,6 +66,7 @@ function resetConversationState() {
 describe("ThreadDraftComposer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    latestEnvironmentSelectorProps = null;
     resetConversationState();
     mockedBridge.listProjectBranches.mockResolvedValue(["main"]);
     mockedBridge.getEnvironmentCapabilities.mockResolvedValue({
@@ -114,6 +126,49 @@ describe("ThreadDraftComposer", () => {
       expect(screen.getByTestId("inline-composer")).toHaveTextContent(
         "gpt-5.4,gpt-5.4-mini",
       );
+    });
+  });
+
+  it("preserves the previous project target when switching chat mode back to a project", async () => {
+    const { rerender } = render(
+      <ThreadDraftComposer
+        draft={{ kind: "project", projectId: "project-1" }}
+        paneId="topLeft"
+      />,
+    );
+
+    expect(latestEnvironmentSelectorProps).not.toBeNull();
+
+    act(() => {
+      latestEnvironmentSelectorProps?.onChange({
+        kind: "project",
+        projectId: "project-1",
+        target: { kind: "new", baseBranch: "main", name: "feature-chat" },
+      });
+    });
+
+    rerender(<ThreadDraftComposer draft={{ kind: "chat" }} paneId="topLeft" />);
+
+    act(() => {
+      latestEnvironmentSelectorProps?.onChange({
+        kind: "project",
+        projectId: "project-1",
+        target: { kind: "local" },
+      });
+    });
+
+    rerender(
+      <ThreadDraftComposer
+        draft={{ kind: "project", projectId: "project-1" }}
+        paneId="topLeft"
+      />,
+    );
+
+    expect(latestEnvironmentSelectorProps).not.toBeNull();
+    expect(latestEnvironmentSelectorProps?.value).toEqual({
+      kind: "project",
+      projectId: "project-1",
+      target: { kind: "new", baseBranch: "main", name: "feature-chat" },
     });
   });
 });

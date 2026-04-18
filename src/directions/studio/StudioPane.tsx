@@ -12,7 +12,6 @@ import {
   type SlotKey,
 } from "../../stores/workspace-store";
 import { ThreadDraftComposer } from "./draft/ThreadDraftComposer";
-import { StudioWelcome } from "./StudioWelcome";
 import { ThreadConversation } from "./ThreadConversation";
 
 type Props = {
@@ -59,8 +58,6 @@ export function StudioPane({
         paneId={paneId}
       />
     );
-  } else if (projects.length === 0) {
-    content = <StudioWelcome />;
   } else {
     content = <OverviewView projects={projects} />;
   }
@@ -111,9 +108,6 @@ export function StudioPane({
 
 export function DefaultStudioView() {
   const projects = useWorkspaceStore(selectProjects);
-  if (projects.length === 0) {
-    return <StudioWelcome />;
-  }
   return <OverviewView projects={projects} />;
 }
 

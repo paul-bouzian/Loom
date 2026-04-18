@@ -268,7 +268,12 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
     setLastProjectId(next.projectId);
     setProjectSelections((current) => ({
       ...current,
-      [next.projectId]: next.target,
+      [next.projectId]:
+        draft.kind === "chat" &&
+        next.target.kind === "local" &&
+        current[next.projectId]
+          ? current[next.projectId]!
+          : next.target,
     }));
     updateThreadDraftTarget(paneId, {
       kind: "project",
