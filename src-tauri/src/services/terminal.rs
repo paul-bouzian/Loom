@@ -204,7 +204,7 @@ fn shell_family_for_shell(shell: &str) -> ShellFamily {
         .to_ascii_lowercase();
     match shell_name.as_str() {
         "fish" => ShellFamily::Fish,
-        "nu" => ShellFamily::Nu,
+        "nu" | "nu.exe" => ShellFamily::Nu,
         "pwsh" | "powershell" | "powershell.exe" | "pwsh.exe" => ShellFamily::PowerShell,
         _ => ShellFamily::Posix,
     }
@@ -298,6 +298,7 @@ impl TerminalService {
                     "Project action is still running.".to_string(),
                 ));
             }
+            manual_action.output_filter = ManualActionOutputFilter::default();
             let shell_family = manual_action.shell_family;
             Self::set_manual_action_state(
                 app,
@@ -312,6 +313,23 @@ impl TerminalService {
         let wrapped_script = project_action_wrapper(shell_family, script);
         let encoded = B64.encode(wrapped_script);
         if let Err(error) = self.write(pty_id, &encoded) {
+            if let Some(manual_action) = session.manual_action.as_ref() {
+                let mut manual_action = manual_action.lock().unwrap();
+                Self::set_manual_action_state(
+                    app,
+                    pty_id,
+                    &mut manual_action,
+                    ProjectActionRunState::Exited,
+                    None,
+                );
+            }
+            let _ = app.emit(
+                TERMINAL_EXIT_EVENT_NAME,
+                TerminalExitPayload {
+                    pty_id: pty_id.to_string(),
+                    exit_code: None,
+                },
+            );
             let _ = self.kill(pty_id);
             return Err(error);
         }
@@ -913,6 +931,10 @@ mod tests {
         );
         assert_eq!(
             shell_family_for_shell("/opt/homebrew/bin/nu"),
+            ShellFamily::Nu
+        );
+        assert_eq!(
+            shell_family_for_shell("C:/Program Files/Nushell/bin/nu.exe"),
             ShellFamily::Nu
         );
         assert_eq!(

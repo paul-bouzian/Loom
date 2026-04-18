@@ -105,12 +105,26 @@ pub fn run_project_action(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RunProjectActionResult, CommandError> {
-    let pty_id = input.pty_id.clone();
+    let environment_id = input.environment_id.trim();
+    if environment_id.is_empty() {
+        return Err(AppError::Validation("Environment id is required.".to_string()).into());
+    }
+
+    let action_id = input.action_id.trim();
+    if action_id.is_empty() {
+        return Err(AppError::Validation("Action id is required.".to_string()).into());
+    }
+
+    let pty_id = input
+        .pty_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|pty_id| !pty_id.is_empty());
     let target = state
         .workspace
         .project_action_execution_target(RunProjectActionRequest {
-            environment_id: input.environment_id,
-            action_id: input.action_id,
+            environment_id: environment_id.to_string(),
+            action_id: action_id.to_string(),
         })?;
     let mut env = skein_context_environment(&SkeinContextInput {
         project_id: &target.project_id,
@@ -128,7 +142,7 @@ pub fn run_project_action(
         target.action.label.clone(),
     ));
     env.push(("SKEIN_ACTION_KIND".to_string(), "manual".to_string()));
-    let pty_id = if let Some(existing_pty_id) = pty_id.as_deref() {
+    let pty_id = if let Some(existing_pty_id) = pty_id {
         state.terminal.rerun_manual_action(
             &app,
             existing_pty_id,

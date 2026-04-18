@@ -422,6 +422,48 @@ describe("terminal-store", () => {
     });
   });
 
+  it("preserves an idle action state emitted before the tab is created", async () => {
+    let resolveRun: (
+      value: Awaited<ReturnType<typeof bridge.runProjectAction>>,
+    ) => void = () => {};
+    const pendingRun = new Promise<Awaited<ReturnType<typeof bridge.runProjectAction>>>(
+      (resolve) => {
+        resolveRun = resolve;
+      },
+    );
+    mockedBridge.runProjectAction.mockImplementationOnce(() => pendingRun);
+
+    const openTab = useTerminalStore.getState().openActionTab(ENV_A, {
+      id: "dev",
+      label: "Dev",
+      icon: "play",
+    });
+
+    emitProjectActionState({
+      ptyId: "pty-fast",
+      actionId: "dev",
+      state: "idle",
+      exitCode: 0,
+    });
+
+    resolveRun({
+      ptyId: "pty-fast",
+      cwd: `/path/to/${ENV_A}`,
+      actionId: "dev",
+      actionLabel: "Dev",
+      actionIcon: "play",
+    });
+
+    const tabId = await openTab;
+
+    expect(tabId).not.toBeNull();
+    expect(slotForA().tabs[0]).toMatchObject({
+      ptyId: "pty-fast",
+      exited: false,
+      actionRunState: "idle",
+    });
+  });
+
   it("reuses the same action tab id after the previous run exited", async () => {
     const first = await useTerminalStore.getState().openActionTab(ENV_A, {
       id: "dev",

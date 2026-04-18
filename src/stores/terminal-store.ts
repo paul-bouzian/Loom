@@ -24,6 +24,7 @@ const DEFAULT_HEIGHT = 280;
 const MIN_HEIGHT = 120;
 export const MAX_TABS = 10;
 const pendingActionTabOpens = new Map<string, Promise<string | null>>();
+const pendingProjectActionStates = new Map<string, ProjectActionStateEventPayload>();
 let terminalEventSubscriptionsPromise: Promise<void> | null = null;
 let terminalEventUnlisteners: Array<() => void> = [];
 
@@ -282,6 +283,7 @@ async function killTerminalSession(ptyId: string) {
   } catch {
     /* ignore: terminal may already be dead */
   } finally {
+    pendingProjectActionStates.delete(ptyId);
     dropPendingTerminalOutput(ptyId);
   }
 }
@@ -318,7 +320,7 @@ function applyProjectActionStateEvent(
   byEnv: Record<string, EnvironmentTerminalSlot>,
   payload: ProjectActionStateEventPayload,
 ) {
-  return mapTabsByPtyId(byEnv, payload.ptyId, (tab) =>
+  const nextByEnv = mapTabsByPtyId(byEnv, payload.ptyId, (tab) =>
     tab.kind !== "manualAction"
       ? tab
       : {
@@ -327,6 +329,25 @@ function applyProjectActionStateEvent(
           actionRunState: payload.state,
         },
   );
+  if (nextByEnv === byEnv) {
+    pendingProjectActionStates.set(payload.ptyId, payload);
+  } else {
+    pendingProjectActionStates.delete(payload.ptyId);
+  }
+
+  return nextByEnv;
+}
+
+function consumePendingProjectActionState(
+  ptyId: string,
+  actionId: string,
+): ProjectActionStateEventPayload | null {
+  const payload = pendingProjectActionStates.get(ptyId);
+  if (!payload || payload.actionId !== actionId) {
+    return null;
+  }
+  pendingProjectActionStates.delete(ptyId);
+  return payload;
 }
 
 function clearTerminalEventSubscriptions() {
@@ -364,6 +385,7 @@ function ensureTerminalEventSubscriptionsReady(): Promise<void> {
 
 export function __resetTerminalEventSubscriptions(): void {
   clearTerminalEventSubscriptions();
+  pendingProjectActionStates.clear();
   terminalEventSubscriptionsPromise = null;
 }
 
@@ -598,17 +620,18 @@ export const useTerminalStore = create<TerminalState>((set, get) => {
           replacementTabStillPresent && replacementTab
             ? replacementTab.id
             : crypto.randomUUID();
+        const pendingState = consumePendingProjectActionState(ptyId, actionId);
         const nextTab: TerminalTab = {
           id: nextTabId,
           ptyId,
           cwd,
           title: actionLabel,
-          exited: false,
+          exited: pendingState?.state === "exited",
           kind: "manualAction",
           actionId,
           actionLabel,
           actionIcon,
-          actionRunState: "running",
+          actionRunState: pendingState?.state ?? "running",
         };
 
         updateSlot(environmentId, (existing) => ({
