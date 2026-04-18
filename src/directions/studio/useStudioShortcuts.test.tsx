@@ -454,12 +454,15 @@ describe("useStudioShortcuts", () => {
 
     render(<Harness />);
 
-    fireEvent.keyDown(window, {
+    const event = new KeyboardEvent("keydown", {
       key: "J",
+      cancelable: true,
       ...primaryModifier(),
     });
+    window.dispatchEvent(event);
 
     expect(toggleVisible).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
     expect(useTerminalStore.getState().byEnv[chatEnvironment.id]).toBeUndefined();
   });
 

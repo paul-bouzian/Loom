@@ -12,7 +12,6 @@ import {
 } from "../../stores/git-review-store";
 import {
   selectEffectiveNonChatEnvironment,
-  selectSelectedEnvironment,
   selectSelectedProject,
   selectSettings,
   useWorkspaceStore,
@@ -71,16 +70,15 @@ export function StudioShell() {
   const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot);
   const settings = useWorkspaceStore(selectSettings);
   const selectedProject = useWorkspaceStore(selectSelectedProject);
-  const selectedEnvironment = useWorkspaceStore(selectSelectedEnvironment);
   const reviewEnvironment = useWorkspaceStore(selectEffectiveNonChatEnvironment);
   const reconcileVoiceSessionSnapshot = useVoiceSessionStore(
     (state) => state.reconcileWorkspaceSnapshot,
   );
   const scope = useGitReviewStore(
-    selectGitReviewScope(selectedEnvironment?.id ?? null),
+    selectGitReviewScope(reviewEnvironment?.id ?? null),
   );
   const selectedFileKey = useGitReviewStore(
-    selectGitReviewSelectedFile(selectedEnvironment?.id ?? null, scope),
+    selectGitReviewSelectedFile(reviewEnvironment?.id ?? null, scope),
   );
   const actionCreateProject =
     workspaceSnapshot?.projects.find((project) => project.id === actionCreateProjectId) ?? null;

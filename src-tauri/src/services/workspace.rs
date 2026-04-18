@@ -305,7 +305,6 @@ impl WorkspaceService {
         pull_requests: &HashMap<String, EnvironmentPullRequestSnapshot>,
     ) -> AppResult<WorkspaceSnapshot> {
         let connection = self.database.open()?;
-        self.ensure_chat_workspace(&connection)?;
         let settings = self.read_or_seed_settings(&connection)?;
         let runtime_map = runtime_statuses
             .into_iter()
@@ -487,6 +486,12 @@ impl WorkspaceService {
     }
 
     pub fn rename_project(&self, input: RenameProjectRequest) -> AppResult<ProjectRecord> {
+        let trimmed_name = input.name.trim();
+        if trimmed_name.is_empty() {
+            return Err(AppError::Validation(
+                "Project name cannot be empty.".to_string(),
+            ));
+        }
         let connection = self.database.open()?;
         self.ensure_repository_project_with_connection(&connection, &input.project_id)?;
         let affected = connection.execute(
@@ -495,7 +500,7 @@ impl WorkspaceService {
             SET name = ?1, updated_at = ?2
             WHERE id = ?3 AND archived_at IS NULL AND kind = 'repository'
             ",
-            params![input.name.trim(), Utc::now(), input.project_id],
+            params![trimmed_name, Utc::now(), input.project_id],
         )?;
 
         if affected == 0 {
@@ -1006,6 +1011,7 @@ impl WorkspaceService {
     }
 
     pub fn create_thread(&self, input: CreateThreadRequest) -> AppResult<ThreadRecord> {
+        validate_non_blank_id(&input.environment_id, "environment")?;
         let connection = self.database.open()?;
         let environment_kind = connection
             .query_row(
@@ -2263,57 +2269,40 @@ impl WorkspaceService {
         runtime_map: &HashMap<String, RuntimeStatusSnapshot>,
         pull_requests: &HashMap<String, EnvironmentPullRequestSnapshot>,
     ) -> AppResult<(ChatWorkspaceSnapshot, Vec<ProjectRecord>)> {
+        let mut chat = ChatWorkspaceSnapshot {
+            project_id: CHAT_WORKSPACE_PROJECT_ID.to_string(),
+            title: CHAT_WORKSPACE_TITLE.to_string(),
+            root_path: self.chats_root.to_string_lossy().to_string(),
+            environments: Vec::new(),
+        };
         let mut project_statement = connection.prepare(
             "
-            SELECT id, name, root_path, kind, settings_json, sidebar_collapsed, created_at, updated_at
+            SELECT id, name, root_path, settings_json, sidebar_collapsed, created_at, updated_at
             FROM projects
-            WHERE archived_at IS NULL
-            ORDER BY
-              CASE kind WHEN 'chatWorkspace' THEN 0 ELSE 1 END,
-              sort_order ASC,
-              id ASC
+            WHERE archived_at IS NULL AND kind = 'repository'
+            ORDER BY sort_order ASC, id ASC
             ",
         )?;
         let project_rows = project_statement.query_map([], |row| {
-            Ok(ProjectSnapshotRow {
-                kind: project_kind_from_str(&row.get::<_, String>(3)?)?,
-                project: ProjectRecord {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    root_path: row.get(2)?,
-                    settings: project_settings_from_json(&row.get::<_, String>(4)?, 4)?,
-                    sidebar_collapsed: row.get::<_, i64>(5)? == 1,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                    environments: Vec::new(),
-                },
+            Ok(ProjectRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                root_path: row.get(2)?,
+                settings: project_settings_from_json(&row.get::<_, String>(3)?, 3)?,
+                sidebar_collapsed: row.get::<_, i64>(4)? == 1,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+                environments: Vec::new(),
             })
         })?;
 
         let mut projects = Vec::new();
-        let mut chat = None;
         let mut project_index = HashMap::new();
-        for row in project_rows.collect::<Result<Vec<_>, _>>()? {
-            match row.kind {
-                ProjectKind::Repository => {
-                    let index = projects.len();
-                    project_index.insert(row.project.id.clone(), index);
-                    projects.push(row.project);
-                }
-                ProjectKind::ChatWorkspace => {
-                    chat = Some(ChatWorkspaceSnapshot {
-                        project_id: row.project.id,
-                        title: row.project.name,
-                        root_path: row.project.root_path,
-                        environments: Vec::new(),
-                    });
-                }
-            }
+        for project in project_rows.collect::<Result<Vec<_>, _>>()? {
+            let index = projects.len();
+            project_index.insert(project.id.clone(), index);
+            projects.push(project);
         }
-        let chat_project_id = chat
-            .as_ref()
-            .map(|workspace| workspace.project_id.clone())
-            .ok_or_else(|| AppError::Runtime("Chat workspace is missing.".to_string()))?;
 
         let mut thread_map = self.read_threads(connection)?;
         let mut environment_statement = connection.prepare(
@@ -2352,10 +2341,8 @@ impl WorkspaceService {
         })?;
 
         for environment in environment_rows.collect::<Result<Vec<_>, _>>()? {
-            if environment.project_id == chat_project_id {
-                if let Some(chat_workspace) = chat.as_mut() {
-                    chat_workspace.environments.push(environment);
-                }
+            if environment.project_id == chat.project_id {
+                chat.environments.push(environment);
                 continue;
             }
             if let Some(index) = project_index.get(&environment.project_id) {
@@ -2363,10 +2350,7 @@ impl WorkspaceService {
             }
         }
 
-        Ok((
-            chat.ok_or_else(|| AppError::Runtime("Chat workspace is missing.".to_string()))?,
-            projects,
-        ))
+        Ok((chat, projects))
     }
 
     fn read_threads(
@@ -2486,12 +2470,6 @@ struct ProjectMetadata {
     name: String,
     root_path: PathBuf,
     settings: ProjectSettings,
-}
-
-#[derive(Debug)]
-struct ProjectSnapshotRow {
-    kind: ProjectKind,
-    project: ProjectRecord,
 }
 
 #[derive(Debug)]
@@ -2784,8 +2762,9 @@ mod tests {
     use super::{
         AddProjectRequest, ArchiveThreadRequest, AutoRenameFirstPromptRequest,
         CreateChatThreadRequest, CreateManagedWorktreeRequest, CreateThreadRequest,
-        ReorderProjectsRequest, RunProjectActionRequest, SetProjectSidebarCollapsedRequest,
-        UpdateProjectSettingsRequest, WorkspaceService, CHAT_WORKSPACE_PROJECT_ID,
+        RenameProjectRequest, ReorderProjectsRequest, RunProjectActionRequest,
+        SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest, WorkspaceService,
+        CHAT_WORKSPACE_PROJECT_ID,
     };
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
@@ -3395,6 +3374,22 @@ mod tests {
             result.runtime_environment_to_stop.as_deref(),
             Some(environment_id.as_str())
         );
+    }
+
+    #[test]
+    fn create_thread_rejects_blank_environment_ids() {
+        let harness = WorkspaceHarness::new().expect("harness");
+
+        let error = harness
+            .service
+            .create_thread(CreateThreadRequest {
+                environment_id: "   ".to_string(),
+                title: None,
+                overrides: None,
+            })
+            .expect_err("blank environment ids should fail");
+
+        assert!(error.to_string().contains("environment id cannot be empty"));
     }
 
     #[test]
@@ -4221,6 +4216,39 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_does_not_seed_chat_workspace_project() {
+        let harness = WorkspaceHarness::new().expect("harness");
+
+        let before_count: i64 = harness
+            .open_connection()
+            .query_row(
+                "SELECT COUNT(*) FROM projects WHERE id = ?1",
+                params![CHAT_WORKSPACE_PROJECT_ID],
+                |row| row.get(0),
+            )
+            .expect("chat workspace count should load");
+        assert_eq!(before_count, 0);
+
+        let snapshot = harness.service.snapshot(Vec::new()).expect("snapshot should load");
+
+        assert_eq!(snapshot.chat.project_id, CHAT_WORKSPACE_PROJECT_ID);
+        assert_eq!(
+            snapshot.chat.root_path,
+            harness.temp_root.join("chats").to_string_lossy().to_string()
+        );
+
+        let after_count: i64 = harness
+            .open_connection()
+            .query_row(
+                "SELECT COUNT(*) FROM projects WHERE id = ?1",
+                params![CHAT_WORKSPACE_PROJECT_ID],
+                |row| row.get(0),
+            )
+            .expect("chat workspace count should load");
+        assert_eq!(after_count, 0);
+    }
+
+    #[test]
     fn project_order_is_persistent_and_new_projects_append_to_the_bottom() {
         let harness = WorkspaceHarness::new().expect("harness");
         let repo_one = harness
@@ -4367,6 +4395,31 @@ mod tests {
             .find(|candidate| candidate.id == project.id)
             .expect("project should exist");
         assert!(project.sidebar_collapsed);
+    }
+
+    #[test]
+    fn rename_project_rejects_blank_names() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("rename-blank-repo"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+
+        let error = harness
+            .service
+            .rename_project(RenameProjectRequest {
+                project_id: project.id,
+                name: "   ".to_string(),
+            })
+            .expect_err("blank project names should fail");
+
+        assert!(error.to_string().contains("Project name cannot be empty."));
     }
 
     #[test]

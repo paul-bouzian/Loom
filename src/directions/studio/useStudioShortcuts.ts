@@ -191,10 +191,10 @@ export function useStudioShortcuts({
       }
 
       if (matchesShortcut(event, shortcuts.toggleTerminal)) {
+        event.preventDefault();
         if (!terminalEnvironmentId) {
           return;
         }
-        event.preventDefault();
         toggleVisible(terminalEnvironmentId);
         return;
       }

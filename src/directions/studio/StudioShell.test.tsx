@@ -547,6 +547,40 @@ describe("StudioShell", () => {
     });
   });
 
+  it("opens the git diff panel for project drafts using the effective review environment", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot(),
+      layout: {
+        slots: {
+          topLeft: null,
+          topRight: null,
+          bottomLeft: null,
+          bottomRight: null,
+        },
+        focusedSlot: null,
+        rowRatio: 0.5,
+        colRatio: 0.5,
+      },
+      draftBySlot: {},
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+      selectedThreadId: null,
+    }));
+    useWorkspaceStore.getState().openThreadDraft("project-1");
+    useGitReviewStore.setState((state) => ({
+      ...state,
+      selectedFileByContext: {
+        "env-1:uncommitted": "modified:src/app.ts",
+      },
+    }));
+
+    render(<StudioShell />);
+
+    expect(useWorkspaceStore.getState().selectedEnvironmentId).toBeNull();
+    expect(screen.getByTestId("git-diff-panel")).toBeInTheDocument();
+  });
+
   it("toggles theme from the sidebar footer and persists the selected theme", async () => {
     render(<StudioShell />);
 
