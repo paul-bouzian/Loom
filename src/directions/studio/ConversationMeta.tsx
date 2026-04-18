@@ -1,9 +1,6 @@
 import type { EnvironmentRecord, ThreadConversationSnapshot, ThreadRecord } from "../../lib/types";
-import {
-  labelForConversationStatus,
-  toneForConversationStatus,
-} from "../../lib/conversation-status";
-import { CloseIcon } from "../../shared/Icons";
+import { labelForConversationStatus } from "../../lib/conversation-status";
+import { AlertIcon, CloseIcon, SpinnerIcon } from "../../shared/Icons";
 import { Tooltip } from "../../shared/Tooltip";
 
 type Props = {
@@ -30,11 +27,7 @@ export function ConversationMeta({
         <p className="tx-conversation__subtitle">{environment.name}</p>
       </div>
       <div className="tx-conversation__status-group">
-        {snapshot ? (
-          <span className={`tx-pill tx-pill--${toneForConversationStatus(snapshot.status)}`}>
-            {labelForConversationStatus(snapshot.status)}
-          </span>
-        ) : null}
+        {snapshot ? renderStatusIcon(snapshot.status) : null}
         {connectionState === "connecting" ? (
           <span className="tx-pill tx-pill--neutral tx-pill--connecting">
             Connecting…
@@ -76,6 +69,32 @@ export function ConversationMeta({
       ) : null}
     </div>
   );
+}
+
+function renderStatusIcon(status: ThreadConversationSnapshot["status"]) {
+  if (status === "running") {
+    return (
+      <span
+        className="tx-conversation__status-icon tx-conversation__status-icon--running"
+        aria-label={labelForConversationStatus(status)}
+        role="status"
+      >
+        <SpinnerIcon size={14} />
+      </span>
+    );
+  }
+  if (status === "waitingForExternalAction") {
+    return (
+      <span
+        className="tx-conversation__status-icon tx-conversation__status-icon--waiting"
+        aria-label={labelForConversationStatus(status)}
+        role="status"
+      >
+        <AlertIcon size={14} />
+      </span>
+    );
+  }
+  return null;
 }
 
 function formatTokenCount(value: number): string {

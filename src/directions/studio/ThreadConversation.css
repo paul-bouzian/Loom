@@ -48,6 +48,33 @@
   min-width: 0;
 }
 
+.tx-conversation__status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.tx-conversation__status-icon--running {
+  color: var(--tx-progress);
+  animation: tx-conversation-status-spin 0.9s linear infinite;
+}
+
+@keyframes tx-conversation-status-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tx-conversation__status-icon--waiting {
+  color: var(--tx-info);
+}
+
 .tx-conversation__close {
   display: inline-flex;
   align-items: center;

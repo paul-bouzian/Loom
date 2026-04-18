@@ -1,14 +1,25 @@
 import { memo, type ReactNode } from "react";
 
-import { indicatorToneForConversationStatus } from "../../lib/conversation-status";
+import {
+  indicatorToneForConversationStatus,
+  type ConversationIndicatorTone,
+} from "../../lib/conversation-status";
 import type {
   PullRequestChecksSnapshot,
   ThreadRecord,
 } from "../../lib/types";
-import { GitBranchIcon, PanelRightIcon } from "../../shared/Icons";
-import { RuntimeIndicator } from "../../shared/RuntimeIndicator";
+import {
+  AlertIcon,
+  GitBranchIcon,
+  PanelRightIcon,
+  SpinnerIcon,
+} from "../../shared/Icons";
 import { Tooltip } from "../../shared/Tooltip";
 import { useConversationStore } from "../../stores/conversation-store";
+import {
+  selectThreadUnread,
+  useThreadUnreadStore,
+} from "../../stores/thread-unread-store";
 import {
   selectThreadInAnyPane,
   selectThreadInFocusedPane,
@@ -68,6 +79,7 @@ function SidebarThreadRowImpl(props: Props) {
   );
   const inAnyPane = useWorkspaceStore(selectThreadInAnyPane(thread.id));
   const inFocusedPane = useWorkspaceStore(selectThreadInFocusedPane(thread.id));
+  const unread = useThreadUnreadStore(selectThreadUnread(thread.id));
   const dragHandlers = useThreadDrag(thread.id, thread.title, onSelect);
 
   const classes = [
@@ -105,7 +117,7 @@ function SidebarThreadRowImpl(props: Props) {
         {...dragHandlers}
       >
         <span className="tree-sidebar__thread-indicator">
-          <RuntimeIndicator tone={tone} size="sm" />
+          {renderThreadIndicator(tone, unread)}
         </span>
         <span className="tree-sidebar__thread-title">{thread.title}</span>
       </button>
@@ -143,10 +155,7 @@ function SidebarThreadRowImpl(props: Props) {
                 aria-hidden="true"
               />
             ) : null}
-            <GitBranchIcon size={10} className="tree-sidebar__thread-branch-icon" />
-            <span className="tree-sidebar__thread-branch-label">
-              {worktree.branch}
-            </span>
+            <GitBranchIcon size={14} className="tree-sidebar__thread-branch-icon" />
           </button>
         </Tooltip>
       ) : null}
@@ -168,6 +177,26 @@ function SidebarThreadRowImpl(props: Props) {
 }
 
 export const SidebarThreadRow = memo(SidebarThreadRowImpl);
+
+function renderThreadIndicator(
+  tone: ConversationIndicatorTone,
+  unread: boolean,
+): ReactNode {
+  if (tone === "progress") {
+    return (
+      <SpinnerIcon size={12} className="tree-sidebar__thread-spinner" />
+    );
+  }
+  if (tone === "waiting") {
+    return <AlertIcon size={12} className="tree-sidebar__thread-alert" />;
+  }
+  if (unread) {
+    return (
+      <span className="tree-sidebar__thread-unread-dot" aria-hidden="true" />
+    );
+  }
+  return null;
+}
 
 function resolvePaneHint(
   inAnyPane: boolean,
