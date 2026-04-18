@@ -52,6 +52,7 @@ pub struct ProjectActionStatePayload {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellFamily {
     Posix,
+    Zsh,
     Fish,
     Nu,
     PowerShell,
@@ -122,16 +123,23 @@ struct ManualActionSession {
     environment_id: String,
     action_id: String,
     shell_family: ShellFamily,
+    env_overrides: Vec<EnvOverride>,
     state: ProjectActionRunState,
     output_filter: ManualActionOutputFilter,
 }
 
 impl ManualActionSession {
-    fn new(environment_id: String, action_id: String, shell_family: ShellFamily) -> Self {
+    fn new(
+        environment_id: String,
+        action_id: String,
+        shell_family: ShellFamily,
+        env_overrides: Vec<EnvOverride>,
+    ) -> Self {
         Self {
             environment_id,
             action_id,
             shell_family,
+            env_overrides,
             state: ProjectActionRunState::Idle,
             output_filter: ManualActionOutputFilter::default(),
         }
@@ -203,6 +211,7 @@ fn shell_family_for_shell(shell: &str) -> ShellFamily {
         .unwrap_or_default()
         .to_ascii_lowercase();
     match shell_name.as_str() {
+        "zsh" => ShellFamily::Zsh,
         "fish" => ShellFamily::Fish,
         "nu" | "nu.exe" => ShellFamily::Nu,
         "pwsh" | "powershell" | "powershell.exe" | "pwsh.exe" => ShellFamily::PowerShell,
@@ -219,23 +228,117 @@ fn parse_action_done_marker(marker: &[u8]) -> Option<i32> {
         .ok()
 }
 
-fn is_manual_action_interrupt_input(bytes: &[u8]) -> bool {
-    bytes == [3]
+fn posix_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-fn project_action_wrapper(shell_family: ShellFamily, script: &str) -> String {
+fn fish_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+fn powershell_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn nushell_raw_string(value: &str) -> String {
+    for hash_count in 1.. {
+        let hashes = "#".repeat(hash_count);
+        let terminator = format!("'{}", hashes);
+        if !value.contains(&terminator) {
+            return format!("r{hashes}'{value}'{hashes}");
+        }
+    }
+
+    unreachable!("hash count is unbounded")
+}
+
+fn posix_env_lines(env_overrides: &[EnvOverride]) -> String {
+    let mut lines = String::new();
+    for (key, value) in env_overrides {
+        lines.push_str("  export ");
+        lines.push_str(key);
+        lines.push('=');
+        lines.push_str(&posix_shell_quote(value));
+        lines.push('\n');
+    }
+    lines
+}
+
+fn fish_env_lines(env_overrides: &[EnvOverride]) -> String {
+    let mut lines = String::new();
+    for (key, value) in env_overrides {
+        lines.push_str("  set -lx ");
+        lines.push_str(key);
+        lines.push(' ');
+        lines.push_str(&fish_shell_quote(value));
+        lines.push('\n');
+    }
+    lines
+}
+
+fn nushell_env_record(env_overrides: &[EnvOverride]) -> String {
+    if env_overrides.is_empty() {
+        return "{}".to_string();
+    }
+
+    let mut record = String::from("{\n");
+    for (key, value) in env_overrides {
+        record.push_str("  ");
+        record.push_str(key);
+        record.push_str(": ");
+        record.push_str(&nushell_raw_string(value));
+        record.push('\n');
+    }
+    record.push('}');
+    record
+}
+
+fn powershell_env_hashtable(env_overrides: &[EnvOverride]) -> String {
+    if env_overrides.is_empty() {
+        return "@{}".to_string();
+    }
+
+    let mut hashtable = String::from("@{\n");
+    for (key, value) in env_overrides {
+        hashtable.push_str("  ");
+        hashtable.push_str(&powershell_shell_quote(key));
+        hashtable.push_str(" = ");
+        hashtable.push_str(&powershell_shell_quote(value));
+        hashtable.push('\n');
+    }
+    hashtable.push('}');
+    hashtable
+}
+
+fn project_action_wrapper(
+    shell_family: ShellFamily,
+    env_overrides: &[EnvOverride],
+    script: &str,
+) -> String {
     match shell_family {
-        ShellFamily::Posix => format!(
-            "{{\n{script}\n__skein_action_status=$?\nprintf '\\036{ACTION_DONE_PREFIX}%s\\037\\n' \"$__skein_action_status\"\nunset __skein_action_status\n}}\n"
-        ),
+        ShellFamily::Posix => {
+            let env_lines = posix_env_lines(env_overrides);
+            format!(
+                "__skein_action() {{\n(\n{env_lines}{script}\n)\n__skein_action_status=$?\nprintf '\\036{ACTION_DONE_PREFIX}%s\\037\\n' \"$__skein_action_status\"\n}}\n__skein_action\n"
+            )
+        }
+        ShellFamily::Zsh => {
+            let env_lines = posix_env_lines(env_overrides);
+            format!(
+                "__skein_action() {{\n{{\n(\n{env_lines}{script}\n)\n}} always {{\nprintf '\\036{ACTION_DONE_PREFIX}%s\\037\\n' \"$?\"\n}}\n}}\n__skein_action\n"
+            )
+        }
         ShellFamily::Fish => format!(
-            "begin\n{script}\nset -l __skein_action_status $status\nprintf '\\036{ACTION_DONE_PREFIX}%s\\037\\n' $__skein_action_status\nend\n"
+            "function __skein_action\nbegin\n{env_lines}begin\n{script}\nend\nend\nset -l __skein_action_status $status\nprintf '\\036{ACTION_DONE_PREFIX}%s\\037\\n' $__skein_action_status\nend\n__skein_action\nfunctions -e __skein_action\n",
+            env_lines = fish_env_lines(env_overrides),
         ),
         ShellFamily::Nu => format!(
-            "do {{\n{script}\n}}\nlet __skein_action_status = (if \"LAST_EXIT_CODE\" in $env {{ $env.LAST_EXIT_CODE }} else {{ 0 }})\nprint -n ((char --integer 30) + \"{ACTION_DONE_PREFIX}\" + ($__skein_action_status | into string) + (char --integer 31) + (char newline))\n"
+            "with-env {env_record} {{\ndo {{\n{script}\n}}\n}}\nlet __skein_action_status = (if \"LAST_EXIT_CODE\" in $env {{ $env.LAST_EXIT_CODE }} else {{ 0 }})\nprint -n ((char --integer 30) + \"{ACTION_DONE_PREFIX}\" + ($__skein_action_status | into string) + (char --integer 31) + (char newline))\n",
+            env_record = nushell_env_record(env_overrides),
         ),
         ShellFamily::PowerShell => format!(
-            "& {{\n{script}\n}}\n$__skeinActionStatus = if (Test-Path variable:LASTEXITCODE) {{ $LASTEXITCODE }} elseif ($?) {{ 0 }} else {{ 1 }}\n[Console]::Out.Write(\"$([char]30){ACTION_DONE_PREFIX}$($__skeinActionStatus)$([char]31)`n\")\nRemove-Variable __skeinActionStatus -ErrorAction SilentlyContinue\n"
+            "$__skeinEnv = {env_hashtable}\n$__skeinPreviousEnv = @{{}}\nforeach ($__skeinName in $__skeinEnv.Keys) {{\n  $__skeinItem = Get-Item -Path (\"Env:\" + $__skeinName) -ErrorAction SilentlyContinue\n  $__skeinPreviousEnv[$__skeinName] = if ($null -eq $__skeinItem) {{ $null }} else {{ $__skeinItem.Value }}\n  Set-Item -Path (\"Env:\" + $__skeinName) -Value $__skeinEnv[$__skeinName]\n}}\ntry {{\n  & {{\n{script}\n  }}\n}}\nfinally {{\n  foreach ($__skeinName in $__skeinEnv.Keys) {{\n    if ($null -eq $__skeinPreviousEnv[$__skeinName]) {{\n      Remove-Item -Path (\"Env:\" + $__skeinName) -ErrorAction SilentlyContinue\n    }} else {{\n      Set-Item -Path (\"Env:\" + $__skeinName) -Value $__skeinPreviousEnv[$__skeinName]\n    }}\n  }}\n  $__skeinActionStatus = if (Test-Path variable:LASTEXITCODE) {{ $LASTEXITCODE }} elseif ($?) {{ 0 }} else {{ 1 }}\n  [Console]::Out.Write(\"$([char]30){ACTION_DONE_PREFIX}$($__skeinActionStatus)$([char]31)`n\")\n  Remove-Variable __skeinActionStatus -ErrorAction SilentlyContinue\n  Remove-Variable __skeinEnv -ErrorAction SilentlyContinue\n  Remove-Variable __skeinPreviousEnv -ErrorAction SilentlyContinue\n}}\n",
+            env_hashtable = powershell_env_hashtable(env_overrides),
         ),
     }
 }
@@ -293,7 +396,7 @@ impl TerminalService {
             ));
         };
 
-        let shell_family = {
+        let (shell_family, env_overrides) = {
             let mut manual_action = manual_action.lock().unwrap();
             if manual_action.state == ProjectActionRunState::Running {
                 return Err(AppError::Validation(
@@ -302,6 +405,7 @@ impl TerminalService {
             }
             manual_action.output_filter = ManualActionOutputFilter::default();
             let shell_family = manual_action.shell_family;
+            let env_overrides = manual_action.env_overrides.clone();
             Self::set_manual_action_state(
                 app,
                 pty_id,
@@ -309,12 +413,12 @@ impl TerminalService {
                 ProjectActionRunState::Running,
                 None,
             );
-            shell_family
+            (shell_family, env_overrides)
         };
 
-        let wrapped_script = project_action_wrapper(shell_family, script);
+        let wrapped_script = project_action_wrapper(shell_family, &env_overrides, script);
         let encoded = B64.encode(wrapped_script);
-        if let Err(error) = self.write(app, pty_id, &encoded) {
+        if let Err(error) = self.write(pty_id, &encoded) {
             if let Some(manual_action) = session.manual_action.as_ref() {
                 let mut manual_action = manual_action.lock().unwrap();
                 Self::set_manual_action_state(
@@ -370,6 +474,7 @@ impl TerminalService {
         pty_id: &str,
         environment_id: &str,
         action_id: &str,
+        env_overrides: Vec<EnvOverride>,
         script: &str,
     ) -> AppResult<()> {
         let session = self.get_session(pty_id)?;
@@ -380,7 +485,7 @@ impl TerminalService {
         };
 
         {
-            let manual_action = manual_action.lock().unwrap();
+            let mut manual_action = manual_action.lock().unwrap();
             if manual_action.environment_id != environment_id {
                 return Err(AppError::Validation(
                     "Project action terminal belongs to a different environment.".to_string(),
@@ -391,6 +496,7 @@ impl TerminalService {
                     "Project action terminal belongs to a different action.".to_string(),
                 ));
             }
+            manual_action.env_overrides = env_overrides;
         }
 
         self.dispatch_manual_action(app, pty_id, script)
@@ -549,6 +655,7 @@ impl TerminalService {
         cmd.cwd(&resolved_cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        let manual_action_env_overrides = request.env_overrides.clone();
         for (key, value) in request.env_overrides {
             cmd.env(key, value);
         }
@@ -580,6 +687,7 @@ impl TerminalService {
                     request.environment_id.to_string(),
                     action_id.to_string(),
                     shell_family,
+                    manual_action_env_overrides.clone(),
                 ))
             }),
         });
@@ -669,32 +777,16 @@ impl TerminalService {
         Ok(pty_id)
     }
 
-    pub fn write(&self, app: &AppHandle, pty_id: &str, data_base64: &str) -> AppResult<()> {
+    pub fn write(&self, pty_id: &str, data_base64: &str) -> AppResult<()> {
         let bytes = B64
             .decode(data_base64)
             .map_err(|e| AppError::Runtime(format!("base64 decode: {e}")))?;
-        let session = self.get_session(pty_id)?;
-        session
+        self.get_session(pty_id)?
             .writer
             .lock()
             .unwrap()
             .write_all(&bytes)
             .map_err(|e| AppError::Runtime(format!("pty write: {e}")))?;
-        if is_manual_action_interrupt_input(&bytes) {
-            if let Some(manual_action) = session.manual_action.as_ref() {
-                let mut manual_action = manual_action.lock().unwrap();
-                if manual_action.state == ProjectActionRunState::Running {
-                    manual_action.output_filter = ManualActionOutputFilter::default();
-                    Self::set_manual_action_state(
-                        app,
-                        pty_id,
-                        &mut manual_action,
-                        ProjectActionRunState::Idle,
-                        Some(130),
-                    );
-                }
-            }
-        }
         Ok(())
     }
 
@@ -942,7 +1034,7 @@ mod tests {
 
     #[test]
     fn shell_family_matches_supported_shells() {
-        assert_eq!(shell_family_for_shell("/bin/zsh"), ShellFamily::Posix);
+        assert_eq!(shell_family_for_shell("/bin/zsh"), ShellFamily::Zsh);
         assert_eq!(
             shell_family_for_shell("/opt/homebrew/bin/fish"),
             ShellFamily::Fish
@@ -974,11 +1066,12 @@ mod tests {
     }
 
     #[test]
-    fn manual_action_interrupt_input_only_matches_ctrl_c() {
-        assert!(is_manual_action_interrupt_input(&[3]));
-        assert!(!is_manual_action_interrupt_input(&[]));
-        assert!(!is_manual_action_interrupt_input(&[3, b'\n']));
-        assert!(!is_manual_action_interrupt_input(b"abc"));
+    fn wrapper_literal_helpers_escape_values() {
+        assert_eq!(posix_shell_quote("a'b"), "'a'\"'\"'b'");
+        assert_eq!(fish_shell_quote("a'b"), "'a\\'b'");
+        assert_eq!(powershell_shell_quote("a'b"), "'a''b'");
+        assert_eq!(nushell_raw_string("value"), "r#'value'#");
+        assert_eq!(nushell_raw_string("a'#b"), "r##'a'#b'##");
     }
 
     #[test]
@@ -1033,35 +1126,50 @@ mod tests {
     }
 
     #[test]
-    fn project_action_wrappers_emit_completion_markers_for_supported_shells() {
-        let posix = project_action_wrapper(ShellFamily::Posix, "bun run dev");
+    fn project_action_wrappers_apply_env_overrides_and_emit_completion_markers() {
+        let env = vec![("SKEIN_ACTION_LABEL".to_string(), "dev server".to_string())];
+
+        let posix = project_action_wrapper(ShellFamily::Posix, &env, "bun run dev");
         assert!(posix.contains("\\036SKEIN_ACTION_DONE:%s\\037\\n"));
         assert!(posix.contains("__skein_action_status=$?"));
+        assert!(posix.contains("export SKEIN_ACTION_LABEL='dev server'"));
 
-        let fish = project_action_wrapper(ShellFamily::Fish, "bun run dev");
+        let zsh = project_action_wrapper(ShellFamily::Zsh, &env, "bun run dev");
+        assert!(zsh.contains("always"));
+        assert!(zsh.contains("printf '\\036SKEIN_ACTION_DONE:%s\\037\\n' \"$?\""));
+        assert!(zsh.contains("export SKEIN_ACTION_LABEL='dev server'"));
+
+        let fish = project_action_wrapper(ShellFamily::Fish, &env, "bun run dev");
         assert!(fish.contains("set -l __skein_action_status $status"));
         assert!(fish.contains("\\036SKEIN_ACTION_DONE:%s\\037\\n"));
+        assert!(fish.contains("set -lx SKEIN_ACTION_LABEL 'dev server'"));
 
-        let nu = project_action_wrapper(ShellFamily::Nu, "bun run dev");
+        let nu = project_action_wrapper(ShellFamily::Nu, &env, "bun run dev");
         assert!(nu.contains("LAST_EXIT_CODE"));
+        assert!(nu.contains("with-env"));
         assert!(nu.contains("char --integer 30"));
         assert!(nu.contains(ACTION_DONE_PREFIX));
+        assert!(nu.contains("SKEIN_ACTION_LABEL: r#'dev server'#"));
 
-        let powershell = project_action_wrapper(ShellFamily::PowerShell, "bun run dev");
+        let powershell = project_action_wrapper(ShellFamily::PowerShell, &env, "bun run dev");
+        assert!(powershell.contains("$__skeinEnv = @{"));
+        assert!(powershell.contains("try {"));
         assert!(powershell.contains("Test-Path variable:LASTEXITCODE"));
         assert!(powershell.contains("$([char]30)"));
         assert!(powershell.contains(ACTION_DONE_PREFIX));
+        assert!(powershell.contains("'SKEIN_ACTION_LABEL' = 'dev server'"));
     }
 
     #[test]
     fn project_action_wrappers_do_not_embed_raw_marker_bytes() {
         for shell_family in [
             ShellFamily::Posix,
+            ShellFamily::Zsh,
             ShellFamily::Fish,
             ShellFamily::Nu,
             ShellFamily::PowerShell,
         ] {
-            let wrapper = project_action_wrapper(shell_family, "bun run dev");
+            let wrapper = project_action_wrapper(shell_family, &[], "bun run dev");
             assert!(!wrapper.as_bytes().contains(&ACTION_MARKER_START));
             assert!(!wrapper.as_bytes().contains(&ACTION_MARKER_END));
         }

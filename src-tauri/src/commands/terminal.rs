@@ -58,13 +58,10 @@ pub fn terminal_spawn(
 
 #[tauri::command]
 pub fn terminal_write(
-    app: AppHandle,
     state: State<'_, AppState>,
     input: WriteTerminalInput,
 ) -> Result<(), CommandError> {
-    state
-        .terminal
-        .write(&app, &input.pty_id, &input.data_base64)?;
+    state.terminal.write(&input.pty_id, &input.data_base64)?;
     Ok(())
 }
 

@@ -148,6 +148,7 @@ pub fn run_project_action(
             existing_pty_id,
             &target.environment_id,
             &target.action.id,
+            env,
             &target.action.script,
         )?;
         existing_pty_id.to_string()
