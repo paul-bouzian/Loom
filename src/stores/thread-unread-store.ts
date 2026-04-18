@@ -28,8 +28,8 @@ export function selectThreadUnread(threadId: string) {
 }
 
 // Watch conversation snapshots for transitions into `completed`. When a thread
-// just finished while it isn't in the focused pane, flag it as unread so the
-// sidebar nudges the user. Focusing the thread clears the flag automatically.
+// just finished and isn't visible in any pane, flag it as unread so the sidebar
+// nudges the user. Opening or focusing the thread clears the flag automatically.
 const previousStatuses = new Map<string, string | null>();
 for (const [threadId, snapshot] of Object.entries(
   useConversationStore.getState().snapshotsByThreadId,
