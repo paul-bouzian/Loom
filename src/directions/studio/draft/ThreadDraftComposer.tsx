@@ -363,6 +363,7 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
         modelOptions={modelOptions}
         catalogTarget={catalogTarget}
         fileSearchTarget={fileSearchTarget}
+        imageSupportNoticeEnabled
         transportEnabled={transportEnabled}
         voiceEnabled={draft.kind === "project" && resolvedComposerEnvId !== "draft"}
         onChangeImages={setImages}

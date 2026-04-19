@@ -28,6 +28,7 @@ pub struct SendThreadMessageInput {
 #[serde(rename_all = "camelCase")]
 pub struct SearchComposerFilesInput {
     pub target: ComposerTarget,
+    pub request_key: String,
     pub query: String,
     pub limit: Option<usize>,
 }
@@ -89,11 +90,12 @@ pub async fn search_composer_files(
     state: State<'_, AppState>,
 ) -> Result<Vec<ComposerFileSearchResult>, CommandError> {
     validate_composer_target(&input.target)?;
+    validate_non_blank_request_key(&input.request_key)?;
     let context = state.workspace.composer_target_context(&input.target)?;
     let limit = input.limit.unwrap_or(50).min(200);
     Ok(state
         .runtime
-        .search_composer_files(context, input.query, limit)
+        .search_composer_files(context, &input.request_key, input.query, limit)
         .await?)
 }
 
@@ -364,6 +366,14 @@ fn validate_composer_target(target: &ComposerTarget) -> Result<(), CommandError>
     Ok(())
 }
 
+fn validate_non_blank_request_key(request_key: &str) -> Result<(), CommandError> {
+    if request_key.trim().is_empty() {
+        return Err(AppError::Validation("Request key cannot be empty.".to_string()).into());
+    }
+
+    Ok(())
+}
+
 fn emit_workspace_event(app: &AppHandle, payload: WorkspaceEvent) {
     if let Err(error) = app.emit(WORKSPACE_EVENT_NAME, payload) {
         warn!("failed to emit workspace event: {error}");
@@ -405,7 +415,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_composer_target, validate_non_blank_thread_id, validate_thread_composer_draft,
+        validate_composer_target, validate_non_blank_request_key, validate_non_blank_thread_id,
+        validate_thread_composer_draft,
     };
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ComposerTarget,
@@ -451,5 +462,14 @@ mod tests {
 
         assert_eq!(error.code, "validation_error");
         assert!(error.message.contains("Environment id cannot be empty"));
+    }
+
+    #[test]
+    fn request_key_rejects_blank_values() {
+        let error = validate_non_blank_request_key("   ")
+            .expect_err("blank request key should fail");
+
+        assert_eq!(error.code, "validation_error");
+        assert!(error.message.contains("Request key cannot be empty"));
     }
 }

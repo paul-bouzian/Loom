@@ -92,6 +92,7 @@ type Props = {
   onUpdateComposer: (patch: Partial<ConversationComposerSettings>) => void;
   catalogTarget?: ComposerTarget | null;
   fileSearchTarget?: ComposerTarget | null;
+  imageSupportNoticeEnabled?: boolean;
   transportEnabled?: boolean;
   voiceEnabled?: boolean;
 };
@@ -121,6 +122,7 @@ export function InlineComposer({
   onUpdateComposer,
   catalogTarget = null,
   fileSearchTarget = null,
+  imageSupportNoticeEnabled,
   transportEnabled = true,
   voiceEnabled = transportEnabled,
 }: Props) {
@@ -175,8 +177,9 @@ export function InlineComposer({
   const imagesEnabled = modelSupportsImageInput(selectedModel);
   const hasAttachedImages = images.length > 0;
   const hasDraftContent = draft.trim().length > 0;
+  const showImageSupportNotice = imageSupportNoticeEnabled ?? transportEnabled;
   let imageSupportNotice: string | null = null;
-  if (!imagesEnabled && transportEnabled) {
+  if (!imagesEnabled && showImageSupportNotice) {
     const base = modelImageSupportMessage(selectedModel);
     imageSupportNotice = hasAttachedImages
       ? `${base} Remove the current images or switch to a model with image input.`
@@ -345,6 +348,7 @@ export function InlineComposer({
     const timeout = window.setTimeout(() => {
       void searchComposerFiles({
         target: fileSearchTarget,
+        requestKey: threadId,
         query: activeToken.query,
         limit: 50,
       })
@@ -360,7 +364,7 @@ export function InlineComposer({
         });
     }, 120);
     return () => window.clearTimeout(timeout);
-  }, [activeToken, fileSearchTarget]);
+  }, [activeToken, fileSearchTarget, threadId]);
 
   const autocompleteItems = useMemo(
     () =>

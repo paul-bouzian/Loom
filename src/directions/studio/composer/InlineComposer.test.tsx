@@ -680,6 +680,41 @@ describe("InlineComposer image attachments", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the image support notice visible for draft composers without transport", async () => {
+    renderComposer("", {
+      modelOptions: [
+        {
+          ...capabilitiesFixture.models[0],
+          inputModalities: ["text"],
+        },
+      ],
+      transportEnabled: false,
+      imageSupportNoticeEnabled: true,
+    });
+
+    expect(
+      await screen.findByText(
+        "Image attachments are unavailable for GPT-5.4.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("uses the composer thread id as the file search request key", async () => {
+    renderComposer("@main", {
+      threadId: "draft:topLeft",
+      fileSearchTarget: { kind: "environment", environmentId: "env-1" },
+    });
+
+    await waitFor(() => {
+      expect(mockedBridge.searchComposerFiles).toHaveBeenCalledWith({
+        target: { kind: "environment", environmentId: "env-1" },
+        requestKey: "draft:topLeft",
+        query: "main",
+        limit: 50,
+      });
+    });
+  });
+
   it("toggles fast mode from the lightning control", async () => {
     const onUpdateComposer = vi.fn();
     renderComposer("", { onUpdateComposer });
@@ -735,6 +770,9 @@ function renderComposer(
     threadId?: string;
     catalogTarget?: ComponentProps<typeof InlineComposer>["catalogTarget"];
     fileSearchTarget?: ComponentProps<typeof InlineComposer>["fileSearchTarget"];
+    imageSupportNoticeEnabled?: ComponentProps<
+      typeof InlineComposer
+    >["imageSupportNoticeEnabled"];
     transportEnabled?: boolean;
     voiceEnabled?: boolean;
   } = {},
@@ -785,6 +823,7 @@ function renderComposer(
         fileSearchTarget={
           options.fileSearchTarget === undefined ? defaultTarget : options.fileSearchTarget
         }
+        imageSupportNoticeEnabled={options.imageSupportNoticeEnabled}
         transportEnabled={options.transportEnabled}
         voiceEnabled={options.voiceEnabled}
       />

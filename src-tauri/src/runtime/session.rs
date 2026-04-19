@@ -867,7 +867,11 @@ impl RuntimeSession {
     ) -> AppResult<ThreadComposerCatalog> {
         let prompts = load_prompt_definitions(environment_path)?;
         let skills = self.load_skill_bindings(environment_path).await?;
-        let apps = self.load_app_bindings(codex_thread_id).await?;
+        let apps = if codex_thread_id.is_some() {
+            self.load_app_bindings(codex_thread_id).await?
+        } else {
+            Vec::new()
+        };
         Ok(build_thread_catalog(&prompts, &skills, &apps))
     }
 

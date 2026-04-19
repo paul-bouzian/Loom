@@ -192,7 +192,6 @@ pub struct ComposerTargetContext {
     pub environment_path: String,
     pub codex_thread_id: Option<String>,
     pub codex_binary_path: Option<String>,
-    pub request_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1561,7 +1560,6 @@ impl WorkspaceService {
                     environment_path: context.environment_path,
                     codex_thread_id: context.codex_thread_id,
                     codex_binary_path: context.codex_binary_path,
-                    request_key: context.thread_id,
                 })
             }
             ComposerTarget::Environment { environment_id } => {
@@ -1576,7 +1574,6 @@ impl WorkspaceService {
                     environment_path: runtime_target.environment_path,
                     codex_thread_id,
                     codex_binary_path: runtime_target.codex_binary_path,
-                    request_key: environment_id.to_string(),
                 })
             }
             ComposerTarget::ChatWorkspace {} => {
@@ -1590,7 +1587,6 @@ impl WorkspaceService {
                     environment_path: self.chats_root.to_string_lossy().to_string(),
                     codex_thread_id: None,
                     codex_binary_path: settings.codex_binary_path,
-                    request_key: environment_id,
                 })
             }
         }

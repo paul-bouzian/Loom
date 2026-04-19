@@ -578,6 +578,7 @@ impl RuntimeSupervisor {
     pub async fn search_composer_files(
         &self,
         context: ComposerTargetContext,
+        request_key: &str,
         query: String,
         limit: usize,
     ) -> AppResult<Vec<crate::domain::conversation::ComposerFileSearchResult>> {
@@ -591,7 +592,7 @@ impl RuntimeSupervisor {
         search_files_from_target(
             read_target,
             &context.environment_path,
-            &context.request_key,
+            request_key,
             query,
             limit,
         )
@@ -1618,6 +1619,26 @@ mod tests {
             .find(|request| request.method == "app/list")
             .expect("app/list request should be recorded");
         assert_eq!(app_request.params["threadId"], "thr-123");
+    }
+
+    #[tokio::test]
+    async fn running_read_composer_catalog_skips_app_list_without_a_thread_id() {
+        let (session, harness) = spawn_test_session().await;
+
+        let catalog = read_composer_catalog_from_target(
+            RuntimeReadTarget::Running(Arc::new(session)),
+            "/tmp/skein",
+            None,
+        )
+        .await
+        .expect("running composer catalog should load without a thread id");
+
+        assert!(catalog.apps.is_empty());
+        let requests = harness.requests().await;
+        assert!(
+            requests.iter().all(|request| request.method != "app/list"),
+            "app/list should be skipped when no thread id is available",
+        );
     }
 
     #[tokio::test]
