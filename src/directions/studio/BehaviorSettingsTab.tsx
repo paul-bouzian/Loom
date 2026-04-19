@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useRef,
   useState,
   type CSSProperties,
   type KeyboardEvent,
@@ -16,14 +17,12 @@ const MAX_MULTI_AGENT_NUDGE_MAX_SUBAGENTS = 6;
 
 type Props = {
   disabled: boolean;
-  rangeDisabled?: boolean;
   settings: GlobalSettings;
   onChange: (patch: GlobalSettingsPatch) => Promise<void> | void;
 };
 
 export function BehaviorSettingsTab({
   disabled,
-  rangeDisabled = false,
   settings,
   onChange,
 }: Props) {
@@ -79,7 +78,7 @@ export function BehaviorSettingsTab({
             min={MIN_MULTI_AGENT_NUDGE_MAX_SUBAGENTS}
             max={MAX_MULTI_AGENT_NUDGE_MAX_SUBAGENTS}
             value={settings.multiAgentNudgeMaxSubagents}
-            disabled={rangeDisabled || !settings.multiAgentNudgeEnabled}
+            disabled={!settings.multiAgentNudgeEnabled}
             onChange={(value) => onChange({ multiAgentNudgeMaxSubagents: value })}
           />
         </SettingsRow>
@@ -105,15 +104,18 @@ function SettingsRange({
 }) {
   const inputId = useId();
   const [draftValue, setDraftValue] = useState(value);
+  const lastSubmittedValueRef = useRef(value);
 
   useEffect(() => {
+    lastSubmittedValueRef.current = value;
     setDraftValue(value);
   }, [value]);
 
   function persistDraft(nextValue = draftValue) {
-    if (disabled || nextValue === value) {
+    if (disabled || nextValue === lastSubmittedValueRef.current) {
       return;
     }
+    lastSubmittedValueRef.current = nextValue;
     onChange(nextValue);
   }
 

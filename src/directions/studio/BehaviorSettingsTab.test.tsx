@@ -10,7 +10,6 @@ describe("BehaviorSettingsTab", () => {
     render(
       <BehaviorSettingsTab
         disabled={false}
-        rangeDisabled={false}
         settings={makeGlobalSettings()}
         onChange={() => undefined}
       />,
@@ -24,7 +23,6 @@ describe("BehaviorSettingsTab", () => {
     render(
       <BehaviorSettingsTab
         disabled={true}
-        rangeDisabled={false}
         settings={makeGlobalSettings({ multiAgentNudgeEnabled: true })}
         onChange={() => undefined}
       />,
@@ -40,7 +38,6 @@ describe("BehaviorSettingsTab", () => {
     render(
       <BehaviorSettingsTab
         disabled={false}
-        rangeDisabled={false}
         settings={makeGlobalSettings()}
         onChange={onChange}
       />,
@@ -57,7 +54,6 @@ describe("BehaviorSettingsTab", () => {
     render(
       <BehaviorSettingsTab
         disabled={false}
-        rangeDisabled={false}
         settings={makeGlobalSettings({ multiAgentNudgeEnabled: true })}
         onChange={onChange}
       />,
@@ -80,7 +76,6 @@ describe("BehaviorSettingsTab", () => {
     render(
       <BehaviorSettingsTab
         disabled={false}
-        rangeDisabled={false}
         settings={makeGlobalSettings({ multiAgentNudgeEnabled: true })}
         onChange={onChange}
       />,

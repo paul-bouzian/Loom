@@ -25,7 +25,9 @@ export function AdvancedSettingsTab({ disabled, settings, onChange }: Props) {
             value={settings.codexBinaryPath ?? ""}
             placeholder="auto-detect"
             disabled={disabled}
-            onChange={(value) => onChange({ codexBinaryPath: value || null })}
+            onChange={(value) =>
+              onChange({ codexBinaryPath: value.trim() === "" ? null : value })
+            }
           />
         </SettingsRow>
       </SettingsSection>

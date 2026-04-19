@@ -31,6 +31,7 @@ import { settingsModelOptions } from "./composerOptions";
 import "./SettingsView.css";
 
 type Props = {
+  open: boolean;
   onClose: () => void;
 };
 
@@ -107,7 +108,7 @@ async function requestDesktopNotificationsAccess(): Promise<
   }
 }
 
-export function SettingsView({ onClose }: Props) {
+export function SettingsView({ open, onClose }: Props) {
   const settings = useWorkspaceStore(selectSettings);
   const projects = useWorkspaceStore(selectProjects);
   const selectedProjectId = useWorkspaceStore((state) => state.selectedProjectId);
@@ -150,6 +151,8 @@ export function SettingsView({ onClose }: Props) {
   );
 
   useEffect(() => {
+    if (!open) return;
+
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
 
@@ -167,14 +170,14 @@ export function SettingsView({ onClose }: Props) {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onClose]);
+  }, [open, onClose]);
 
   useEffect(() => {
-    if (!settingsCapabilityEnvironmentId) {
+    if (!open || !settingsCapabilityEnvironmentId) {
       return;
     }
     void tryLoadEnvironmentCapabilities(settingsCapabilityEnvironmentId);
-  }, [settingsCapabilityEnvironmentId, tryLoadEnvironmentCapabilities]);
+  }, [open, settingsCapabilityEnvironmentId, tryLoadEnvironmentCapabilities]);
 
   async function applyGlobalSettingsChange(patch: GlobalSettingsPatch) {
     try {
@@ -275,6 +278,10 @@ export function SettingsView({ onClose }: Props) {
     }
   }
 
+  if (!open) {
+    return null;
+  }
+
   const activeTabMeta =
     SETTINGS_TABS.find((tab) => tab.id === activeTab) ?? SETTINGS_TABS[0];
 
@@ -309,7 +316,6 @@ export function SettingsView({ onClose }: Props) {
         return (
           <BehaviorSettingsTab
             disabled={savingGlobalSettings}
-            rangeDisabled={desktopNotificationsBusy}
             settings={settings}
             onChange={handleGlobalChange}
           />

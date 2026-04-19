@@ -166,25 +166,16 @@ export function StudioShell() {
 
   const rightPanelOpen = effectiveRightPanel !== "none";
 
-  if (settingsOpen) {
-    return (
-      <div className="studio-shell studio-shell--settings">
-        <SettingsView onClose={() => setSettingsOpen(false)} />
-        <ProjectActionCreateDialog
-          open={actionCreateDialogOpen}
-          project={actionCreateProject}
-          shortcutSettings={settings?.shortcuts ?? {}}
-          onClose={() => setActionCreateProjectId(null)}
-        />
-        <StudioStatusBar />
-      </div>
-    );
-  }
+  const shellClassName = [
+    "studio-shell",
+    sidePanelDragging ? "studio-shell--resizing-side-panel" : null,
+    settingsOpen ? "studio-shell--settings-open" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <div
-      className={`studio-shell${sidePanelDragging ? " studio-shell--resizing-side-panel" : ""}`}
-    >
+    <div className={shellClassName}>
       <TreeSidebar
         theme={theme}
         collapsed={!projectsSidebarOpen}
@@ -232,6 +223,10 @@ export function StudioShell() {
         <FirstPromptRenameFailureNotice />
         <AppUpdateNotice />
       </div>
+      <SettingsView
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
       <StudioStatusBar />
     </div>
   );

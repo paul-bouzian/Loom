@@ -236,7 +236,7 @@ export function ProjectSettingsTab({
                   ) : null}
                   {draft.actions.length === 0 ? (
                     <p className="settings-field__help">
-                      No manual actions yet. Add one to expose a split button in every
+                      No manual actions yet. Add one to make it available in every
                       environment.
                     </p>
                   ) : (
