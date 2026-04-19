@@ -46,6 +46,8 @@ struct IdleRuntimeClassification {
 
 struct HeadlessSearchSession {
     session: Arc<RuntimeSession>,
+    environment_path: String,
+    binary_path: String,
     last_activity_at: DateTime<Utc>,
 }
 
@@ -519,6 +521,24 @@ impl RuntimeSupervisor {
             return Ok(RuntimeReadTarget::Running(runtime.session));
         }
 
+        let binary_path = resolve_binary_path(codex_binary_path)?;
+        if let Some(stale) = {
+            let mut sessions = self.headless_search_sessions.lock().await;
+            take_mismatched_headless_search_session(
+                &mut sessions,
+                environment_id,
+                environment_path,
+                &binary_path,
+            )
+        } {
+            if let Err(error) = stale.stop().await {
+                warn!(
+                    environment_id,
+                    "failed to stop stale shared headless search session: {error}"
+                );
+            }
+        }
+
         let now = Utc::now();
         let cached_session = {
             let sessions = self.headless_search_sessions.lock().await;
@@ -548,12 +568,11 @@ impl RuntimeSupervisor {
             }
         }
 
-        let binary_path = resolve_binary_path(codex_binary_path)?;
         let session = Arc::new(
             RuntimeSession::spawn_headless(
                 environment_id.to_string(),
                 environment_path.to_string(),
-                binary_path,
+                binary_path.clone(),
                 self.app_version.clone(),
                 true,
             )
@@ -565,6 +584,8 @@ impl RuntimeSupervisor {
                 &mut sessions,
                 environment_id.to_string(),
                 session.clone(),
+                environment_path.to_string(),
+                binary_path,
                 now,
             );
         }
@@ -1590,12 +1611,16 @@ fn store_headless_search_session(
     sessions: &mut HashMap<String, HeadlessSearchSession>,
     environment_id: String,
     session: Arc<RuntimeSession>,
+    environment_path: String,
+    binary_path: String,
     now: DateTime<Utc>,
 ) {
     sessions.insert(
         environment_id,
         HeadlessSearchSession {
             session,
+            environment_path,
+            binary_path,
             last_activity_at: now,
         },
     );
@@ -1615,6 +1640,20 @@ fn take_headless_search_session(
     sessions: &mut HashMap<String, HeadlessSearchSession>,
     environment_id: &str,
 ) -> Option<Arc<RuntimeSession>> {
+    sessions.remove(environment_id).map(|entry| entry.session)
+}
+
+fn take_mismatched_headless_search_session(
+    sessions: &mut HashMap<String, HeadlessSearchSession>,
+    environment_id: &str,
+    environment_path: &str,
+    binary_path: &str,
+) -> Option<Arc<RuntimeSession>> {
+    let entry = sessions.get(environment_id)?;
+    if entry.environment_path == environment_path && entry.binary_path == binary_path {
+        return None;
+    }
+
     sessions.remove(environment_id).map(|entry| entry.session)
 }
 
@@ -1671,7 +1710,8 @@ mod tests {
         read_capabilities_from_target, read_composer_catalog_from_target, resolve_binary_path,
         search_files_from_target, should_stop_idle_runtime_candidate,
         store_account_usage_snapshot_from_read, store_headless_search_session,
-        take_idle_headless_search_sessions, touch_headless_search_session,
+        take_idle_headless_search_sessions, take_mismatched_headless_search_session,
+        touch_headless_search_session,
         touch_running_runtime, usage_snapshot_is_empty, usage_snapshot_patch_from_snapshot,
         validate_composer_file_search_context, AccountUsageState, AppServerAuthStatus,
         CodexRateLimitSnapshotPatch, HeadlessSearchSession, RunningRuntime,
@@ -1886,6 +1926,8 @@ mod tests {
                 &mut sessions,
                 "env-1".to_string(),
                 cached_session,
+                "/tmp/skein".to_string(),
+                "/usr/bin/codex".to_string(),
                 now,
             );
         }
@@ -1915,6 +1957,8 @@ mod tests {
             &mut sessions,
             "env-1".to_string(),
             session.clone(),
+            "/tmp/skein".to_string(),
+            "/usr/bin/codex".to_string(),
             earlier,
         );
 
@@ -1928,6 +1972,33 @@ mod tests {
                 .map(|entry| entry.last_activity_at),
             Some(now)
         );
+    }
+
+    #[test]
+    fn take_mismatched_headless_search_session_removes_stale_targets() {
+        let session = Arc::new(RuntimeSession::from_snapshot_for_test(
+            make_completed_snapshot(),
+        ));
+        let mut sessions = HashMap::new();
+        store_headless_search_session(
+            &mut sessions,
+            "env-1".to_string(),
+            session.clone(),
+            "/tmp/skein".to_string(),
+            "/usr/bin/codex".to_string(),
+            Utc::now(),
+        );
+
+        let removed = take_mismatched_headless_search_session(
+            &mut sessions,
+            "env-1",
+            "/tmp/other",
+            "/usr/bin/codex",
+        )
+        .expect("mismatched targets should evict the cached session");
+
+        assert!(Arc::ptr_eq(&removed, &session));
+        assert!(!sessions.contains_key("env-1"));
     }
 
     #[test]
@@ -1948,6 +2019,8 @@ mod tests {
                 "env-stale".to_string(),
                 HeadlessSearchSession {
                     session: stale_session.clone(),
+                    environment_path: "/tmp/stale".to_string(),
+                    binary_path: "/usr/bin/codex".to_string(),
                     last_activity_at: now - ChronoDuration::minutes(15),
                 },
             ),
@@ -1955,6 +2028,8 @@ mod tests {
                 "env-fresh".to_string(),
                 HeadlessSearchSession {
                     session: fresh_session.clone(),
+                    environment_path: "/tmp/fresh".to_string(),
+                    binary_path: "/usr/bin/codex".to_string(),
                     last_activity_at: now - ChronoDuration::minutes(5),
                 },
             ),
