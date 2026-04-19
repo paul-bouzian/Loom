@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ComponentProps } from "react";
+import { useMemo, useState, type ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -20,8 +20,8 @@ import { InlineComposer } from "./InlineComposer";
 import { startVoiceCapture } from "./composer-voice-audio";
 
 vi.mock("../../../lib/bridge", () => ({
-  getThreadComposerCatalog: vi.fn(),
-  searchThreadFiles: vi.fn(),
+  getComposerCatalog: vi.fn(),
+  searchComposerFiles: vi.fn(),
   readImageAsDataUrl: vi.fn(),
   getEnvironmentVoiceStatus: vi.fn(),
   transcribeEnvironmentVoice: vi.fn(),
@@ -76,12 +76,12 @@ beforeEach(async () => {
     lastFetchedAtByEnvironmentId: {},
     lastRequestedAtByEnvironmentId: {},
   }));
-  mockedBridge.getThreadComposerCatalog.mockResolvedValue({
+  mockedBridge.getComposerCatalog.mockResolvedValue({
     prompts: [],
     skills: [],
     apps: [],
   });
-  mockedBridge.searchThreadFiles.mockResolvedValue([]);
+  mockedBridge.searchComposerFiles.mockResolvedValue([]);
   mockedBridge.readImageAsDataUrl.mockResolvedValue(
     "data:image/png;base64,aGVsbG8=",
   );
@@ -438,10 +438,12 @@ describe("InlineComposer voice dictation", () => {
     });
   });
 
-  it("can keep voice dictation enabled when thread transport is disabled", async () => {
+  it("can keep voice dictation enabled when catalog-backed autocomplete is disabled", async () => {
     renderComposer("", {
       threadId: "draft:topLeft",
       transportEnabled: false,
+      catalogTarget: null,
+      fileSearchTarget: null,
       voiceEnabled: true,
     });
 
@@ -451,19 +453,21 @@ describe("InlineComposer voice dictation", () => {
     await waitFor(() => {
       expect(startButton).toBeEnabled();
     });
-    expect(mockedBridge.getThreadComposerCatalog).not.toHaveBeenCalled();
+    expect(mockedBridge.getComposerCatalog).not.toHaveBeenCalled();
   });
 
-  it("uses the provided backing thread for catalog-backed transport", async () => {
+  it("uses the provided catalog target even when transport is disabled", async () => {
     renderComposer("", {
       threadId: "draft:topLeft",
-      transportThreadId: "thread-2",
+      transportEnabled: false,
+      catalogTarget: { kind: "thread", threadId: "thread-2" },
     });
 
     await waitFor(() => {
-      expect(mockedBridge.getThreadComposerCatalog).toHaveBeenCalledWith(
-        "thread-2",
-      );
+      expect(mockedBridge.getComposerCatalog).toHaveBeenCalledWith({
+        kind: "thread",
+        threadId: "thread-2",
+      });
     });
   });
 
@@ -681,6 +685,41 @@ describe("InlineComposer image attachments", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the image support notice visible for draft composers without transport", async () => {
+    renderComposer("", {
+      modelOptions: [
+        {
+          ...capabilitiesFixture.models[0],
+          inputModalities: ["text"],
+        },
+      ],
+      transportEnabled: false,
+      imageSupportNoticeEnabled: true,
+    });
+
+    expect(
+      await screen.findByText(
+        "Image attachments are unavailable for GPT-5.4.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("uses the composer thread id as the file search request key", async () => {
+    renderComposer("@main", {
+      threadId: "draft:topLeft",
+      fileSearchTarget: { kind: "environment", environmentId: "env-1" },
+    });
+
+    await waitFor(() => {
+      expect(mockedBridge.searchComposerFiles).toHaveBeenCalledWith({
+        target: { kind: "environment", environmentId: "env-1" },
+        requestKey: "draft:topLeft",
+        query: "main",
+        limit: 50,
+      });
+    });
+  });
+
   it("toggles fast mode from the lightning control", async () => {
     const onUpdateComposer = vi.fn();
     renderComposer("", { onUpdateComposer });
@@ -734,8 +773,12 @@ function renderComposer(
     onSend?: ComponentProps<typeof InlineComposer>["onSend"];
     onUpdateComposer?: ComponentProps<typeof InlineComposer>["onUpdateComposer"];
     threadId?: string;
+    catalogTarget?: ComponentProps<typeof InlineComposer>["catalogTarget"];
+    fileSearchTarget?: ComponentProps<typeof InlineComposer>["fileSearchTarget"];
+    imageSupportNoticeEnabled?: ComponentProps<
+      typeof InlineComposer
+    >["imageSupportNoticeEnabled"];
     transportEnabled?: boolean;
-    transportThreadId?: string | null;
     voiceEnabled?: boolean;
   } = {},
 ) {
@@ -749,11 +792,16 @@ function renderComposer(
     const [mentionBindings, setMentionBindings] = useState<
       ComposerDraftMentionBinding[]
     >([]);
+    const threadId = options.threadId ?? "thread-1";
+    const defaultTarget = useMemo(
+      () => ({ kind: "thread" as const, threadId }),
+      [threadId],
+    );
 
     return (
       <InlineComposer
         environmentId="env-1"
-        threadId={options.threadId ?? "thread-1"}
+        threadId={threadId}
         composer={options.composer ?? baseComposer}
         collaborationModes={capabilitiesFixture.collaborationModes}
         disabled={options.disabled ?? false}
@@ -774,8 +822,14 @@ function renderComposer(
         onInterrupt={() => undefined}
         onSend={(...args) => options.onSend?.(...args)}
         onUpdateComposer={(patch) => options.onUpdateComposer?.(patch)}
+        catalogTarget={
+          options.catalogTarget === undefined ? defaultTarget : options.catalogTarget
+        }
+        fileSearchTarget={
+          options.fileSearchTarget === undefined ? defaultTarget : options.fileSearchTarget
+        }
+        imageSupportNoticeEnabled={options.imageSupportNoticeEnabled}
         transportEnabled={options.transportEnabled}
-        transportThreadId={options.transportThreadId}
         voiceEnabled={options.voiceEnabled}
       />
     );

@@ -24,6 +24,10 @@ let latestInlineComposerProps: {
   draft: string;
   images: Array<{ type: string }>;
   composer: { model: string };
+  modelOptions: Array<{ id: string; displayName: string }>;
+  catalogTarget?: unknown;
+  fileSearchTarget?: unknown;
+  transportEnabled?: boolean;
 } | null = null;
 
 vi.mock("../../../lib/bridge", () => ({
@@ -38,14 +42,28 @@ vi.mock("../composer/InlineComposer", () => ({
     composer,
     draft,
     images,
+    catalogTarget,
     modelOptions,
+    fileSearchTarget,
+    transportEnabled,
   }: {
     composer: { model: string };
     draft: string;
     images: Array<{ type: string }>;
+    catalogTarget?: unknown;
     modelOptions: Array<{ id: string; displayName: string }>;
+    fileSearchTarget?: unknown;
+    transportEnabled?: boolean;
   }) => {
-    latestInlineComposerProps = { composer, draft, images };
+    latestInlineComposerProps = {
+      composer,
+      draft,
+      images,
+      modelOptions,
+      catalogTarget,
+      fileSearchTarget,
+      transportEnabled,
+    };
     return (
       <div data-testid="inline-composer">
         {modelOptions.map((model) => model.id).join(",")}
@@ -297,5 +315,47 @@ describe("ThreadDraftComposer", () => {
       projectId: "project-1",
       target: { kind: "new", baseBranch: "main", name: "persisted-worktree" },
     });
+  });
+
+  it("uses the chat workspace catalog target for standalone chat drafts", async () => {
+    render(<ThreadDraftComposer draft={{ kind: "chat" }} paneId="topLeft" />);
+
+    await waitFor(() => {
+      expect(latestInlineComposerProps).not.toBeNull();
+    });
+
+    expect(latestInlineComposerProps?.catalogTarget).toEqual({
+      kind: "chatWorkspace",
+    });
+    expect(latestInlineComposerProps?.fileSearchTarget).toBeNull();
+  });
+
+  it("keeps environment-backed autocomplete available for new worktree drafts", async () => {
+    render(
+      <ThreadDraftComposer
+        draft={{ kind: "project", projectId: "project-1" }}
+        paneId="topLeft"
+      />,
+    );
+
+    act(() => {
+      latestEnvironmentSelectorProps?.onChange({
+        kind: "project",
+        projectId: "project-1",
+        target: { kind: "new", baseBranch: "main", name: "feature-chat" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(latestInlineComposerProps?.catalogTarget).toEqual({
+        kind: "environment",
+        environmentId: "env-local",
+      });
+    });
+    expect(latestInlineComposerProps?.fileSearchTarget).toEqual({
+      kind: "environment",
+      environmentId: "env-local",
+    });
+    expect(latestInlineComposerProps?.transportEnabled).toBe(false);
   });
 });

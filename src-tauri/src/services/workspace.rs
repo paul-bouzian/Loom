@@ -7,7 +7,9 @@ use serde::Deserialize;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::domain::conversation::{ConversationComposerDraft, ConversationComposerSettings};
+use crate::domain::conversation::{
+    ComposerTarget, ConversationComposerDraft, ConversationComposerSettings,
+};
 use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch, OpenTarget};
 use crate::domain::shortcuts::ShortcutSettings;
 use crate::domain::workspace::{
@@ -186,6 +188,15 @@ impl ThreadRuntimeContext {
             stream_assistant_responses: self.stream_assistant_responses,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ComposerTargetContext {
+    pub environment_id: String,
+    pub environment_path: String,
+    pub codex_thread_id: Option<String>,
+    pub codex_binary_path: Option<String>,
+    pub file_search_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1566,6 +1577,68 @@ impl WorkspaceService {
             .ok_or_else(|| AppError::NotFound("Thread not found.".to_string()))
     }
 
+    pub fn composer_target_context(
+        &self,
+        target: &ComposerTarget,
+    ) -> AppResult<ComposerTargetContext> {
+        match target {
+            ComposerTarget::Thread { thread_id } => {
+                validate_non_blank_id(thread_id, "Thread")?;
+                let context = self.thread_runtime_context(thread_id)?;
+                Ok(ComposerTargetContext {
+                    environment_id: context.environment_id,
+                    environment_path: context.environment_path,
+                    codex_thread_id: context.codex_thread_id,
+                    codex_binary_path: context.codex_binary_path,
+                    file_search_enabled: true,
+                })
+            }
+            ComposerTarget::Environment { environment_id } => {
+                validate_non_blank_id(environment_id, "Environment")?;
+                let connection = self.database.open()?;
+                let environment_kind = connection
+                    .query_row(
+                        "SELECT kind FROM environments WHERE id = ?1",
+                        params![environment_id],
+                        |row| environment_kind_from_str(&row.get::<_, String>(0)?),
+                    )
+                    .optional()?
+                    .ok_or_else(|| AppError::NotFound("Environment not found.".to_string()))?;
+                if matches!(environment_kind, EnvironmentKind::Chat) {
+                    return Err(AppError::Validation(
+                        "Chat environments must use the chat workspace composer target."
+                            .to_string(),
+                    ));
+                }
+                let runtime_target = self.environment_runtime_target(environment_id)?;
+                let codex_thread_id =
+                    self.latest_active_codex_thread_id_for_environment(&connection, environment_id)?;
+
+                Ok(ComposerTargetContext {
+                    environment_id: environment_id.to_string(),
+                    environment_path: runtime_target.environment_path,
+                    codex_thread_id,
+                    codex_binary_path: runtime_target.codex_binary_path,
+                    file_search_enabled: true,
+                })
+            }
+            ComposerTarget::ChatWorkspace {} => {
+                std::fs::create_dir_all(&self.chats_root)?;
+                let connection = self.database.open()?;
+                let settings = self.read_or_seed_settings(&connection)?;
+                let environment_id = CHAT_WORKSPACE_PROJECT_ID.to_string();
+
+                Ok(ComposerTargetContext {
+                    environment_id: environment_id.clone(),
+                    environment_path: self.chats_root.to_string_lossy().to_string(),
+                    codex_thread_id: None,
+                    codex_binary_path: settings.codex_binary_path,
+                    file_search_enabled: false,
+                })
+            }
+        }
+    }
+
     pub fn persist_codex_thread_id(&self, thread_id: &str, codex_thread_id: &str) -> AppResult<()> {
         let affected = self.database.open()?.execute(
             "
@@ -2440,6 +2513,30 @@ impl WorkspaceService {
         Ok(metadata)
     }
 
+    fn latest_active_codex_thread_id_for_environment(
+        &self,
+        connection: &rusqlite::Connection,
+        environment_id: &str,
+    ) -> AppResult<Option<String>> {
+        connection
+            .query_row(
+                "
+                SELECT codex_thread_id
+                FROM threads
+                WHERE environment_id = ?1
+                  AND archived_at IS NULL
+                  AND status = ?2
+                  AND codex_thread_id IS NOT NULL
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                ",
+                params![environment_id, thread_status_value(ThreadStatus::Active)],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(AppError::from)
+    }
+
     fn ensure_local_environment(
         &self,
         connection: &rusqlite::Transaction<'_>,
@@ -2984,8 +3081,8 @@ mod tests {
         CHAT_WORKSPACE_PROJECT_ID,
     };
     use crate::domain::conversation::{
-        ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
-        ConversationComposerSettings, ConversationImageAttachment,
+        ComposerDraftMentionBinding, ComposerMentionBindingKind, ComposerTarget,
+        ConversationComposerDraft, ConversationComposerSettings, ConversationImageAttachment,
     };
     use crate::domain::settings::{
         GlobalSettings, GlobalSettingsPatch, NotificationSoundChannelSettingsPatch,
@@ -2999,6 +3096,7 @@ mod tests {
         ProjectSettingsPatch, PullRequestState, SavedDraftThreadState, ThreadOverrides,
         ThreadStatus,
     };
+    use crate::error::AppError;
     use crate::services::git;
     use crate::services::worktree_scripts::WorktreeScriptService;
 
@@ -3838,6 +3936,42 @@ mod tests {
             .expect("thread context should load");
 
         assert_eq!(context.composer.service_tier, Some(ServiceTier::Fast));
+    }
+
+    #[test]
+    fn chat_workspace_composer_target_disables_file_search() {
+        let harness = WorkspaceHarness::new().expect("harness");
+
+        let context = harness
+            .service
+            .composer_target_context(&ComposerTarget::ChatWorkspace {})
+            .expect("chat workspace target should resolve");
+
+        assert_eq!(context.environment_id, CHAT_WORKSPACE_PROJECT_ID);
+        assert!(!context.file_search_enabled);
+    }
+
+    #[test]
+    fn environment_composer_target_rejects_chat_environments() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let chat = harness
+            .service
+            .create_chat_thread(CreateChatThreadRequest {
+                title: Some("Composer validation".to_string()),
+                overrides: None,
+            })
+            .expect("chat thread should be created");
+
+        let error = harness
+            .service
+            .composer_target_context(&ComposerTarget::Environment {
+                environment_id: chat.environment.id,
+            })
+            .expect_err("chat environment should be rejected");
+
+        assert!(
+            matches!(error, AppError::Validation(message) if message == "Chat environments must use the chat workspace composer target.")
+        );
     }
 
     #[test]

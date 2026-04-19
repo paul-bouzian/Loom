@@ -229,6 +229,10 @@ export function ThreadConversation({
     () => resolveFallbackComposer(thread, settings),
     [settings, thread],
   );
+  const composerTarget = useMemo(
+    () => ({ kind: "thread" as const, threadId: thread.id }),
+    [thread.id],
+  );
   const resolvedComposer = composer ?? snapshot?.composer ?? fallbackComposer;
   const approveComposer = snapshot ? resolvedComposer : null;
   const isConnecting = hydration === "cold" || hydration === "loading";
@@ -586,6 +590,9 @@ export function ThreadConversation({
         isRefiningPlan={isRefiningPlan}
         mentionBindings={mentionBindings}
         modelOptions={capabilities?.models ?? []}
+        catalogTarget={composerTarget}
+        catalogRefreshKey={snapshot?.codexThreadId ?? thread.codexThreadId ?? null}
+        fileSearchTarget={composerTarget}
         transportEnabled={transportReady}
         onChangeImages={(nextImages) =>
           updateDraft(thread.id, (currentDraft) => ({

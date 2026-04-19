@@ -35,8 +35,8 @@ vi.mock("../../lib/bridge", () => ({
   openThreadConversation: vi.fn(),
   saveThreadComposerDraft: vi.fn(),
   refreshThreadConversation: vi.fn(),
-  getThreadComposerCatalog: vi.fn(),
-  searchThreadFiles: vi.fn(),
+  getComposerCatalog: vi.fn(),
+  searchComposerFiles: vi.fn(),
   readImageAsDataUrl: vi.fn(),
   sendThreadMessage: vi.fn(),
   interruptThreadTurn: vi.fn(),
@@ -126,12 +126,12 @@ beforeEach(async () => {
   await resetVoiceSessionStore();
   resetStores();
   mockedBridge.saveThreadComposerDraft.mockResolvedValue(undefined);
-  mockedBridge.getThreadComposerCatalog.mockResolvedValue({
+  mockedBridge.getComposerCatalog.mockResolvedValue({
     prompts: [],
     skills: [],
     apps: [],
   });
-  mockedBridge.searchThreadFiles.mockResolvedValue([]);
+  mockedBridge.searchComposerFiles.mockResolvedValue([]);
   mockedBridge.readImageAsDataUrl.mockResolvedValue(
     "data:image/png;base64,aGVsbG8=",
   );
@@ -2429,7 +2429,7 @@ describe("ThreadConversation", () => {
       snapshot: makeConversationSnapshot({ status: "idle" }),
       capabilities: capabilitiesFixture,
     });
-    mockedBridge.getThreadComposerCatalog.mockResolvedValue({
+    mockedBridge.getComposerCatalog.mockResolvedValue({
       prompts: [
         {
           name: "review",
@@ -2487,7 +2487,7 @@ describe("ThreadConversation", () => {
       snapshot: makeConversationSnapshot({ status: "idle" }),
       capabilities: capabilitiesFixture,
     });
-    mockedBridge.getThreadComposerCatalog.mockResolvedValue({
+    mockedBridge.getComposerCatalog.mockResolvedValue({
       prompts: [],
       skills: [
         {
@@ -2523,12 +2523,55 @@ describe("ThreadConversation", () => {
     expect(input).toHaveValue("Use $create-pr now");
   });
 
+  it("reloads the composer catalog when a thread gains a codex thread id", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "idle",
+        codexThreadId: null,
+      }),
+      capabilities: capabilitiesFixture,
+    });
+    mockedBridge.sendThreadMessage.mockResolvedValue(
+      makeConversationSnapshot({
+        status: "running",
+        activeTurnId: "turn-live-1",
+        codexThreadId: "thr-live-1",
+      }),
+    );
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await userEvent.type(input, "Kick off the thread");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockedBridge.sendThreadMessage).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(mockedBridge.getComposerCatalog).toHaveBeenCalledTimes(2);
+    });
+    expect(mockedBridge.getComposerCatalog).toHaveBeenNthCalledWith(1, {
+      kind: "thread",
+      threadId: "thread-1",
+    });
+    expect(mockedBridge.getComposerCatalog).toHaveBeenNthCalledWith(2, {
+      kind: "thread",
+      threadId: "thread-1",
+    });
+  });
+
   it("preserves the selected app binding when a $token collides with a skill name", async () => {
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({ status: "idle" }),
       capabilities: capabilitiesFixture,
     });
-    mockedBridge.getThreadComposerCatalog.mockResolvedValue({
+    mockedBridge.getComposerCatalog.mockResolvedValue({
       prompts: [],
       skills: [
         {
@@ -2592,7 +2635,7 @@ describe("ThreadConversation", () => {
       snapshot: makeConversationSnapshot({ status: "idle" }),
       capabilities: capabilitiesFixture,
     });
-    mockedBridge.getThreadComposerCatalog.mockResolvedValue({
+    mockedBridge.getComposerCatalog.mockResolvedValue({
       prompts: [],
       skills: [
         {
