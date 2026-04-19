@@ -4,6 +4,7 @@ import skeinAppIcon from "../../../../src-tauri/icons/icon.png";
 import * as bridge from "../../../lib/bridge";
 import type {
   CollaborationModeOption,
+  ComposerDraftMentionBinding,
   ComposerMentionBindingInput,
   ConversationComposerSettings,
   ConversationImageAttachment,
@@ -298,6 +299,7 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
     sendText: string,
     sendImages: ConversationImageAttachment[],
     sendMentionBindings: ComposerMentionBindingInput[],
+    draftMentionBindings: ComposerDraftMentionBinding[],
   ) {
     if (isSending) return;
     setIsSending(true);
@@ -315,6 +317,7 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
         text: sendText,
         images: sendImages,
         mentionBindings: sendMentionBindings,
+        draftMentionBindings,
       });
       if (!result.ok) {
         setError(result.error);
@@ -407,8 +410,13 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
           }))
         }
         onInterrupt={() => undefined}
-        onSend={(next, nextImages, nextMentionBindings) => {
-          void handleSend(next, nextImages, nextMentionBindings);
+        onSend={(next, nextImages, nextMentionBindings, draftMentionBindings) => {
+          void handleSend(
+            next,
+            nextImages,
+            nextMentionBindings,
+            draftMentionBindings,
+          );
         }}
         onUpdateComposer={(patch) =>
           updateDraftThreadState(draft, (current) => ({

@@ -601,6 +601,89 @@ describe("studioActions", () => {
       expect(useWorkspaceStore.getState().selectedThreadId).toBe(newThread.id);
     });
 
+    it("sendThreadDraft transfers the latest mention bindings into the new thread draft", async () => {
+      const newThread = makeThread({ id: "thread-new", environmentId: "env-1" });
+      mockedBridge.createThread.mockResolvedValue(newThread);
+      const refreshSnapshot = vi.fn(async () => true);
+      useWorkspaceStore.setState((state) => ({ ...state, refreshSnapshot }));
+      useWorkspaceStore.getState().openThreadDraft("project-1", "topLeft");
+
+      const result = await sendThreadDraft({
+        paneId: "topLeft",
+        draft: { kind: "project", projectId: "project-1" },
+        persistedState: {
+          ...makePersistedDraftState("Old text", { kind: "local" }),
+          composerDraft: {
+            text: "Old text",
+            images: [],
+            mentionBindings: [
+              {
+                mention: "old",
+                kind: "skill",
+                path: "old",
+                start: 0,
+                end: 4,
+              },
+            ],
+            isRefiningPlan: false,
+          },
+        },
+        projectSelection: { kind: "local" },
+        text: "New text",
+        mentionBindings: [
+          {
+            mention: "fresh",
+            kind: "skill",
+            path: "fresh",
+          },
+        ],
+        draftMentionBindings: [
+          {
+            mention: "fresh",
+            kind: "skill",
+            path: "fresh",
+            start: 4,
+            end: 10,
+          },
+        ],
+      });
+
+      expect(result.ok).toBe(true);
+      expect(mockedBridge.saveThreadComposerDraft).toHaveBeenCalledWith({
+        threadId: newThread.id,
+        draft: {
+          text: "New text",
+          images: [],
+          mentionBindings: [
+            {
+              mention: "fresh",
+              kind: "skill",
+              path: "fresh",
+              start: 4,
+              end: 10,
+            },
+          ],
+          isRefiningPlan: false,
+        },
+      });
+      expect(
+        useConversationStore.getState().pendingFirstMessageByThreadId[
+          newThread.id
+        ],
+      ).toEqual({
+        text: "New text",
+        images: [],
+        mentionBindings: [
+          {
+            mention: "fresh",
+            kind: "skill",
+            path: "fresh",
+          },
+        ],
+        composer: draftComposer,
+      });
+    });
+
     it("sendThreadDraft with a new-worktree selection forwards baseBranch and name", async () => {
       const newEnv = makeEnvironment({
         id: "env-new",
@@ -796,9 +879,41 @@ describe("studioActions", () => {
       const result = await sendThreadDraft({
         paneId: "topLeft",
         draft: { kind: "project", projectId: "project-1" },
-        persistedState: makePersistedDraftState("Recovered", { kind: "local" }),
+        persistedState: {
+          ...makePersistedDraftState("Recovered", { kind: "local" }),
+          composerDraft: {
+            text: "Recovered",
+            images: [],
+            mentionBindings: [
+              {
+                mention: "stale",
+                kind: "skill",
+                path: "stale",
+                start: 0,
+                end: 6,
+              },
+            ],
+            isRefiningPlan: false,
+          },
+        },
         projectSelection: { kind: "local" },
         text: "Recovered",
+        mentionBindings: [
+          {
+            mention: "fresh",
+            kind: "skill",
+            path: "fresh",
+          },
+        ],
+        draftMentionBindings: [
+          {
+            mention: "fresh",
+            kind: "skill",
+            path: "fresh",
+            start: 0,
+            end: 6,
+          },
+        ],
       });
 
       expect(result.ok).toBe(true);
@@ -807,7 +922,15 @@ describe("studioActions", () => {
       expect(useConversationStore.getState().draftByThreadId[newThread.id]).toEqual({
         text: "Recovered",
         images: [],
-        mentionBindings: [],
+        mentionBindings: [
+          {
+            mention: "fresh",
+            kind: "skill",
+            path: "fresh",
+            start: 0,
+            end: 6,
+          },
+        ],
         isRefiningPlan: false,
       });
       expect(useConversationStore.getState().composerByThreadId[newThread.id]).toEqual(

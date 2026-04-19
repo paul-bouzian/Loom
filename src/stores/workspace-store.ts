@@ -803,15 +803,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   clearDraftThreadState: (target) => {
     const key = draftThreadTargetKey(target);
     set((state) => {
-      if (!(key in state.draftStateByTargetKey)) {
-        return {
-          draftHydrationByTargetKey: {
-            ...state.draftHydrationByTargetKey,
-            [key]: "ready",
-          },
-        };
-      }
-
       const draftStateByTargetKey = { ...state.draftStateByTargetKey };
       delete draftStateByTargetKey[key];
       return {

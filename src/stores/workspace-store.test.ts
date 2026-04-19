@@ -1486,6 +1486,36 @@ describe("workspace store — grid 2x2 panes", () => {
       );
     });
 
+    it("ignores late hydration results after clearing an uncached draft target", async () => {
+      seedTwoThreadWorkspace();
+      let resolvePersisted: ((state: SavedDraftThreadState | null) => void) | null =
+        null;
+      mockedBridge.getDraftThreadState.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolvePersisted = resolve;
+          }),
+      );
+
+      useWorkspaceStore.getState().openThreadDraft("project-a", "topLeft");
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      useWorkspaceStore
+        .getState()
+        .clearDraftThreadState({ kind: "project", projectId: "project-a" });
+
+      await act(async () => {
+        resolvePersisted?.(makeSavedDraftState("Persisted draft"));
+        await Promise.resolve();
+      });
+
+      expect(
+        useWorkspaceStore.getState().draftStateByTargetKey["project:project-a"],
+      ).toBeUndefined();
+    });
+
     it("stops retrying draft persistence when a project target disappears", async () => {
       vi.useFakeTimers();
       seedTwoThreadWorkspace();

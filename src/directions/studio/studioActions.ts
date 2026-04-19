@@ -62,6 +62,7 @@ export type SendThreadDraftInput = {
   text: string;
   images?: ConversationImageAttachment[];
   mentionBindings?: ComposerMentionBindingInput[];
+  draftMentionBindings?: ConversationComposerDraft["mentionBindings"];
 };
 
 export type SendThreadDraftResult =
@@ -74,6 +75,8 @@ export async function sendThreadDraft(
   const { paneId, draft, persistedState, projectSelection, text } = input;
   const images = input.images ?? [];
   const mentionBindings = input.mentionBindings ?? [];
+  const draftMentionBindings =
+    input.draftMentionBindings ?? persistedState.composerDraft.mentionBindings;
   const composer = persistedState.composer;
   const defaultServiceTier =
     useWorkspaceStore.getState().snapshot?.settings.defaultServiceTier ?? null;
@@ -109,6 +112,7 @@ export async function sendThreadDraft(
     {
       text,
       images,
+      mentionBindings: draftMentionBindings,
     },
   );
   let transferredDraftPersisted = true;
@@ -242,12 +246,15 @@ function normalizeTransferredComposerDraft(
   overrides?: {
     text: string;
     images: ConversationImageAttachment[];
+    mentionBindings: ConversationComposerDraft["mentionBindings"];
   },
 ): ConversationComposerDraft {
   return {
     text: overrides?.text ?? composerDraft.text,
     images: [...(overrides?.images ?? composerDraft.images)],
-    mentionBindings: [...composerDraft.mentionBindings],
+    mentionBindings: [
+      ...(overrides?.mentionBindings ?? composerDraft.mentionBindings),
+    ],
     isRefiningPlan: composerDraft.isRefiningPlan,
   };
 }
