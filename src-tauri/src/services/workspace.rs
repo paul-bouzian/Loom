@@ -192,6 +192,7 @@ pub struct ComposerTargetContext {
     pub environment_path: String,
     pub codex_thread_id: Option<String>,
     pub codex_binary_path: Option<String>,
+    pub file_search_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1560,6 +1561,7 @@ impl WorkspaceService {
                     environment_path: context.environment_path,
                     codex_thread_id: context.codex_thread_id,
                     codex_binary_path: context.codex_binary_path,
+                    file_search_enabled: true,
                 })
             }
             ComposerTarget::Environment { environment_id } => {
@@ -1574,6 +1576,7 @@ impl WorkspaceService {
                     environment_path: runtime_target.environment_path,
                     codex_thread_id,
                     codex_binary_path: runtime_target.codex_binary_path,
+                    file_search_enabled: true,
                 })
             }
             ComposerTarget::ChatWorkspace {} => {
@@ -1587,6 +1590,7 @@ impl WorkspaceService {
                     environment_path: self.chats_root.to_string_lossy().to_string(),
                     codex_thread_id: None,
                     codex_binary_path: settings.codex_binary_path,
+                    file_search_enabled: false,
                 })
             }
         }
@@ -2846,8 +2850,8 @@ mod tests {
         CHAT_WORKSPACE_PROJECT_ID,
     };
     use crate::domain::conversation::{
-        ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
-        ConversationComposerSettings, ConversationImageAttachment,
+        ComposerDraftMentionBinding, ComposerMentionBindingKind, ComposerTarget,
+        ConversationComposerDraft, ConversationComposerSettings, ConversationImageAttachment,
     };
     use crate::domain::settings::{
         GlobalSettings, GlobalSettingsPatch, NotificationSoundChannelSettingsPatch,
@@ -3650,6 +3654,19 @@ mod tests {
             .expect("thread context should load");
 
         assert_eq!(context.composer.service_tier, Some(ServiceTier::Fast));
+    }
+
+    #[test]
+    fn chat_workspace_composer_target_disables_file_search() {
+        let harness = WorkspaceHarness::new().expect("harness");
+
+        let context = harness
+            .service
+            .composer_target_context(&ComposerTarget::ChatWorkspace {})
+            .expect("chat workspace target should resolve");
+
+        assert_eq!(context.environment_id, CHAT_WORKSPACE_PROJECT_ID);
+        assert!(!context.file_search_enabled);
     }
 
     #[test]

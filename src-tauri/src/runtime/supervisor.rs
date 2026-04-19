@@ -44,6 +44,11 @@ struct IdleRuntimeClassification {
     keep_alive_environment_ids: Vec<String>,
 }
 
+struct HeadlessSearchSession {
+    session: Arc<RuntimeSession>,
+    last_activity_at: DateTime<Utc>,
+}
+
 enum RuntimeReadTarget {
     Running(Arc<RuntimeSession>),
     Headless(Box<RuntimeSession>),
@@ -84,6 +89,7 @@ pub struct RuntimeSupervisor {
     app_version: String,
     registry: Arc<Mutex<RuntimeRegistry>>,
     environment_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    headless_search_sessions: Arc<Mutex<HashMap<String, HeadlessSearchSession>>>,
     account_usage: Arc<Mutex<AccountUsageState>>,
     usage_updates: mpsc::UnboundedSender<RuntimeUsageUpdate>,
 }
@@ -197,6 +203,7 @@ impl RuntimeSupervisor {
     pub fn new(app: AppHandle, app_version: String) -> Self {
         let registry = Arc::new(Mutex::new(RuntimeRegistry::default()));
         let environment_locks = Arc::new(Mutex::new(HashMap::new()));
+        let headless_search_sessions = Arc::new(Mutex::new(HashMap::new()));
         let account_usage = Arc::new(Mutex::new(AccountUsageState::default()));
         let (usage_updates, usage_update_rx) = mpsc::unbounded_channel();
         spawn_usage_update_task(
@@ -212,6 +219,7 @@ impl RuntimeSupervisor {
             app_version,
             registry,
             environment_locks,
+            headless_search_sessions,
             account_usage,
             usage_updates,
         }
@@ -471,6 +479,73 @@ impl RuntimeSupervisor {
             .clone()
     }
 
+    async fn resolve_file_search_target(
+        &self,
+        environment_id: &str,
+        environment_path: &str,
+        codex_binary_path: Option<String>,
+    ) -> AppResult<RuntimeReadTarget> {
+        let environment_lock = self.environment_lock(environment_id).await;
+        let _environment_guard = environment_lock.lock().await;
+        self.refresh_statuses().await?;
+
+        if let Some(runtime) = self.running_runtime(environment_id).await {
+            self.mark_runtime_activity(environment_id).await;
+            return Ok(RuntimeReadTarget::Running(runtime.session));
+        }
+
+        let now = Utc::now();
+        let cached_session = {
+            let sessions = self.headless_search_sessions.lock().await;
+            sessions
+                .get(environment_id)
+                .map(|entry| entry.session.clone())
+        };
+        if let Some(session) = cached_session {
+            if session.try_wait().await?.is_none() {
+                let reused = {
+                    let mut sessions = self.headless_search_sessions.lock().await;
+                    touch_headless_search_session(&mut sessions, environment_id, now)
+                };
+                if let Some(reused) = reused {
+                    return Ok(RuntimeReadTarget::Running(reused));
+                }
+            } else if let Some(stale) = {
+                let mut sessions = self.headless_search_sessions.lock().await;
+                take_headless_search_session(&mut sessions, environment_id)
+            } {
+                if let Err(error) = stale.stop().await {
+                    warn!(
+                        environment_id,
+                        "failed to stop exited shared headless search session: {error}"
+                    );
+                }
+            }
+        }
+
+        let binary_path = resolve_binary_path(codex_binary_path)?;
+        let session = Arc::new(
+            RuntimeSession::spawn_headless(
+                environment_id.to_string(),
+                environment_path.to_string(),
+                binary_path,
+                self.app_version.clone(),
+                true,
+            )
+            .await?,
+        );
+        {
+            let mut sessions = self.headless_search_sessions.lock().await;
+            store_headless_search_session(
+                &mut sessions,
+                environment_id.to_string(),
+                session.clone(),
+                now,
+            );
+        }
+        Ok(RuntimeReadTarget::Running(session))
+    }
+
     async fn resolve_read_target(
         &self,
         environment_id: &str,
@@ -499,6 +574,19 @@ impl RuntimeSupervisor {
     }
 
     pub async fn stop(&self, environment_id: &str) -> AppResult<RuntimeStatusSnapshot> {
+        let headless_search = {
+            let mut sessions = self.headless_search_sessions.lock().await;
+            take_headless_search_session(&mut sessions, environment_id)
+        };
+        if let Some(session) = headless_search {
+            if let Err(error) = session.stop().await {
+                warn!(
+                    environment_id,
+                    "failed to stop shared headless search session: {error}"
+                );
+            }
+        }
+
         let running = self.registry.lock().await.running.remove(environment_id);
         if let Some(runtime) = running {
             runtime.session.stop().await?;
@@ -582,8 +670,10 @@ impl RuntimeSupervisor {
         query: String,
         limit: usize,
     ) -> AppResult<Vec<crate::domain::conversation::ComposerFileSearchResult>> {
+        validate_composer_file_search_context(&context)?;
+
         let read_target = self
-            .resolve_read_target(
+            .resolve_file_search_target(
                 &context.environment_id,
                 &context.environment_path,
                 context.codex_binary_path.clone(),
@@ -701,6 +791,19 @@ impl RuntimeSupervisor {
                 warn!(
                     environment_id = %candidate.environment_id,
                     "failed to evict idle runtime: {error}"
+                );
+            }
+        }
+
+        let idle_headless_search_sessions = {
+            let mut sessions = self.headless_search_sessions.lock().await;
+            take_idle_headless_search_sessions(&mut sessions, now, cutoff)
+        };
+        for (environment_id, session) in idle_headless_search_sessions {
+            if let Err(error) = session.stop().await {
+                warn!(
+                    environment_id = %environment_id,
+                    "failed to evict idle shared headless search session: {error}"
                 );
             }
         }
@@ -1444,6 +1547,65 @@ fn finish_headless_read<T>(result: AppResult<T>, stop_result: AppResult<()>) -> 
     }
 }
 
+fn store_headless_search_session(
+    sessions: &mut HashMap<String, HeadlessSearchSession>,
+    environment_id: String,
+    session: Arc<RuntimeSession>,
+    now: DateTime<Utc>,
+) {
+    sessions.insert(
+        environment_id,
+        HeadlessSearchSession {
+            session,
+            last_activity_at: now,
+        },
+    );
+}
+
+fn touch_headless_search_session(
+    sessions: &mut HashMap<String, HeadlessSearchSession>,
+    environment_id: &str,
+    now: DateTime<Utc>,
+) -> Option<Arc<RuntimeSession>> {
+    let entry = sessions.get_mut(environment_id)?;
+    entry.last_activity_at = now;
+    Some(entry.session.clone())
+}
+
+fn take_headless_search_session(
+    sessions: &mut HashMap<String, HeadlessSearchSession>,
+    environment_id: &str,
+) -> Option<Arc<RuntimeSession>> {
+    sessions.remove(environment_id).map(|entry| entry.session)
+}
+
+fn take_idle_headless_search_sessions(
+    sessions: &mut HashMap<String, HeadlessSearchSession>,
+    now: DateTime<Utc>,
+    cutoff: chrono::Duration,
+) -> Vec<(String, Arc<RuntimeSession>)> {
+    let mut idle = Vec::new();
+    sessions.retain(|environment_id, entry| {
+        if (now - entry.last_activity_at) >= cutoff {
+            idle.push((environment_id.clone(), entry.session.clone()));
+            false
+        } else {
+            true
+        }
+    });
+    idle
+}
+
+fn validate_composer_file_search_context(context: &ComposerTargetContext) -> AppResult<()> {
+    if !context.file_search_enabled {
+        return Err(AppError::Validation(
+            "File search is unavailable for standalone chats.".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn resolve_binary_path(codex_binary_path: Option<String>) -> AppResult<String> {
     resolve_codex_binary_path(codex_binary_path.as_deref())
 }
@@ -1451,6 +1613,7 @@ fn resolve_binary_path(codex_binary_path: Option<String>) -> AppResult<String> {
 #[cfg(test)]
 mod tests {
     use chrono::{Duration as ChronoDuration, TimeZone, Utc};
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1467,10 +1630,13 @@ mod tests {
         read_account_from_target, read_auth_status_from_target,
         read_capabilities_from_target, read_composer_catalog_from_target, resolve_binary_path,
         search_files_from_target, should_stop_idle_runtime_candidate,
-        store_account_usage_snapshot_from_read, touch_running_runtime, usage_snapshot_is_empty,
-        usage_snapshot_patch_from_snapshot, AccountUsageState, AppServerAuthStatus,
-        CodexRateLimitSnapshotPatch, RunningRuntime, RuntimeReadTarget, RuntimeRegistry,
-        RuntimeUsageUpdate, UsageConfirmationFallback, UsageUpdateOrigin,
+        store_account_usage_snapshot_from_read, store_headless_search_session,
+        take_idle_headless_search_sessions, touch_headless_search_session,
+        touch_running_runtime, usage_snapshot_is_empty, usage_snapshot_patch_from_snapshot,
+        validate_composer_file_search_context, AccountUsageState, AppServerAuthStatus,
+        CodexRateLimitSnapshotPatch, HeadlessSearchSession, RunningRuntime,
+        RuntimeReadTarget, RuntimeRegistry, RuntimeUsageUpdate, UsageConfirmationFallback,
+        UsageUpdateOrigin,
     };
     use crate::app_identity::CODEX_USAGE_EVENT_NAME;
     use crate::domain::conversation::{
@@ -1486,6 +1652,7 @@ mod tests {
     use crate::error::AppError;
     use crate::runtime::protocol::AccountReadAuthTypeWire;
     use crate::runtime::session::RuntimeSession;
+    use crate::services::workspace::ComposerTargetContext;
 
     #[tokio::test]
     async fn running_read_auth_status_uses_the_active_session() {
@@ -1663,6 +1830,94 @@ mod tests {
             .expect("fuzzyFileSearch request should be recorded");
         assert_eq!(search_request.params["roots"][0], "/tmp/skein");
         assert_eq!(search_request.params["cancellationToken"], "draft:topLeft");
+    }
+
+    #[test]
+    fn touch_headless_search_session_reuses_cached_session_and_updates_activity() {
+        let earlier = Utc
+            .with_ymd_and_hms(2026, 4, 19, 17, 0, 0)
+            .single()
+            .expect("valid timestamp");
+        let now = Utc
+            .with_ymd_and_hms(2026, 4, 19, 17, 5, 0)
+            .single()
+            .expect("valid timestamp");
+        let session = Arc::new(RuntimeSession::from_snapshot_for_test(
+            make_completed_snapshot(),
+        ));
+        let mut sessions = HashMap::new();
+        store_headless_search_session(
+            &mut sessions,
+            "env-1".to_string(),
+            session.clone(),
+            earlier,
+        );
+
+        let reused = touch_headless_search_session(&mut sessions, "env-1", now)
+            .expect("cached session should be reused");
+
+        assert!(Arc::ptr_eq(&reused, &session));
+        assert_eq!(
+            sessions
+                .get("env-1")
+                .map(|entry| entry.last_activity_at),
+            Some(now)
+        );
+    }
+
+    #[test]
+    fn take_idle_headless_search_sessions_returns_only_expired_sessions() {
+        let now = Utc
+            .with_ymd_and_hms(2026, 4, 19, 17, 10, 0)
+            .single()
+            .expect("valid timestamp");
+        let cutoff = ChronoDuration::minutes(10);
+        let stale_session = Arc::new(RuntimeSession::from_snapshot_for_test(
+            make_completed_snapshot(),
+        ));
+        let fresh_session = Arc::new(RuntimeSession::from_snapshot_for_test(
+            make_completed_snapshot(),
+        ));
+        let mut sessions = HashMap::from([
+            (
+                "env-stale".to_string(),
+                HeadlessSearchSession {
+                    session: stale_session.clone(),
+                    last_activity_at: now - ChronoDuration::minutes(15),
+                },
+            ),
+            (
+                "env-fresh".to_string(),
+                HeadlessSearchSession {
+                    session: fresh_session.clone(),
+                    last_activity_at: now - ChronoDuration::minutes(5),
+                },
+            ),
+        ]);
+
+        let idle = take_idle_headless_search_sessions(&mut sessions, now, cutoff);
+
+        assert_eq!(idle.len(), 1);
+        assert_eq!(idle[0].0, "env-stale");
+        assert!(Arc::ptr_eq(&idle[0].1, &stale_session));
+        assert!(sessions.contains_key("env-fresh"));
+        assert!(!sessions.contains_key("env-stale"));
+    }
+
+    #[test]
+    fn disabled_composer_file_search_targets_fail_validation() {
+        let error = validate_composer_file_search_context(&ComposerTargetContext {
+            environment_id: "skein-chat-workspace".to_string(),
+            environment_path: "/tmp/chats".to_string(),
+            codex_thread_id: None,
+            codex_binary_path: Some(String::new()),
+            file_search_enabled: false,
+        })
+        .expect_err("standalone chats should reject file search");
+
+        assert!(
+            matches!(error, AppError::Validation(message) if message == "File search is unavailable for standalone chats.")
+        );
     }
 
     #[tokio::test]
