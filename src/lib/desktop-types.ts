@@ -82,6 +82,9 @@ export type SkeinDesktopApi = {
   shell: {
     openExternal(url: string): Promise<void>;
   };
+  menu: {
+    setOpenSettingsShortcut(shortcut: string | null): Promise<void>;
+  };
   notifications: {
     send(notification: DesktopNotification): Promise<void>;
     getPermissionState(): Promise<DesktopNotificationPermission>;

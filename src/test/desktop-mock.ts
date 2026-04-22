@@ -25,6 +25,9 @@ export const dialogOpenMock = vi.fn<
 export const openExternalMock = vi.fn<
   SkeinDesktopApi["shell"]["openExternal"]
 >();
+export const menuSetOpenSettingsShortcutMock = vi.fn<
+  SkeinDesktopApi["menu"]["setOpenSettingsShortcut"]
+>();
 export const notificationSendMock = vi.fn<
   SkeinDesktopApi["notifications"]["send"]
 >();
@@ -72,6 +75,9 @@ function createDesktopMock(): SkeinDesktopApi {
     shell: {
       openExternal: openExternalMock,
     },
+    menu: {
+      setOpenSettingsShortcut: menuSetOpenSettingsShortcutMock,
+    },
     notifications: {
       send: notificationSendMock,
       getPermissionState: notificationGetPermissionStateMock,
@@ -99,6 +105,7 @@ export function resetDesktopMock() {
   dialogMessageMock.mockReset();
   dialogOpenMock.mockReset();
   openExternalMock.mockReset();
+  menuSetOpenSettingsShortcutMock.mockReset();
   notificationSendMock.mockReset();
   notificationGetPermissionStateMock.mockReset();
   notificationRequestPermissionMock.mockReset();
@@ -115,6 +122,7 @@ export function resetDesktopMock() {
   dialogMessageMock.mockResolvedValue();
   dialogOpenMock.mockResolvedValue(null);
   openExternalMock.mockResolvedValue();
+  menuSetOpenSettingsShortcutMock.mockResolvedValue();
   notificationSendMock.mockResolvedValue();
   notificationGetPermissionStateMock.mockResolvedValue(
     "default" satisfies DesktopNotificationPermission,

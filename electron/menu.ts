@@ -10,6 +10,13 @@ import {
   MENU_CHECK_FOR_UPDATES_EVENT_NAME,
   MENU_OPEN_SETTINGS_EVENT_NAME,
 } from "../src/lib/app-identity.js";
+import { toElectronAccelerator } from "../src/lib/shortcuts.js";
+
+type MenuShortcuts = {
+  openSettingsShortcut?: string | null;
+};
+
+const DEFAULT_OPEN_SETTINGS_SHORTCUT = "mod+comma";
 
 function emitMenuEvent(mainWindow: BrowserWindow, eventName: string) {
   if (mainWindow.isDestroyed()) {
@@ -25,7 +32,13 @@ function emitMenuEvent(mainWindow: BrowserWindow, eventName: string) {
   });
 }
 
-export function installApplicationMenu(mainWindow: BrowserWindow) {
+export function installApplicationMenu(
+  mainWindow: BrowserWindow,
+  shortcuts: MenuShortcuts = {},
+) {
+  const openSettingsAccelerator = toElectronAccelerator(
+    shortcuts.openSettingsShortcut ?? DEFAULT_OPEN_SETTINGS_SHORTCUT,
+  );
   const template: MenuItemConstructorOptions[] = [
     {
       label: APP_NAME,
@@ -37,7 +50,7 @@ export function installApplicationMenu(mainWindow: BrowserWindow) {
         },
         {
           label: "Settings…",
-          accelerator: "Cmd+,",
+          accelerator: openSettingsAccelerator,
           click: () => emitMenuEvent(mainWindow, MENU_OPEN_SETTINGS_EVENT_NAME),
         },
         { type: "separator" },

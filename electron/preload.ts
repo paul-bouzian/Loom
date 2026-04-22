@@ -105,6 +105,15 @@ const skeinDesktop: SkeinDesktopApi = {
     },
   },
 
+  menu: {
+    setOpenSettingsShortcut(shortcut: string | null) {
+      return ipcRenderer.invoke(
+        "skein:menu:set-open-settings-shortcut",
+        shortcut,
+      );
+    },
+  },
+
   notifications: {
     send(notification: DesktopNotification) {
       return ipcRenderer.invoke("skein:notifications:send", notification);

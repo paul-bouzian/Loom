@@ -40,6 +40,7 @@ const backendClient = new BackendClient({
   },
 });
 const appUpdater = new AppUpdater();
+let openSettingsShortcut: string | null | undefined;
 
 function createMainWindow() {
   const preferencesSnapshot = Buffer.from(
@@ -155,6 +156,16 @@ function registerIpcHandlers() {
   ipcMain.handle("skein:shell:open-external", (_event, url: string) => {
     return shell.openExternal(assertOpenExternalUrl(url));
   });
+  ipcMain.handle(
+    "skein:menu:set-open-settings-shortcut",
+    (event, shortcut: string | null) => {
+      openSettingsShortcut = shortcut;
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (window) {
+        installApplicationMenu(window, { openSettingsShortcut });
+      }
+    },
+  );
 
   ipcMain.handle("skein:notifications:send", (_event, payload: { title: string; body: string }) => {
     if (!Notification.isSupported()) {
@@ -180,7 +191,14 @@ function registerIpcHandlers() {
       }
 
       return appUpdater.downloadAndInstall(updateId, (downloadEvent) => {
-        event.sender.send(progressChannel, downloadEvent);
+        if (event.sender.isDestroyed()) {
+          return;
+        }
+        try {
+          event.sender.send(progressChannel, downloadEvent);
+        } catch {
+          /* ignore */
+        }
       });
     },
   );
@@ -196,12 +214,12 @@ app.whenReady().then(async () => {
   await backendClient.start();
   registerIpcHandlers();
   const mainWindow = createMainWindow();
-  installApplicationMenu(mainWindow);
+  installApplicationMenu(mainWindow, { openSettingsShortcut });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       const nextWindow = createMainWindow();
-      installApplicationMenu(nextWindow);
+      installApplicationMenu(nextWindow, { openSettingsShortcut });
     }
   });
 });

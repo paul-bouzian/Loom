@@ -137,6 +137,27 @@ describe("AppUpdater", () => {
     expect(quitAndInstallMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the same pending offer across repeated checks", async () => {
+    checkForUpdatesMock.mockResolvedValue({
+      isUpdateAvailable: true,
+      updateInfo: {
+        version: "0.2.0",
+        releaseDate: "2026-04-21T10:00:00Z",
+        releaseNotes: "Adds Electron auto-update support.",
+      },
+      cancellationToken: new MockCancellationToken(),
+    });
+
+    const { AppUpdater } = await import("./updater.js");
+    const updater = new AppUpdater();
+    const first = await updater.check();
+    const second = await updater.check();
+
+    expect(first).toEqual(second);
+    expect(first?.id).toBe("offer-1");
+    expect(checkForUpdatesMock).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a queued duplicate install for the same offer", async () => {
     const cancellationToken = new MockCancellationToken();
     const downloadDeferred = createDeferred<string[]>();

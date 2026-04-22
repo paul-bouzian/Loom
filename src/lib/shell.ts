@@ -37,6 +37,12 @@ export function openExternalUrl(url: string): Promise<void> {
   return requireDesktopShell().shell.openExternal(url);
 }
 
+export const menuShell = {
+  setOpenSettingsShortcut(shortcut: string | null): Promise<void> {
+    return requireDesktopShell().menu.setOpenSettingsShortcut(shortcut);
+  },
+};
+
 export const notifications = {
   getPermissionState(): Promise<DesktopNotificationPermission> {
     return requireDesktopShell().notifications.getPermissionState();

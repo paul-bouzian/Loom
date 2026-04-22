@@ -49,6 +49,7 @@ export class AppUpdater {
   private readonly updater: ElectronUpdater;
   private activeOffer: PendingUpdateOffer | null = null;
   private downloadedVersion: string | null = null;
+  private inFlightTransfer: Promise<void> | null = null;
   private readonly enabled: boolean;
   private nextOfferId = 0;
   private actionQueue: Promise<void> = Promise.resolve();
@@ -68,9 +69,11 @@ export class AppUpdater {
       }
 
       const activeOffer = this.activeOffer;
-      if (activeOffer && !activeOffer.closed && activeOffer.downloading) {
+      if (activeOffer && !activeOffer.closed) {
         return this.toDesktopUpdate(activeOffer);
       }
+
+      await this.waitForSettledTransfer();
 
       const result = await this.updater.checkForUpdates();
       if (!result?.isUpdateAvailable) {
@@ -115,14 +118,19 @@ export class AppUpdater {
       return offer;
     });
 
+    const transfer = this.downloadUpdate(offer, onEvent);
+    this.inFlightTransfer = transfer;
     try {
-      await this.downloadUpdate(offer, onEvent);
+      await transfer;
     } finally {
       await this.runExclusive(async () => {
         if (this.activeOffer === offer && !offer.closed) {
           this.releaseOffer(offer);
         }
         offer.downloading = false;
+        if (this.inFlightTransfer === transfer) {
+          this.inFlightTransfer = null;
+        }
       });
     }
   }
@@ -162,6 +170,15 @@ export class AppUpdater {
       date: offer.info.releaseDate ?? null,
       body: normalizeReleaseNotes(offer.info.releaseNotes),
     };
+  }
+
+  private async waitForSettledTransfer() {
+    const transfer = this.inFlightTransfer;
+    if (!transfer) {
+      return;
+    }
+
+    await transfer.catch(() => undefined);
   }
 
   private releaseOffer(offer: PendingUpdateOffer | null) {

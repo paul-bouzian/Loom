@@ -8,6 +8,7 @@ import {
   persistUiPreference,
   readUiPreferenceWithMigration,
 } from "../../lib/ui-prefs";
+import { menuShell } from "../../lib/shell";
 import {
   selectGitReviewScope,
   selectGitReviewSelectedFile,
@@ -138,6 +139,12 @@ export function StudioShell() {
       `${sidePanelWidth}px`,
     );
   }, [sidePanelWidth]);
+
+  useEffect(() => {
+    void menuShell
+      .setOpenSettingsShortcut(settings?.shortcuts?.openSettings ?? null)
+      .catch(() => undefined);
+  }, [settings?.shortcuts?.openSettings]);
 
   useEffect(() => {
     void reconcileVoiceSessionSnapshot(workspaceSnapshot);
