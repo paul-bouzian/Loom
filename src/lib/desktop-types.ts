@@ -1,0 +1,130 @@
+export type HostUnlistenFn = () => void;
+
+export type HostEvent<T> = {
+  payload: T;
+};
+
+export type DesktopDialogKind = "info" | "warning" | "error";
+
+export type DesktopDialogOptions = {
+  title?: string;
+  kind?: DesktopDialogKind;
+  okLabel?: string;
+  cancelLabel?: string;
+};
+
+export type DesktopDialogFilter = {
+  name: string;
+  extensions: string[];
+};
+
+export type DesktopDialogOpenOptions = {
+  title?: string;
+  directory?: boolean;
+  multiple?: boolean;
+  canCreateDirectories?: boolean;
+  filters?: DesktopDialogFilter[];
+};
+
+export type DesktopNotificationPermission = "default" | "granted" | "denied";
+
+export type DesktopNotification = {
+  title: string;
+  body: string;
+};
+
+export type DesktopDragPosition = {
+  x: number;
+  y: number;
+};
+
+export type DesktopWindowDragDropEvent =
+  | {
+      type: "enter" | "over";
+      position: DesktopDragPosition;
+    }
+  | {
+      type: "leave";
+    }
+  | {
+      type: "drop";
+      position: DesktopDragPosition;
+      paths: string[];
+    };
+
+export type DesktopUpdateDownloadEvent =
+  | {
+      event: "Started";
+      data: {
+        contentLength?: number | null;
+      };
+    }
+  | {
+      event: "Progress";
+      data: {
+        chunkLength: number;
+      };
+    }
+  | {
+      event: "Finished";
+    };
+
+export type DesktopUpdate = {
+  currentVersion: string;
+  version: string;
+  date?: string | null;
+  body?: string | null;
+  close(): Promise<void>;
+  downloadAndInstall(
+    onEvent?: (event: DesktopUpdateDownloadEvent) => void,
+  ): Promise<void>;
+};
+
+export type DesktopPreferencesApi = {
+  snapshot: Record<string, string>;
+  set(key: string, value: string | null): Promise<void>;
+};
+
+export type SkeinDesktopApi = {
+  invoke<T>(command: string, payload?: Record<string, unknown>): Promise<T>;
+  listen<T>(
+    eventName: string,
+    handler: (event: HostEvent<T>) => void,
+  ): Promise<HostUnlistenFn>;
+  dialog: {
+    confirm(
+      message: string,
+      options?: DesktopDialogOptions,
+    ): Promise<boolean>;
+    message(message: string, options?: DesktopDialogOptions): Promise<void>;
+    open(
+      options?: DesktopDialogOpenOptions,
+    ): Promise<string | string[] | null>;
+  };
+  shell: {
+    openExternal(url: string): Promise<void>;
+  };
+  notifications: {
+    send(notification: DesktopNotification): Promise<void>;
+    getPermissionState(): Promise<DesktopNotificationPermission>;
+    requestPermission(): Promise<Exclude<DesktopNotificationPermission, "default">>;
+  };
+  updater: {
+    check(): Promise<DesktopUpdate | null>;
+  };
+  preferences?: DesktopPreferencesApi;
+  window: {
+    getPathForFile(file: File): string | null;
+    onDragDropEvent?(
+      handler: (event: DesktopWindowDragDropEvent) => void,
+    ): Promise<HostUnlistenFn> | HostUnlistenFn;
+  };
+};
+
+declare global {
+  interface Window {
+    skeinDesktop?: SkeinDesktopApi;
+  }
+}
+
+export {};

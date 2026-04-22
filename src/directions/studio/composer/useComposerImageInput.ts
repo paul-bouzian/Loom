@@ -7,9 +7,7 @@ import {
   type SetStateAction,
 } from "react";
 
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
-
+import { dialog, windowShell } from "../../../lib/shell";
 import type { ConversationImageAttachment } from "../../../lib/types";
 import {
   IMAGE_FILE_EXTENSIONS,
@@ -141,7 +139,7 @@ export function useComposerImageInput({
     const scopeVersion = scopeVersionRef.current;
     let selection: string | string[] | null;
     try {
-      selection = await open({
+      selection = await dialog.open({
         multiple: true,
         filters: [
           {
@@ -168,18 +166,18 @@ export function useComposerImageInput({
 
     let cancelled = false;
     let unlisten: null | (() => void) = null;
-    void getCurrentWindow()
+    void windowShell
       .onDragDropEvent((event) => {
         const target = dropTargetRef.current;
         if (!target) {
           return;
         }
-        if (event.payload.type === "leave") {
+        if (event.type === "leave") {
           setIsDragOver(false);
           return;
         }
         const position = normalizeDragPosition(
-          event.payload.position,
+          event.position,
           lastClientPositionRef.current,
         );
         const rect = target.getBoundingClientRect();
@@ -189,16 +187,16 @@ export function useComposerImageInput({
           position.y >= rect.top &&
           position.y <= rect.bottom;
 
-        if (event.payload.type === "enter" || event.payload.type === "over") {
+        if (event.type === "enter" || event.type === "over") {
           setIsDragOver(inside);
           return;
         }
-        if (event.payload.type === "drop") {
+        if (event.type === "drop") {
           setIsDragOver(false);
           if (!inside) {
             return;
           }
-          appendImages(pathsToLocalImages(event.payload.paths));
+          appendImages(pathsToLocalImages(event.paths));
         }
       })
       .then((cleanup) => {
@@ -250,7 +248,7 @@ export function useComposerImageInput({
 
     const files = Array.from(event.dataTransfer?.files ?? []);
     const pathImages = pathsToLocalImages(
-      files.map((file) => (file as File & { path?: string }).path ?? ""),
+      files.map((file) => windowShell.getPathForFile(file) ?? ""),
     );
     const dataImages = await readImageFilesAsDataUrls(
       files

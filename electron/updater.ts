@@ -1,0 +1,188 @@
+import { app } from "electron";
+import * as electronUpdater from "electron-updater";
+import type {
+  AppUpdater as ElectronUpdater,
+  CancellationToken as ElectronCancellationToken,
+  ProgressInfo,
+  UpdateInfo,
+} from "electron-updater";
+import type { ReleaseNoteInfo } from "builder-util-runtime";
+
+import type {
+  DesktopUpdate,
+  DesktopUpdateDownloadEvent,
+} from "../src/lib/desktop-types.js";
+
+type UpdateDownloadHandler = (event: DesktopUpdateDownloadEvent) => void;
+
+type PendingUpdateOffer = {
+  readonly info: UpdateInfo;
+  readonly cancellationToken: ElectronCancellationToken;
+  closed: boolean;
+};
+
+const { autoUpdater, CancellationToken } = electronUpdater;
+const DEV_UPDATER_ENV = "SKEIN_ENABLE_DEV_UPDATER";
+
+function shouldEnableUpdater(appUpdater: ElectronUpdater) {
+  if (app.isPackaged) {
+    return true;
+  }
+
+  if (process.env[DEV_UPDATER_ENV] === "1") {
+    appUpdater.forceDevUpdateConfig = true;
+    return true;
+  }
+
+  return false;
+}
+
+function sameVersion(a: string, b: string) {
+  const left = a.startsWith("v") ? a.slice(1) : a;
+  const right = b.startsWith("v") ? b.slice(1) : b;
+  return left === right;
+}
+
+export class AppUpdater {
+  private readonly updater: ElectronUpdater;
+  private activeOffer: PendingUpdateOffer | null = null;
+  private downloadedVersion: string | null = null;
+  private readonly enabled: boolean;
+
+  constructor(updater: ElectronUpdater = autoUpdater) {
+    this.updater = updater;
+    this.updater.autoDownload = false;
+    this.updater.autoInstallOnAppQuit = true;
+    this.updater.allowPrerelease = app.getVersion().includes("-");
+    this.enabled = shouldEnableUpdater(this.updater);
+  }
+
+  async check(): Promise<DesktopUpdate | null> {
+    if (!this.enabled) {
+      return null;
+    }
+
+    const result = await this.updater.checkForUpdates();
+    if (!result?.isUpdateAvailable) {
+      return null;
+    }
+
+    if (sameVersion(result.updateInfo.version, app.getVersion())) {
+      return null;
+    }
+
+    const offer: PendingUpdateOffer = {
+      info: result.updateInfo,
+      cancellationToken: result.cancellationToken ?? new CancellationToken(),
+      closed: false,
+    };
+    this.activeOffer = offer;
+
+    return {
+      currentVersion: app.getVersion(),
+      version: offer.info.version,
+      date: offer.info.releaseDate ?? null,
+      body: normalizeReleaseNotes(offer.info.releaseNotes),
+      close: async () => {
+        offer.closed = true;
+        if (this.activeOffer === offer) {
+          this.activeOffer = null;
+        }
+        offer.cancellationToken.cancel();
+      },
+      downloadAndInstall: async (onEvent) => {
+        this.assertOfferIsActive(offer);
+        await this.downloadUpdate(offer, onEvent);
+      },
+    };
+  }
+
+  restartToApplyUpdate() {
+    if (!this.downloadedVersion) {
+      return false;
+    }
+
+    this.updater.quitAndInstall();
+    return true;
+  }
+
+  private assertOfferIsActive(offer: PendingUpdateOffer) {
+    if (offer.closed || this.activeOffer !== offer) {
+      throw new Error("This update is no longer active.");
+    }
+  }
+
+  private async downloadUpdate(
+    offer: PendingUpdateOffer,
+    onEvent?: UpdateDownloadHandler,
+  ) {
+    let previousTransferred = 0;
+    let started = false;
+
+    const emitStarted = (contentLength?: number | null) => {
+      if (started) {
+        return;
+      }
+
+      started = true;
+      onEvent?.({
+        event: "Started",
+        data: {
+          contentLength: contentLength ?? null,
+        },
+      });
+    };
+
+    const handleProgress = (progress: ProgressInfo) => {
+      emitStarted(progress.total);
+      const transferred = Math.max(previousTransferred, progress.transferred);
+      const chunkLength = transferred - previousTransferred;
+      previousTransferred = transferred;
+      if (chunkLength <= 0) {
+        return;
+      }
+
+      onEvent?.({
+        event: "Progress",
+        data: {
+          chunkLength,
+        },
+      });
+    };
+
+    this.updater.on("download-progress", handleProgress);
+    try {
+      emitStarted(null);
+      await this.updater.downloadUpdate(offer.cancellationToken);
+      this.downloadedVersion = offer.info.version;
+      onEvent?.({
+        event: "Finished",
+      });
+    } finally {
+      this.updater.off("download-progress", handleProgress);
+    }
+  }
+}
+
+function normalizeReleaseNotes(releaseNotes: UpdateInfo["releaseNotes"]) {
+  if (typeof releaseNotes === "string") {
+    return releaseNotes;
+  }
+
+  if (!Array.isArray(releaseNotes)) {
+    return null;
+  }
+
+  const notes = (releaseNotes as ReleaseNoteInfo[])
+    .map((entry) => {
+      if (typeof entry.note === "string") {
+        const version = entry.version ? `${entry.version}\n` : "";
+        return `${version}${entry.note}`.trim();
+      }
+
+      return "";
+    })
+    .filter(Boolean);
+
+  return notes.length > 0 ? notes.join("\n\n") : null;
+}

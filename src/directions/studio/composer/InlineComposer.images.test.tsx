@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { useEffect, useMemo, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { open } from "@tauri-apps/plugin-dialog";
+import { dialogOpenMock } from "../../../test/desktop-mock";
 
 import * as bridge from "../../../lib/bridge";
 import type { ComposerDraftMentionBinding } from "../../../lib/types";
@@ -24,15 +24,7 @@ vi.mock("../../../lib/bridge", () => ({
   transcribeEnvironmentVoice: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: vi.fn(),
-}));
 
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: vi.fn(() => ({
-    onDragDropEvent: vi.fn(async () => () => undefined),
-  })),
-}));
 
 const mockedBridge = vi.mocked(bridge);
 
@@ -70,13 +62,13 @@ beforeEach(async () => {
     unavailableReason: null,
     message: null,
   });
-  vi.mocked(open).mockResolvedValue(null);
+  dialogOpenMock.mockResolvedValue(null);
 });
 
 describe("InlineComposer image regressions", () => {
   it("ignores async picker completions after switching threads", async () => {
     const selection = createDeferred<string | string[] | null>();
-    vi.mocked(open).mockReturnValue(selection.promise);
+    dialogOpenMock.mockReturnValue(selection.promise);
 
     renderComposerWithDynamicThreadState();
 

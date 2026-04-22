@@ -1,20 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as bridge from "../lib/bridge";
+import { openExternalMock, updaterCheckMock } from "../test/desktop-mock";
 import { useAppUpdateStore } from "./app-update-store";
 
-const checkMock = vi.fn();
-const openUrlMock = vi.fn();
 const closeMock = vi.fn().mockResolvedValue(undefined);
 const downloadAndInstallMock = vi.fn();
 
-vi.mock("@tauri-apps/plugin-updater", () => ({
-  check: (...args: unknown[]) => checkMock(...args),
-}));
 
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: (...args: unknown[]) => openUrlMock(...args),
-}));
 
 vi.mock("../lib/bridge", () => ({
   restartApp: vi.fn(),
@@ -61,7 +54,7 @@ beforeEach(async () => {
 
 describe("app-update-store", () => {
   it("exposes a pending release after a successful check", async () => {
-    checkMock.mockResolvedValue(makeUpdate());
+    updaterCheckMock.mockResolvedValue(makeUpdate());
 
     await useAppUpdateStore.getState().initialize();
 
@@ -73,7 +66,7 @@ describe("app-update-store", () => {
   });
 
   it("announces when no update is available after a manual check", async () => {
-    checkMock.mockResolvedValue(null);
+    updaterCheckMock.mockResolvedValue(null);
 
     await useAppUpdateStore.getState().checkNow();
 
@@ -83,37 +76,37 @@ describe("app-update-store", () => {
 
   it("replays a manual check after the silent startup check finishes", async () => {
     const silentCheck = createDeferred<ReturnType<typeof makeUpdate> | null>();
-    checkMock
+    updaterCheckMock
       .mockImplementationOnce(() => silentCheck.promise)
       .mockResolvedValueOnce(null);
 
     const initializePromise = useAppUpdateStore.getState().initialize();
     const manualCheckPromise = useAppUpdateStore.getState().checkNow();
 
-    expect(checkMock).toHaveBeenCalledTimes(1);
+    expect(updaterCheckMock).toHaveBeenCalledTimes(1);
 
     silentCheck.resolve(null);
     await initializePromise;
     await manualCheckPromise;
 
-    expect(checkMock).toHaveBeenCalledTimes(2);
+    expect(updaterCheckMock).toHaveBeenCalledTimes(2);
     expect(useAppUpdateStore.getState().state).toBe("latest");
     expect(useAppUpdateStore.getState().noticeVisible).toBe(true);
   });
 
   it("runs initialize only once across the app lifetime", async () => {
-    checkMock.mockResolvedValue(null);
+    updaterCheckMock.mockResolvedValue(null);
 
     await useAppUpdateStore.getState().initialize();
     await useAppUpdateStore.getState().initialize();
 
-    expect(checkMock).toHaveBeenCalledTimes(1);
+    expect(updaterCheckMock).toHaveBeenCalledTimes(1);
     expect(useAppUpdateStore.getState().hasInitialized).toBe(true);
     expect(useAppUpdateStore.getState().state).toBe("idle");
   });
 
   it("downloads, installs, and restarts the app", async () => {
-    checkMock.mockResolvedValue(
+    updaterCheckMock.mockResolvedValue(
       makeUpdate({
         downloadAndInstall: (onEvent?: (event: unknown) => void) => {
           onEvent?.({
@@ -145,18 +138,18 @@ describe("app-update-store", () => {
   });
 
   it("opens the release page for the pending update", async () => {
-    checkMock.mockResolvedValue(makeUpdate());
+    updaterCheckMock.mockResolvedValue(makeUpdate());
 
     await useAppUpdateStore.getState().initialize();
     await useAppUpdateStore.getState().viewChanges();
 
-    expect(openUrlMock).toHaveBeenCalledWith(
+    expect(openExternalMock).toHaveBeenCalledWith(
       "https://github.com/paul-bouzian/Skein/releases/tag/v0.2.0",
     );
   });
 
   it("hides the toast without dropping the pending update", async () => {
-    checkMock.mockResolvedValue(makeUpdate());
+    updaterCheckMock.mockResolvedValue(makeUpdate());
 
     await useAppUpdateStore.getState().initialize();
     useAppUpdateStore.getState().dismiss();
