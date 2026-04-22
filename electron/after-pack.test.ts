@@ -1,58 +1,40 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-import { afterEach, describe, expect, it } from "vitest";
-
-// @ts-expect-error electron-builder consumes this build hook as a JS module.
-import afterPack from "../scripts/electron-after-pack.mjs";
-
-const temporaryDirectories: string[] = [];
+import { describe, expect, it } from "vitest";
 
 describe("electron afterPack", () => {
-  afterEach(async () => {
-    for (const directory of temporaryDirectories.splice(0)) {
-      await rm(directory, { recursive: true, force: true });
-    }
+  it("creates a native launcher that injects the Fontations workaround", async () => {
+    const modulePath = "../scripts/electron-after-pack.mjs";
+    const { createLauncherSource } = await import(modulePath);
+    const source = createLauncherSource(
+      "--disable-features=FontationsFontBackend",
+    );
+
+    expect(source).toContain("int ElectronMain(int argc, char* argv[]);");
+    expect(source).toContain(
+      'patched_argv[1] = "--disable-features=FontationsFontBackend";',
+    );
+    expect(source).toContain("argument_disables_fontations");
+    expect(source).toContain("int result = ElectronMain(argc + 1, patched_argv);");
   });
 
-  it("wraps the macOS launcher with the Fontations workaround", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "skein-after-pack-"));
-    temporaryDirectories.push(directory);
-
-    const macOsDirectory = join(
-      directory,
-      "Skein.app",
-      "Contents",
-      "MacOS",
-    );
-    await mkdir(macOsDirectory, { recursive: true });
-    const originalExecutablePath = join(macOsDirectory, "Skein");
-    await writeFile(originalExecutablePath, "#!/bin/sh\nexit 0\n", {
-      mode: 0o755,
+  it("builds the launcher with Electron Framework on the runtime rpath", async () => {
+    const modulePath = "../scripts/electron-after-pack.mjs";
+    const { createLauncherBuildArgs } = await import(modulePath);
+    const args = createLauncherBuildArgs({
+      frameworksDirectory: "/tmp/Skein.app/Contents/Frameworks",
+      launcherPath: "/tmp/Skein.app/Contents/MacOS/Skein",
+      launcherSourcePath: "/tmp/Skein.app/Contents/MacOS/skein-electron-launcher.c",
     });
 
-    await afterPack({
-      appOutDir: directory,
-      electronPlatformName: "darwin",
-      packager: {
-        appInfo: {
-          productFilename: "Skein",
-        },
-      },
-    });
-
-    const launcher = await readFile(originalExecutablePath, "utf8");
-    expect(launcher).toContain("Skein-electron");
-    expect(launcher).toContain("--disable-features=FontationsFontBackend");
-
-    const wrappedExecutable = await readFile(
-      join(macOsDirectory, "Skein-electron"),
-      "utf8",
-    );
-    expect(wrappedExecutable).toContain("exit 0");
-
-    const mode = (await stat(originalExecutablePath)).mode & 0o777;
-    expect(mode).toBe(0o755);
+    expect(args).toEqual([
+      "clang",
+      "/tmp/Skein.app/Contents/MacOS/skein-electron-launcher.c",
+      "-F",
+      "/tmp/Skein.app/Contents/Frameworks",
+      "-framework",
+      "Electron Framework",
+      "-Wl,-rpath,@executable_path/../Frameworks",
+      "-o",
+      "/tmp/Skein.app/Contents/MacOS/Skein",
+    ]);
   });
 });
