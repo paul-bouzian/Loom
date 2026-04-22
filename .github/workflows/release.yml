@@ -169,7 +169,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$keychain_path"
 
           cert_id="$(security find-identity -v -p codesigning "$keychain_path" \
-            | awk -F '\"' '/Developer ID Application:/ {print $2; exit}')"
+            | awk -F '\"' '/Developer ID Application:/ {sub(/^Developer ID Application: /, "", $2); print $2; exit}')"
 
           if [[ -z "$cert_id" ]]; then
             echo "Unable to resolve a Developer ID Application signing identity." >&2
