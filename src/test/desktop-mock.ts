@@ -4,7 +4,6 @@ import type {
   DesktopNotificationPermission,
   DesktopUpdate,
   HostEvent,
-  HostUnlistenFn,
   SkeinDesktopApi,
 } from "../lib/desktop-types";
 
@@ -47,14 +46,13 @@ export const updaterDownloadAndInstallMock = vi.fn<
 export const preferenceSetMock = vi.fn<
   NonNullable<SkeinDesktopApi["preferences"]>["set"]
 >();
+export const preferenceGetSnapshotMock = vi.fn<
+  NonNullable<SkeinDesktopApi["preferences"]>["getSnapshot"]
+>();
 export const windowGetPathForFileMock = vi.fn<
   SkeinDesktopApi["window"]["getPathForFile"]
 >();
-export const windowOnDragDropEventMock = vi.fn<
-  NonNullable<SkeinDesktopApi["window"]["onDragDropEvent"]>
->();
 
-const defaultUnlisten: HostUnlistenFn = () => undefined;
 const defaultPreferencesSnapshot: Record<string, string> = {};
 
 function createDesktopMock(): SkeinDesktopApi {
@@ -85,12 +83,11 @@ function createDesktopMock(): SkeinDesktopApi {
       downloadAndInstall: updaterDownloadAndInstallMock,
     },
     preferences: {
-      snapshot: defaultPreferencesSnapshot,
+      getSnapshot: preferenceGetSnapshotMock,
       set: preferenceSetMock,
     },
     window: {
       getPathForFile: windowGetPathForFileMock,
-      onDragDropEvent: windowOnDragDropEventMock,
     },
   };
 }
@@ -108,12 +105,12 @@ export function resetDesktopMock() {
   updaterCheckMock.mockReset();
   updaterCloseMock.mockReset();
   updaterDownloadAndInstallMock.mockReset();
+  preferenceGetSnapshotMock.mockReset();
   preferenceSetMock.mockReset();
   windowGetPathForFileMock.mockReset();
-  windowOnDragDropEventMock.mockReset();
 
   desktopInvokeMock.mockImplementation(async () => undefined);
-  desktopListenMock.mockImplementation(async () => defaultUnlisten);
+  desktopListenMock.mockImplementation(async () => () => undefined);
   dialogConfirmMock.mockResolvedValue(true);
   dialogMessageMock.mockResolvedValue();
   dialogOpenMock.mockResolvedValue(null);
@@ -126,11 +123,13 @@ export function resetDesktopMock() {
   updaterCheckMock.mockResolvedValue(null as DesktopUpdate | null);
   updaterCloseMock.mockResolvedValue();
   updaterDownloadAndInstallMock.mockResolvedValue();
+  preferenceGetSnapshotMock.mockImplementation(() => ({
+    ...defaultPreferencesSnapshot,
+  }));
   preferenceSetMock.mockResolvedValue();
   windowGetPathForFileMock.mockImplementation((file: File) => {
     return (file as File & { path?: string }).path ?? null;
   });
-  windowOnDragDropEventMock.mockImplementation(async () => defaultUnlisten);
 
   for (const key of Object.keys(defaultPreferencesSnapshot)) {
     delete defaultPreferencesSnapshot[key];

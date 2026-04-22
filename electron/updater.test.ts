@@ -10,6 +10,14 @@ const checkForUpdatesMock = vi.fn();
 const downloadUpdateMock = vi.fn();
 const quitAndInstallMock = vi.fn();
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 class MockCancellationToken {
   cancel = vi.fn();
 }
@@ -122,10 +130,36 @@ describe("AppUpdater", () => {
       },
     ]);
 
+    expect(cancellationToken.cancel).toHaveBeenCalledTimes(1);
     expect(updater.restartToApplyUpdate()).toBe(true);
     expect(quitAndInstallMock).toHaveBeenCalledTimes(1);
+  });
 
-    await updater.close(update!.id);
-    expect(cancellationToken.cancel).toHaveBeenCalledTimes(1);
+  it("rejects a queued duplicate install for the same offer", async () => {
+    const cancellationToken = new MockCancellationToken();
+    const downloadDeferred = createDeferred<string[]>();
+    checkForUpdatesMock.mockResolvedValue({
+      isUpdateAvailable: true,
+      updateInfo: {
+        version: "0.2.0",
+        releaseDate: "2026-04-21T10:00:00Z",
+        releaseNotes: "Adds Electron auto-update support.",
+      },
+      cancellationToken,
+    });
+    downloadUpdateMock.mockReturnValue(downloadDeferred.promise);
+
+    const { AppUpdater } = await import("./updater.js");
+    const updater = new AppUpdater();
+    const update = await updater.check();
+
+    const firstInstall = updater.downloadAndInstall(update!.id);
+    const secondInstall = updater.downloadAndInstall(update!.id);
+    downloadDeferred.resolve(["/tmp/Skein-0.2.0.zip"]);
+
+    await expect(firstInstall).resolves.toBeUndefined();
+    await expect(secondInstall).rejects.toThrow(
+      "This update is no longer active.",
+    );
   });
 });

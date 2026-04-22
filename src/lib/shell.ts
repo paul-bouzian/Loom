@@ -5,8 +5,6 @@ import type {
   DesktopNotificationPermission,
   DesktopUpdate,
   DesktopUpdateDownloadEvent,
-  DesktopWindowDragDropEvent,
-  HostUnlistenFn,
 } from "./desktop-types";
 import { requireDesktopApi } from "./desktop-host";
 
@@ -73,13 +71,5 @@ export const updater = {
 export const windowShell = {
   getPathForFile(file: File): string | null {
     return requireDesktopShell().window.getPathForFile(file);
-  },
-
-  onDragDropEvent(
-    handler: (event: DesktopWindowDragDropEvent) => void,
-  ): Promise<HostUnlistenFn> {
-    return Promise.resolve(requireDesktopShell().window.onDragDropEvent?.(handler)).then(
-      (unlisten) => unlisten ?? (() => undefined),
-    );
   },
 };

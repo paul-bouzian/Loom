@@ -78,4 +78,84 @@ describe("preview protocol", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("rewrites POST redirects to GET for 303 responses", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 303,
+          headers: { location: "/done" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response("ok", {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const { registerPreviewProtocol } = await import("./preview-protocol.js");
+      await registerPreviewProtocol();
+
+      const protocolHandler = handleMock.mock.calls.at(-1)?.[1] as
+        | ((request: Request) => Promise<Response>)
+        | undefined;
+      expect(protocolHandler).toBeTypeOf("function");
+
+      const request = new Request("skein-preview://http_localhost:3000/login", {
+        method: "POST",
+        body: "email=skein@example.com",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+        },
+      });
+
+      const response = await protocolHandler!(request);
+
+      expect(response.status).toBe(200);
+      expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+        method: "GET",
+        body: undefined,
+      });
+      expect(
+        (fetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.headers,
+      ).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("allows loopback https previews to use the insecure dispatcher", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("secure", {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const { registerPreviewProtocol } = await import("./preview-protocol.js");
+      await registerPreviewProtocol();
+
+      const protocolHandler = handleMock.mock.calls.at(-1)?.[1] as
+        | ((request: Request) => Promise<Response>)
+        | undefined;
+      expect(protocolHandler).toBeTypeOf("function");
+
+      const request = new Request("skein-preview://https_localhost:3443/");
+      await protocolHandler!(request);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const options = fetchMock.mock.calls[0]?.[1] as
+        | ({ dispatcher?: unknown } & RequestInit)
+        | undefined;
+      expect(options?.dispatcher).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

@@ -141,15 +141,27 @@ const skeinDesktop: SkeinDesktopApi = {
   },
 
   preferences: {
-    snapshot: preferencesSnapshot,
-    set(key: string, value: string | null) {
+    getSnapshot() {
+      return { ...preferencesSnapshot };
+    },
+    async set(key: string, value: string | null) {
+      const previousValue = preferencesSnapshot[key];
       if (value === null) {
         delete preferencesSnapshot[key];
       } else {
         preferencesSnapshot[key] = value;
       }
 
-      return ipcRenderer.invoke("skein:preferences:set", key, value);
+      try {
+        await ipcRenderer.invoke("skein:preferences:set", key, value);
+      } catch (error) {
+        if (typeof previousValue === "string") {
+          preferencesSnapshot[key] = previousValue;
+        } else {
+          delete preferencesSnapshot[key];
+        }
+        throw error;
+      }
     },
   },
 
@@ -160,9 +172,6 @@ const skeinDesktop: SkeinDesktopApi = {
       } catch {
         return null;
       }
-    },
-    async onDragDropEvent() {
-      return () => undefined;
     },
   },
 };

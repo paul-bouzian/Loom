@@ -132,16 +132,22 @@ async function signLegacyUpdateArchive(archivePath, signerKeyPath, password) {
     "sign",
     "-f",
     signerKeyPath,
-    ...(password ? ["-p", password] : []),
     archivePath,
-  ]);
+  ], {
+    env: password
+      ? {
+          ...process.env,
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password,
+        }
+      : process.env,
+  });
 }
 
-async function run(command, args) {
+async function run(command, args, options = {}) {
   await new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
       stdio: "inherit",
-      env: process.env,
+      env: options.env ?? process.env,
     });
     child.on("error", rejectPromise);
     child.on("exit", (code) => {

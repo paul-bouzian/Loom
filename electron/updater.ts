@@ -20,6 +20,7 @@ type PendingUpdateOffer = {
   readonly info: UpdateInfo;
   readonly cancellationToken: ElectronCancellationToken;
   closed: boolean;
+  downloading: boolean;
 };
 
 const { autoUpdater, CancellationToken } = electronUpdater;
@@ -50,6 +51,7 @@ export class AppUpdater {
   private downloadedVersion: string | null = null;
   private readonly enabled: boolean;
   private nextOfferId = 0;
+  private actionQueue: Promise<void> = Promise.resolve();
 
   constructor(updater: ElectronUpdater = autoUpdater) {
     this.updater = updater;
@@ -60,50 +62,64 @@ export class AppUpdater {
   }
 
   async check(): Promise<DesktopUpdate | null> {
-    if (!this.enabled) {
-      return null;
-    }
+    return this.runExclusive(async () => {
+      if (!this.enabled) {
+        return null;
+      }
 
-    const result = await this.updater.checkForUpdates();
-    if (!result?.isUpdateAvailable) {
+      const result = await this.updater.checkForUpdates();
+      if (!result?.isUpdateAvailable) {
+        this.releaseOffer(this.activeOffer);
+        return null;
+      }
+
+      if (sameVersion(result.updateInfo.version, app.getVersion())) {
+        this.releaseOffer(this.activeOffer);
+        return null;
+      }
+
+      const offer: PendingUpdateOffer = {
+        id: this.createOfferId(),
+        info: result.updateInfo,
+        cancellationToken: result.cancellationToken ?? new CancellationToken(),
+        closed: false,
+        downloading: false,
+      };
       this.releaseOffer(this.activeOffer);
-      return null;
-    }
+      this.activeOffer = offer;
 
-    if (sameVersion(result.updateInfo.version, app.getVersion())) {
-      this.releaseOffer(this.activeOffer);
-      return null;
-    }
-
-    const offer: PendingUpdateOffer = {
-      id: this.createOfferId(),
-      info: result.updateInfo,
-      cancellationToken: result.cancellationToken ?? new CancellationToken(),
-      closed: false,
-    };
-    this.releaseOffer(this.activeOffer);
-    this.activeOffer = offer;
-
-    return {
-      id: offer.id,
-      currentVersion: app.getVersion(),
-      version: offer.info.version,
-      date: offer.info.releaseDate ?? null,
-      body: normalizeReleaseNotes(offer.info.releaseNotes),
-    };
+      return {
+        id: offer.id,
+        currentVersion: app.getVersion(),
+        version: offer.info.version,
+        date: offer.info.releaseDate ?? null,
+        body: normalizeReleaseNotes(offer.info.releaseNotes),
+      };
+    });
   }
 
   async close(updateId: string) {
-    const offer = this.requireActiveOffer(updateId);
-    this.releaseOffer(offer);
+    await this.runExclusive(async () => {
+      const offer = this.requireActiveOffer(updateId);
+      this.releaseOffer(offer);
+    });
   }
 
-  async downloadAndInstall(
-    updateId: string,
-    onEvent?: UpdateDownloadHandler,
-  ) {
-    const offer = this.requireActiveOffer(updateId);
-    await this.downloadUpdate(offer, onEvent);
+  async downloadAndInstall(updateId: string, onEvent?: UpdateDownloadHandler) {
+    await this.runExclusive(async () => {
+      const offer = this.requireActiveOffer(updateId);
+      if (offer.downloading) {
+        throw new Error("This update is already downloading.");
+      }
+
+      offer.downloading = true;
+      try {
+        await this.downloadUpdate(offer, onEvent);
+        this.releaseOffer(offer);
+      } finally {
+        offer.downloading = false;
+      }
+    });
   }
 
   restartToApplyUpdate() {
@@ -122,6 +138,15 @@ export class AppUpdater {
     }
 
     return offer;
+  }
+
+  private runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const task = this.actionQueue.then(operation, operation);
+    this.actionQueue = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
   }
 
   private releaseOffer(offer: PendingUpdateOffer | null) {

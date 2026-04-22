@@ -252,6 +252,64 @@ describe("InlineComposer image regressions", () => {
     }
   });
 
+  it("keeps each dropped file paired with its resolved path", async () => {
+    const originalFileReader = window.FileReader;
+    const readAsDataUrl = vi.fn();
+
+    class TrackingFileReader {
+      public result: string | ArrayBuffer | null = null;
+      public error: DOMException | null = null;
+      public onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+      public onerror: ((event: ProgressEvent<FileReader>) => void) | null = null;
+
+      readAsDataURL(file: File) {
+        readAsDataUrl(file);
+        this.result = "data:image/png;base64,cGFpcmVk";
+        this.onload?.(new ProgressEvent("load") as ProgressEvent<FileReader>);
+      }
+    }
+
+    Object.defineProperty(window, "FileReader", {
+      configurable: true,
+      value: TrackingFileReader,
+    });
+
+    try {
+      const textFile = new File(["notes"], "notes.txt", { type: "text/plain" });
+      const imageFile = new File(["img"], "fallback.png", { type: "image/png" });
+      windowGetPathForFileMock.mockImplementation((file) => {
+        if (file === textFile) {
+          return "/tmp/notes.txt";
+        }
+        return null;
+      });
+
+      renderComposer();
+
+      const input = await screen.findByPlaceholderText("Message Skein...");
+      const dropTarget = input.closest(".tx-composer__body");
+      expect(dropTarget).not.toBeNull();
+
+      fireEvent.drop(dropTarget!, {
+        dataTransfer: {
+          types: ["Files"],
+          files: [textFile, imageFile],
+        },
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("Pasted image")).toBeInTheDocument();
+      });
+      expect(readAsDataUrl).toHaveBeenCalledTimes(1);
+      expect(readAsDataUrl).toHaveBeenCalledWith(imageFile);
+    } finally {
+      Object.defineProperty(window, "FileReader", {
+        configurable: true,
+        value: originalFileReader,
+      });
+    }
+  });
+
   it("fails closed when the selected model is missing from the capability list", async () => {
     renderComposer({ modelOptions: [] });
 

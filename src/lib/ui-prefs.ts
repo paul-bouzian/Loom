@@ -22,7 +22,7 @@ export function readUiPreferenceWithMigration(
   key: string,
   legacyKeys: string | readonly string[],
 ) {
-  const desktopValue = getDesktopApi()?.preferences?.snapshot[key];
+  const desktopValue = getDesktopApi()?.preferences?.getSnapshot()[key];
   if (typeof desktopValue === "string") {
     primeLocalStorage(key, desktopValue);
     return desktopValue;

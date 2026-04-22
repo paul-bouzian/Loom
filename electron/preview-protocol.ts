@@ -1,4 +1,5 @@
 import { protocol } from "electron";
+import { Agent } from "undici";
 
 import {
   PREVIEW_SCHEME,
@@ -11,6 +12,7 @@ const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 const PROXY_TIMEOUT_MS = 30_000;
 const BLOCKED_REQUEST_HEADERS = new Set([
   "connection",
+  "content-length",
   "host",
   "keep-alive",
   "proxy-authenticate",
@@ -25,6 +27,11 @@ const BLOCKED_RESPONSE_HEADERS = new Set([
   "content-security-policy",
   "content-security-policy-report-only",
 ]);
+const LOOPBACK_HTTPS_DISPATCHER = new Agent({
+  connect: {
+    rejectUnauthorized: false,
+  },
+});
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -155,19 +162,27 @@ async function fetchLoopbackTarget(
   request: Request,
   target: URL,
   redirectsRemaining = MAX_REDIRECTS,
+  method = request.method,
   requestBody?: Buffer,
 ): Promise<Response> {
   const body =
     requestBody ??
-    (request.method === "GET" || request.method === "HEAD"
+    (method === "GET" || method === "HEAD"
       ? undefined
       : Buffer.from(await request.arrayBuffer()));
+  const headers = sanitizeRequestHeaders(request);
+  if (body === undefined) {
+    headers.delete("content-type");
+  }
   const response = await fetch(target, {
-    method: request.method,
-    headers: sanitizeRequestHeaders(request),
+    method,
+    headers,
     body,
     redirect: "manual",
     signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
+    ...(target.protocol === "https:"
+      ? { dispatcher: LOOPBACK_HTTPS_DISPATCHER }
+      : {}),
   });
 
   const isRedirect =
@@ -189,10 +204,34 @@ async function fetchLoopbackTarget(
       );
     }
 
-    return fetchLoopbackTarget(request, next, redirectsRemaining - 1, body);
+    const nextRequest = rewriteRedirectRequest(response.status, method, body);
+
+    return fetchLoopbackTarget(
+      request,
+      next,
+      redirectsRemaining - 1,
+      nextRequest.method,
+      nextRequest.body,
+    );
   }
 
   return response;
+}
+
+function rewriteRedirectRequest(
+  status: number,
+  method: string,
+  body: Buffer | undefined,
+) {
+  if (status === 303 && method !== "HEAD") {
+    return { method: "GET", body: undefined };
+  }
+
+  if ((status === 301 || status === 302) && method === "POST") {
+    return { method: "GET", body: undefined };
+  }
+
+  return { method, body };
 }
 
 async function handlePreviewRequest(request: Request) {

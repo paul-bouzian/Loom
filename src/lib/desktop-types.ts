@@ -33,25 +33,6 @@ export type DesktopNotification = {
   body: string;
 };
 
-export type DesktopDragPosition = {
-  x: number;
-  y: number;
-};
-
-export type DesktopWindowDragDropEvent =
-  | {
-      type: "enter" | "over";
-      position: DesktopDragPosition;
-    }
-  | {
-      type: "leave";
-    }
-  | {
-      type: "drop";
-      position: DesktopDragPosition;
-      paths: string[];
-    };
-
 export type DesktopUpdateDownloadEvent =
   | {
       event: "Started";
@@ -78,7 +59,7 @@ export type DesktopUpdate = {
 };
 
 export type DesktopPreferencesApi = {
-  snapshot: Record<string, string>;
+  getSnapshot(): Record<string, string>;
   set(key: string, value: string | null): Promise<void>;
 };
 
@@ -117,9 +98,6 @@ export type SkeinDesktopApi = {
   preferences?: DesktopPreferencesApi;
   window: {
     getPathForFile(file: File): string | null;
-    onDragDropEvent?(
-      handler: (event: DesktopWindowDragDropEvent) => void,
-    ): Promise<HostUnlistenFn> | HostUnlistenFn;
   };
 };
 
