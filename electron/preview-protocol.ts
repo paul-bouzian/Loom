@@ -216,14 +216,16 @@ function collectSetCookies(headers: Headers) {
   return value ? [value] : [];
 }
 
-function mergeCookieHeader(
-  existingCookieHeader: string | null,
-  setCookies: string[],
-) {
-  if (setCookies.length === 0) {
-    return existingCookieHeader;
-  }
+type RedirectCookie = {
+  name: string;
+  value: string;
+  domain: string;
+  hostOnly: boolean;
+  path: string;
+  secure: boolean;
+};
 
+function mergeCookieHeader(existingCookieHeader: string | null, fragments: string[]) {
   const cookies = new Map<string, string>();
   for (const fragment of (existingCookieHeader ?? "").split(";")) {
     const cookie = fragment.trim();
@@ -235,8 +237,8 @@ function mergeCookieHeader(
     cookies.set(name, cookie);
   }
 
-  for (const setCookie of setCookies) {
-    const cookie = setCookie.split(";", 1)[0]?.trim();
+  for (const fragment of fragments) {
+    const cookie = fragment.trim();
     if (!cookie) {
       continue;
     }
@@ -248,13 +250,163 @@ function mergeCookieHeader(
   return Array.from(cookies.values()).join("; ");
 }
 
+function defaultCookiePath(pathname: string) {
+  if (!pathname.startsWith("/")) {
+    return "/";
+  }
+
+  const lastSlash = pathname.lastIndexOf("/");
+  return lastSlash <= 0 ? "/" : pathname.slice(0, lastSlash);
+}
+
+function cookieDomainMatches(
+  hostname: string,
+  domain: string,
+  hostOnly: boolean,
+) {
+  return hostOnly
+    ? hostname === domain
+    : hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function cookiePathMatches(pathname: string, cookiePath: string) {
+  if (pathname === cookiePath) {
+    return true;
+  }
+  if (!pathname.startsWith(cookiePath)) {
+    return false;
+  }
+  if (cookiePath.endsWith("/")) {
+    return true;
+  }
+  return pathname.charAt(cookiePath.length) === "/";
+}
+
+function cookieKey(cookie: RedirectCookie) {
+  return [
+    cookie.name,
+    cookie.domain,
+    cookie.path,
+    cookie.hostOnly ? "host" : "domain",
+  ].join("|");
+}
+
+function parseRedirectCookie(setCookie: string, source: URL): RedirectCookie | null {
+  const [cookiePair, ...attributePairs] = setCookie.split(";");
+  const separatorIndex = cookiePair.indexOf("=");
+  if (separatorIndex <= 0) {
+    return null;
+  }
+
+  const name = cookiePair.slice(0, separatorIndex).trim();
+  const value = cookiePair.slice(separatorIndex + 1).trim();
+  if (!name) {
+    return null;
+  }
+
+  const sourceHostname = source.hostname.toLowerCase();
+  let domain = sourceHostname;
+  let hostOnly = true;
+  let path = defaultCookiePath(source.pathname);
+  let secure = false;
+
+  for (const attributePair of attributePairs) {
+    const [rawName, ...rawValueParts] = attributePair.trim().split("=");
+    const attributeName = rawName.toLowerCase();
+    const attributeValue = rawValueParts.join("=").trim();
+
+    if (attributeName === "domain") {
+      if (!attributeValue) {
+        return null;
+      }
+
+      const normalizedDomain = attributeValue.replace(/^\./u, "").toLowerCase();
+      if (
+        !normalizedDomain ||
+        !cookieDomainMatches(sourceHostname, normalizedDomain, false)
+      ) {
+        return null;
+      }
+      domain = normalizedDomain;
+      hostOnly = false;
+      continue;
+    }
+
+    if (attributeName === "path") {
+      if (attributeValue.startsWith("/")) {
+        path = attributeValue;
+      }
+      continue;
+    }
+
+    if (attributeName === "secure") {
+      secure = true;
+    }
+  }
+
+  return {
+    name,
+    value,
+    domain,
+    hostOnly,
+    path,
+    secure,
+  };
+}
+
+function mergeRedirectCookies(
+  existingCookies: RedirectCookie[],
+  setCookies: string[],
+  source: URL,
+) {
+  const mergedCookies = new Map(
+    existingCookies.map((cookie) => [cookieKey(cookie), cookie]),
+  );
+
+  for (const setCookie of setCookies) {
+    const parsedCookie = parseRedirectCookie(setCookie, source);
+    if (!parsedCookie) {
+      continue;
+    }
+    mergedCookies.set(cookieKey(parsedCookie), parsedCookie);
+  }
+
+  return Array.from(mergedCookies.values());
+}
+
+function buildRedirectCookieHeader(cookies: RedirectCookie[], target: URL) {
+  const matchedCookies = cookies
+    .filter((cookie) => {
+      if (
+        !cookieDomainMatches(
+          target.hostname.toLowerCase(),
+          cookie.domain,
+          cookie.hostOnly,
+        )
+      ) {
+        return false;
+      }
+      if (!cookiePathMatches(target.pathname || "/", cookie.path)) {
+        return false;
+      }
+      if (cookie.secure && target.protocol !== "https:") {
+        return false;
+      }
+      return true;
+    })
+    .map((cookie) => `${cookie.name}=${cookie.value}`);
+
+  return matchedCookies.length > 0 ? matchedCookies.join("; ") : null;
+}
+
 async function fetchLoopbackTarget(
   request: Request,
   target: URL,
   redirectsRemaining = MAX_REDIRECTS,
   method = request.method,
   requestBody?: Buffer,
-  cookieHeader?: string | null,
+  requestCookieHeader?: string | null,
+  redirectCookies: RedirectCookie[] = [],
 ): Promise<Response> {
   const requestBodyState =
     requestBody === undefined
@@ -269,8 +421,14 @@ async function fetchLoopbackTarget(
 
   const body = requestBodyState.body;
   const headers = sanitizeRequestHeaders(request);
-  if (cookieHeader) {
-    headers.set("cookie", cookieHeader);
+  const forwardedCookieHeader = mergeCookieHeader(
+    requestCookieHeader === undefined ? headers.get("cookie") : requestCookieHeader,
+    buildRedirectCookieHeader(redirectCookies, target)?.split("; ") ?? [],
+  );
+  if (forwardedCookieHeader) {
+    headers.set("cookie", forwardedCookieHeader);
+  } else {
+    headers.delete("cookie");
   }
   if (body === undefined) {
     headers.delete("content-type");
@@ -306,9 +464,10 @@ async function fetchLoopbackTarget(
     }
 
     const nextRequest = rewriteRedirectRequest(response.status, method, body);
-    const nextCookieHeader = mergeCookieHeader(
-      headers.get("cookie"),
+    const nextRedirectCookies = mergeRedirectCookies(
+      redirectCookies,
       collectSetCookies(response.headers),
+      target,
     );
 
     return fetchLoopbackTarget(
@@ -317,7 +476,8 @@ async function fetchLoopbackTarget(
       redirectsRemaining - 1,
       nextRequest.method,
       nextRequest.body,
-      nextCookieHeader,
+      null,
+      nextRedirectCookies,
     );
   }
 
