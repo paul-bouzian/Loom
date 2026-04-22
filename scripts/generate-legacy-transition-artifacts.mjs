@@ -40,15 +40,17 @@ const temporaryDirectory = await mkdtemp(
   join(tmpdir(), "skein-legacy-updater-"),
 );
 const privateKeyPath = join(temporaryDirectory, "private.key");
+const stagedAppPath = join(temporaryDirectory, basename(appPath));
 
 try {
   const signerKeyPath = await materializePrivateKey(privateKey, privateKeyPath);
+  await stageLegacyTransitionApp(appPath, stagedAppPath);
   await run("tar", [
     "-czf",
     archivePath,
     "-C",
-    dirname(appPath),
-    basename(appPath),
+    dirname(stagedAppPath),
+    basename(stagedAppPath),
   ]);
   await signLegacyUpdateArchive(archivePath, signerKeyPath, privateKeyPassword);
 
@@ -144,11 +146,24 @@ async function signLegacyUpdateArchive(archivePath, signerKeyPath, password) {
   });
 }
 
+async function stageLegacyTransitionApp(sourceAppPath, destinationAppPath) {
+  await run("ditto", [sourceAppPath, destinationAppPath]);
+  // The legacy Tauri updater path mishandles macOS copyfile metadata during
+  // extraction and can materialize AppleDouble `._*` files inside the bundle,
+  // which breaks the Electron code signature. Stage a clean copy first.
+  await run("xattr", ["-cr", destinationAppPath]);
+}
+
 async function run(command, args, options = {}) {
   await new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
       stdio: "inherit",
-      env: options.env ?? process.env,
+      env: {
+        ...process.env,
+        COPYFILE_DISABLE: "1",
+        COPY_EXTENDED_ATTRIBUTES_DISABLE: "1",
+        ...(options.env ?? {}),
+      },
     });
     child.on("error", rejectPromise);
     child.on("exit", (code) => {
