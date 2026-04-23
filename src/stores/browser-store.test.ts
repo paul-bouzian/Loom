@@ -194,6 +194,9 @@ describe("browser-store: session-only", () => {
 describe("browser-store: events from main process", () => {
   it("navigateFromMain appends a new URL to the tab's history", () => {
     const id = useBrowserStore.getState().openTab(ENV, "http://a");
+    // Simulate the initial load settling so a subsequent page-initiated
+    // navigation is treated as a fresh history step, not a replace.
+    useBrowserStore.getState().markPending(id!, false);
     useBrowserStore.getState().navigateFromMain(id!, "http://b", false);
     const tab = slot().tabs[0];
     expect(tab.history).toEqual(["http://a", "http://b"]);
@@ -213,8 +216,22 @@ describe("browser-store: events from main process", () => {
     useBrowserStore.getState().navigate(ENV, "http://b");
     useBrowserStore.getState().navigate(ENV, "http://c");
     useBrowserStore.getState().back(ENV);
+    useBrowserStore.getState().markPending(id!, false);
     useBrowserStore.getState().navigateFromMain(id!, "http://d", false);
     expect(slot().tabs[0].history).toEqual(["http://a", "http://b", "http://d"]);
+  });
+
+  it("navigateFromMain replaces the pending entry when a user-initiated nav redirects", () => {
+    const id = useBrowserStore.getState().openTab(ENV, "http://example.com");
+    // User typed the URL → store.navigate pushed & set pending=true.
+    expect(slot().tabs[0].pending).toBe(true);
+    // Main process resolved it to the https redirect.
+    useBrowserStore
+      .getState()
+      .navigateFromMain(id!, "https://example.com/", false);
+    const tab = slot().tabs[0];
+    expect(tab.history).toEqual(["https://example.com/"]);
+    expect(tab.cursor).toBe(0);
   });
 
   it("navigateFromMain replaces the current entry when isInPlace=true", () => {

@@ -255,9 +255,13 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
     const patch = updateTabById(get(), tabId, (tab) => {
       const currentUrl = tab.history[tab.cursor] ?? "";
       const sameEntry = canonicalUrl(currentUrl) === canonicalUrl(url);
-      if (isInPlace) {
-        // In-page navigations (`pushState`) never emit `did-stop-loading`,
-        // so we clear `pending` here to keep the spinner in sync.
+      // When a user-initiated navigation is in flight (`pending`), the
+      // renderer already advanced the cursor to what it asked for. The
+      // main-process `did-navigate` that arrives next describes the
+      // resolved URL after any redirect/canonicalization, so we replace
+      // the pending entry rather than appending a sibling that would
+      // create duplicate history steps and trap Back.
+      if (isInPlace || tab.pending) {
         if (sameEntry && !tab.pending) return null;
         const nextHistory = tab.history.slice();
         nextHistory[tab.cursor] = url;
@@ -265,7 +269,10 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
           ...tab,
           history: nextHistory,
           title: hostFromUrl(url),
-          pending: false,
+          // In-page navigations (`pushState`) never emit
+          // `did-stop-loading`, so clear pending here; a real full load
+          // still has `did-stop-loading` to close it out.
+          pending: isInPlace ? false : tab.pending,
         };
       }
       if (sameEntry) return null;

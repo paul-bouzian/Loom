@@ -59,10 +59,12 @@ export function BrowserPanel({ collapsed = false }: Props) {
   useEffect(() => installBrowserBridge(), []);
 
   // Report the body rect to the main process so WebContentsView can size
-  // itself to the panel. `ResizeObserver` catches size changes; we also
-  // listen to the window `resize` event to pick up pure position shifts
-  // (the shell uses `auto 1fr auto auto`, so resizing the window moves
-  // the panel horizontally without changing its width).
+  // itself to the panel. `ResizeObserver` only fires on size changes, so
+  // we also poll via rAF to catch pure position shifts driven by sibling
+  // layout changes (sidebar toggle, diff panel open, etc.) that the
+  // observer can't see. The poll is cheap — a single
+  // `getBoundingClientRect` + dirty check per frame — and stops when the
+  // panel is collapsed.
   useLayoutEffect(() => {
     const browser = getDesktopApi()?.browser;
     if (!browser) return;
@@ -72,33 +74,31 @@ export function BrowserPanel({ collapsed = false }: Props) {
       return;
     }
     let rafId: number | null = null;
-    const scheduleSend = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
-        const rect = element.getBoundingClientRect();
+    let prevKey = "";
+    const tick = () => {
+      rafId = null;
+      const rect = element.getBoundingClientRect();
+      const key = `${rect.left}|${rect.top}|${rect.width}|${rect.height}`;
+      if (key !== prevKey) {
+        prevKey = key;
         if (rect.width === 0 || rect.height === 0) {
           void browser.setPanelBounds(null).catch(() => {});
-          return;
+        } else {
+          void browser
+            .setPanelBounds({
+              x: rect.left,
+              y: rect.top,
+              width: rect.width,
+              height: rect.height,
+            })
+            .catch(() => {});
         }
-        void browser
-          .setPanelBounds({
-            x: rect.left,
-            y: rect.top,
-            width: rect.width,
-            height: rect.height,
-          })
-          .catch(() => {});
-      });
+      }
+      rafId = requestAnimationFrame(tick);
     };
-    const observer = new ResizeObserver(scheduleSend);
-    observer.observe(element);
-    window.addEventListener("resize", scheduleSend);
-    scheduleSend();
+    rafId = requestAnimationFrame(tick);
     return () => {
       if (rafId !== null) cancelAnimationFrame(rafId);
-      observer.disconnect();
-      window.removeEventListener("resize", scheduleSend);
       void browser.setPanelBounds(null).catch(() => {});
     };
   }, [collapsed]);

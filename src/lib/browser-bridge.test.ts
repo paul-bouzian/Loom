@@ -64,6 +64,9 @@ describe("browser-bridge", () => {
     const { handlers, unlisten } = installMockDesktop();
     const teardown = installBrowserBridge();
     const tabId = useBrowserStore.getState().openTab("env-a", "http://a")!;
+    // Simulate the initial load settling so the page-initiated nav
+    // below is treated as a fresh history step.
+    useBrowserStore.getState().markPending(tabId, false);
     handlers["did-navigate"]?.({
       tabId,
       url: "http://a/deep",

@@ -37,6 +37,17 @@ describe("normalizeBrowserUrl", () => {
     expect(normalizeBrowserUrl("chrome://settings")).toBeNull();
   });
 
+  it("rejects explicit schemes with numeric opaque data", () => {
+    expect(normalizeBrowserUrl("javascript:1")).toBeNull();
+    expect(normalizeBrowserUrl("mailto:1@example.com")).toBeNull();
+  });
+
+  it("keeps dotted host:port as https", () => {
+    expect(normalizeBrowserUrl("example.com:8080")).toBe(
+      "https://example.com:8080/",
+    );
+  });
+
   it("accepts bracketed IPv6 hosts without rewriting", () => {
     const result = normalizeBrowserUrl("http://[::1]:8080/");
     expect(result).toBe("http://[::1]:8080/");

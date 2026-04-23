@@ -13,12 +13,15 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
 const LOOPBACK_PATTERN =
   /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i;
 
-// Any explicit URI scheme that isn't http(s) must be rejected outright,
-// otherwise `mailto:…` or `ws://…` would fall through and get rewritten
-// as `https://mailto:…`, which then parses as a valid https URL. The
-// negative lookahead `(?!\d)` skips `host:port` forms like
-// `localhost:3000`, where the chars after `:` are a numeric port.
-const EXPLICIT_NON_HTTP_SCHEME = /^(?!https?:)[a-z][a-z0-9+.-]*:(?!\d)/i;
+// Matches any explicit URI scheme prefix (`scheme:` syntax). Used to
+// reject non-`http(s)` schemes before prefixing heuristics kick in.
+const EXPLICIT_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+
+// Matches a dotted-domain `host:port(/path/…)` form, which looks like a
+// scheme prefix syntactically but is really a bare host. Loopback hosts
+// are handled separately via `LOOPBACK_PATTERN`.
+const DOMAIN_HOST_PORT =
+  /^[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d+(?:[/?#]|$)/i;
 
 // The URL parser strips brackets from IPv6 hostnames (`[::1]` → `::1`),
 // so we match both forms here so callers can pass either the raw
@@ -54,8 +57,13 @@ export function normalizeBrowserUrl(raw: string): string | null {
 
 function buildCandidate(trimmed: string): string | null {
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  if (EXPLICIT_NON_HTTP_SCHEME.test(trimmed)) return null;
+  // Resolve bare `host:port` forms before the scheme check — otherwise
+  // the leading `localhost` / `example.com` would look like a scheme.
   if (LOOPBACK_PATTERN.test(trimmed)) return `http://${trimmed}`;
+  if (DOMAIN_HOST_PORT.test(trimmed)) return `https://${trimmed}`;
+  // Any remaining `scheme:` prefix is explicitly non-http(s); reject it
+  // so `mailto:…`, `ws://…`, `javascript:1`, etc. don't get rewritten.
+  if (EXPLICIT_SCHEME.test(trimmed)) return null;
   if (!trimmed.includes(".") && !trimmed.includes(":")) return null;
   return `https://${trimmed}`;
 }

@@ -322,7 +322,10 @@ export class BrowserController {
       if (!webContents.isDestroyed()) {
         webContents.removeAllListeners();
         webContents.stop();
-        webContents.close();
+        // `waitForBeforeUnload: false` disposes unconditionally; the
+        // default would honor `beforeunload` handlers and leak the
+        // WebContents if the page refuses to close.
+        webContents.close({ waitForBeforeUnload: false });
       }
     } catch {
       /* ignore — teardown races */
