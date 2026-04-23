@@ -11,6 +11,13 @@ export type BrowserTab = {
   pending: boolean;
   title: string;
   favicon: string | null;
+  // True while a renderer-issued nav (navigate/back/forward/reload) is
+  // in flight waiting for the main process to emit the resolved URL.
+  // Page-initiated navigations (link clicks, pushState) leave this
+  // false, so the `navigateFromMain` dispatcher can tell whether to
+  // replace the current history entry (renderer-initiated resolution)
+  // or append a new one (page-initiated step).
+  awaitingResolve: boolean;
 };
 
 export type DetectedUrl = {
@@ -73,13 +80,15 @@ function canonicalUrl(url: string): string {
 }
 
 function buildTab(initialUrl: string): BrowserTab {
+  const isBlank = initialUrl === BROWSER_HOME_URL;
   return {
     id: crypto.randomUUID(),
     history: [initialUrl],
     cursor: 0,
-    pending: initialUrl !== BROWSER_HOME_URL,
+    pending: !isBlank,
     title: hostFromUrl(initialUrl),
     favicon: null,
+    awaitingResolve: !isBlank,
   };
 }
 
@@ -188,6 +197,7 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
           history: nextHistory,
           cursor: nextHistory.length - 1,
           pending: true,
+          awaitingResolve: true,
           title: hostFromUrl(url),
           favicon: null,
         };
@@ -208,6 +218,7 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
           ...tab,
           cursor: nextCursor,
           pending: true,
+          awaitingResolve: true,
           title: hostFromUrl(tab.history[nextCursor] ?? ""),
         };
       });
@@ -229,6 +240,7 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
           ...tab,
           cursor: nextCursor,
           pending: true,
+          awaitingResolve: true,
           title: hostFromUrl(tab.history[nextCursor] ?? ""),
         };
       });
@@ -244,7 +256,9 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       return {
         ...slot,
         tabs: slot.tabs.map((tab) =>
-          tab.id === activeId ? { ...tab, pending: true } : tab,
+          tab.id === activeId
+            ? { ...tab, pending: true, awaitingResolve: true }
+            : tab,
         ),
       };
     });
@@ -255,23 +269,26 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
     const patch = updateTabById(get(), tabId, (tab) => {
       const currentUrl = tab.history[tab.cursor] ?? "";
       const sameEntry = canonicalUrl(currentUrl) === canonicalUrl(url);
-      // When a user-initiated navigation is in flight (`pending`), the
-      // renderer already advanced the cursor to what it asked for. The
-      // main-process `did-navigate` that arrives next describes the
-      // resolved URL after any redirect/canonicalization, so we replace
-      // the pending entry rather than appending a sibling that would
-      // create duplicate history steps and trap Back.
-      if (isInPlace || tab.pending) {
-        if (sameEntry && !tab.pending) return null;
+      // Replace-in-place when:
+      //  - the main process flagged the nav as in-page (`pushState`), or
+      //  - the renderer asked for this nav (`awaitingResolve`) and the
+      //    resolved URL is the same slot: a redirect/canonicalization
+      //    of what the user typed or of the back/forward target.
+      // Every other `did-navigate` is a page-initiated step (link click,
+      // script navigation) and should append to history so Back still
+      // works.
+      const shouldReplace = isInPlace || tab.awaitingResolve;
+      if (shouldReplace) {
+        if (sameEntry && !tab.awaitingResolve) return null;
         const nextHistory = tab.history.slice();
         nextHistory[tab.cursor] = url;
         return {
           ...tab,
           history: nextHistory,
           title: hostFromUrl(url),
-          // In-page navigations (`pushState`) never emit
-          // `did-stop-loading`, so clear pending here; a real full load
-          // still has `did-stop-loading` to close it out.
+          awaitingResolve: false,
+          // In-page navigations never emit `did-stop-loading`, so clear
+          // `pending` here. Full loads will clear it via that event.
           pending: isInPlace ? false : tab.pending,
         };
       }
@@ -307,8 +324,15 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
 
   markPending: (tabId, pending) => {
     const patch = updateTabById(get(), tabId, (tab) => {
-      if (tab.pending === pending) return null;
-      return { ...tab, pending };
+      // When loading stops, also clear the renderer-initiated flag so a
+      // subsequent page-initiated link click isn't mistaken for the
+      // resolution of a stale user action (e.g. a failed loadURL that
+      // only emitted did-fail-load + did-stop-loading, no did-navigate).
+      const nextAwaiting = pending ? tab.awaitingResolve : false;
+      if (tab.pending === pending && tab.awaitingResolve === nextAwaiting) {
+        return null;
+      }
+      return { ...tab, pending, awaitingResolve: nextAwaiting };
     });
     if (patch) set(patch);
   },

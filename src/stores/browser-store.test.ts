@@ -223,8 +223,8 @@ describe("browser-store: events from main process", () => {
 
   it("navigateFromMain replaces the pending entry when a user-initiated nav redirects", () => {
     const id = useBrowserStore.getState().openTab(ENV, "http://example.com");
-    // User typed the URL → store.navigate pushed & set pending=true.
-    expect(slot().tabs[0].pending).toBe(true);
+    // User typed the URL → store.navigate pushed, awaitingResolve=true.
+    expect(slot().tabs[0].awaitingResolve).toBe(true);
     // Main process resolved it to the https redirect.
     useBrowserStore
       .getState()
@@ -232,6 +232,21 @@ describe("browser-store: events from main process", () => {
     const tab = slot().tabs[0];
     expect(tab.history).toEqual(["https://example.com/"]);
     expect(tab.cursor).toBe(0);
+    expect(tab.awaitingResolve).toBe(false);
+  });
+
+  it("navigateFromMain appends on page-initiated link click even if pending is true", () => {
+    const id = useBrowserStore.getState().openTab(ENV, "http://a");
+    // Initial load settles — pending + awaitingResolve cleared.
+    useBrowserStore.getState().markPending(id!, false);
+    // The page starts loading a link the user clicked: did-start-loading
+    // sets pending=true but leaves awaitingResolve=false.
+    useBrowserStore.getState().markPending(id!, true);
+    expect(slot().tabs[0].awaitingResolve).toBe(false);
+    useBrowserStore.getState().navigateFromMain(id!, "http://b", false);
+    const tab = slot().tabs[0];
+    expect(tab.history).toEqual(["http://a", "http://b"]);
+    expect(tab.cursor).toBe(1);
   });
 
   it("navigateFromMain replaces the current entry when isInPlace=true", () => {
