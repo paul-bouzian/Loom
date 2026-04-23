@@ -1,9 +1,12 @@
 export const APP_NAME = "Skein";
 export const APP_SLUG = "skein";
+export const APP_BUNDLE_ID = "com.paulbouzian.skein";
 export const PREVIOUS_APP_NAME = "Loom";
 export const PREVIOUS_APP_SLUG = "loom";
 export const LEGACY_APP_NAME = "ThreadEx";
 export const LEGACY_APP_SLUG = "threadex";
+export const RELEASES_REPOSITORY_OWNER = "paul-bouzian";
+export const RELEASES_REPOSITORY_NAME = "Skein";
 
 const LEGACY_APP_SLUGS = [PREVIOUS_APP_SLUG, LEGACY_APP_SLUG] as const;
 
@@ -162,7 +165,7 @@ export const LEGACY_SIDE_PANEL_WIDTH_STORAGE_KEYS =
 export const VOICE_PROCESSOR_NAME = buildStorageKey(APP_SLUG, "voice-processor");
 
 export const RELEASES_BASE_URL =
-  "https://github.com/paul-bouzian/Skein/releases/tag";
+  `https://github.com/${RELEASES_REPOSITORY_OWNER}/${RELEASES_REPOSITORY_NAME}/releases/tag`;
 
 export function readLocalStorageWithMigration(
   key: string,

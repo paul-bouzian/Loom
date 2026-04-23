@@ -12,6 +12,11 @@ import type {
   DesktopUpdate,
   DesktopUpdateDownloadEvent,
 } from "../src/lib/desktop-types.js";
+import {
+  APP_BUNDLE_ID,
+  RELEASES_REPOSITORY_NAME,
+  RELEASES_REPOSITORY_OWNER,
+} from "../src/lib/app-identity.js";
 
 type UpdateDownloadHandler = (event: DesktopUpdateDownloadEvent) => void;
 
@@ -27,10 +32,10 @@ const { autoUpdater, CancellationToken } = electronUpdater;
 const DEV_UPDATER_ENV = "SKEIN_ENABLE_DEV_UPDATER";
 const GITHUB_UPDATER_CONFIGURATION = {
   provider: "github",
-  owner: "paul-bouzian",
-  repo: "Skein",
+  owner: RELEASES_REPOSITORY_OWNER,
+  repo: RELEASES_REPOSITORY_NAME,
   channel: "latest",
-  updaterCacheDirName: "com.paulbouzian.skein-updater",
+  updaterCacheDirName: `${APP_BUNDLE_ID}-updater`,
 } as const;
 
 function createDefaultUpdater(): ElectronUpdater {

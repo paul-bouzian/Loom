@@ -8,7 +8,7 @@ import {
 } from "electron";
 import { join } from "node:path";
 
-import { APP_NAME } from "../src/lib/app-identity.js";
+import { APP_BUNDLE_ID, APP_NAME } from "../src/lib/app-identity.js";
 import {
   assertDesktopBackendCommand,
   assertDesktopPayload,
@@ -25,7 +25,7 @@ import { registerPreviewProtocol } from "./preview-protocol.js";
 import { AppUpdater } from "./updater.js";
 
 const appDataPath = app.getPath("appData");
-app.setPath("userData", join(appDataPath, "com.paulbouzian.skein"));
+app.setPath("userData", join(appDataPath, APP_BUNDLE_ID));
 const preferencesStore = new PreferencesStore(
   join(app.getPath("userData"), "ui-prefs.json"),
 );
@@ -41,6 +41,25 @@ const backendClient = new BackendClient({
 });
 const appUpdater = new AppUpdater();
 let openSettingsShortcut: string | null | undefined;
+
+function openMainWindow() {
+  const mainWindow = createMainWindow();
+  installApplicationMenu(mainWindow, { openSettingsShortcut });
+  return mainWindow;
+}
+
+function buildDialogOptions(
+  message: string,
+  options?: DesktopDialogOptions,
+  buttons?: string[],
+) {
+  return {
+    type: options?.kind ?? "info",
+    title: options?.title ?? APP_NAME,
+    message,
+    ...(buttons ? { buttons } : {}),
+  } as const;
+}
 
 function createMainWindow() {
   const preferencesSnapshot = Buffer.from(
@@ -99,10 +118,10 @@ function registerIpcHandlers() {
     "skein:dialog:confirm",
     async (_event, message: string, options?: DesktopDialogOptions) => {
       const result = await dialog.showMessageBox({
-        type: options?.kind ?? "info",
-        title: options?.title ?? APP_NAME,
-        message,
-        buttons: [options?.okLabel ?? "OK", options?.cancelLabel ?? "Cancel"],
+        ...buildDialogOptions(message, options, [
+          options?.okLabel ?? "OK",
+          options?.cancelLabel ?? "Cancel",
+        ]),
         defaultId: 0,
         cancelId: 1,
       });
@@ -114,10 +133,7 @@ function registerIpcHandlers() {
     "skein:dialog:message",
     async (_event, message: string, options?: DesktopDialogOptions) => {
       await dialog.showMessageBox({
-        type: options?.kind ?? "info",
-        title: options?.title ?? APP_NAME,
-        message,
-        buttons: [options?.okLabel ?? "OK"],
+        ...buildDialogOptions(message, options, [options?.okLabel ?? "OK"]),
         defaultId: 0,
       });
     },
@@ -213,13 +229,11 @@ app.whenReady().then(async () => {
   await registerPreviewProtocol();
   await backendClient.start();
   registerIpcHandlers();
-  const mainWindow = createMainWindow();
-  installApplicationMenu(mainWindow, { openSettingsShortcut });
+  openMainWindow();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      const nextWindow = createMainWindow();
-      installApplicationMenu(nextWindow, { openSettingsShortcut });
+      openMainWindow();
     }
   });
 });
