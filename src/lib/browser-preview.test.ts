@@ -32,6 +32,9 @@ describe("normalizeBrowserUrl", () => {
   it("rejects non-http protocols", () => {
     expect(normalizeBrowserUrl("javascript:alert(1)")).toBeNull();
     expect(normalizeBrowserUrl("file:///etc/passwd")).toBeNull();
+    expect(normalizeBrowserUrl("mailto:dev@example.com")).toBeNull();
+    expect(normalizeBrowserUrl("ws://localhost:3000")).toBeNull();
+    expect(normalizeBrowserUrl("chrome://settings")).toBeNull();
   });
 
   it("accepts bracketed IPv6 hosts without rewriting", () => {

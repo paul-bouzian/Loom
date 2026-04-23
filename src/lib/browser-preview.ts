@@ -13,7 +13,12 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
 const LOOPBACK_PATTERN =
   /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i;
 
-const DISALLOWED_SCHEMES = /^(file|javascript|data|about|vbscript|ftp):/i;
+// Any explicit URI scheme that isn't http(s) must be rejected outright,
+// otherwise `mailto:…` or `ws://…` would fall through and get rewritten
+// as `https://mailto:…`, which then parses as a valid https URL. The
+// negative lookahead `(?!\d)` skips `host:port` forms like
+// `localhost:3000`, where the chars after `:` are a numeric port.
+const EXPLICIT_NON_HTTP_SCHEME = /^(?!https?:)[a-z][a-z0-9+.-]*:(?!\d)/i;
 
 // The URL parser strips brackets from IPv6 hostnames (`[::1]` → `::1`),
 // so we match both forms here so callers can pass either the raw
@@ -49,7 +54,7 @@ export function normalizeBrowserUrl(raw: string): string | null {
 
 function buildCandidate(trimmed: string): string | null {
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  if (DISALLOWED_SCHEMES.test(trimmed)) return null;
+  if (EXPLICIT_NON_HTTP_SCHEME.test(trimmed)) return null;
   if (LOOPBACK_PATTERN.test(trimmed)) return `http://${trimmed}`;
   if (!trimmed.includes(".") && !trimmed.includes(":")) return null;
   return `https://${trimmed}`;

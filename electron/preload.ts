@@ -197,14 +197,11 @@ const skeinDesktop: SkeinDesktopApi = {
     navigate(tabId: string, url: string) {
       return ipcRenderer.invoke("skein:browser:navigate", { tabId, url });
     },
-    back(tabId: string, fallbackUrl?: string) {
-      return ipcRenderer.invoke("skein:browser:back", { tabId, fallbackUrl });
+    back(tabId: string, targetUrl: string) {
+      return ipcRenderer.invoke("skein:browser:back", { tabId, targetUrl });
     },
-    forward(tabId: string, fallbackUrl?: string) {
-      return ipcRenderer.invoke("skein:browser:forward", {
-        tabId,
-        fallbackUrl,
-      });
+    forward(tabId: string, targetUrl: string) {
+      return ipcRenderer.invoke("skein:browser:forward", { tabId, targetUrl });
     },
     reload(tabId: string, hard?: boolean) {
       return ipcRenderer.invoke("skein:browser:reload", { tabId, hard });

@@ -56,6 +56,14 @@ export class BrowserController {
 
   constructor(window: BrowserWindow) {
     this.window = window;
+    // `ipcMain.handle` is process-global. Skein is single-window, so we
+    // expect the previous instance's `dispose()` to have cleared these
+    // on window close — but defensively clear again before re-registering
+    // to avoid "Cannot register two handlers" if a prior dispose raced
+    // with the new window creation.
+    for (const channel of IPC_CHANNELS) {
+      ipcMain.removeHandler(channel);
+    }
     this.registerIpcHandlers();
     window.once("closed", () => {
       this.dispose();
@@ -111,21 +119,13 @@ export class BrowserController {
     ipcMain.handle("skein:browser:back", async (_event, payload) => {
       const body = assertPlainObject(payload);
       const tabId = assertBrowserTabId(body.tabId);
-      const fallback =
-        body.fallbackUrl === undefined || body.fallbackUrl === null
-          ? null
-          : assertBrowserUrl(body.fallbackUrl);
-      this.back(tabId, fallback);
+      this.back(tabId, assertBrowserUrl(body.targetUrl));
     });
 
     ipcMain.handle("skein:browser:forward", async (_event, payload) => {
       const body = assertPlainObject(payload);
       const tabId = assertBrowserTabId(body.tabId);
-      const fallback =
-        body.fallbackUrl === undefined || body.fallbackUrl === null
-          ? null
-          : assertBrowserUrl(body.fallbackUrl);
-      this.forward(tabId, fallback);
+      this.forward(tabId, assertBrowserUrl(body.targetUrl));
     });
 
     ipcMain.handle("skein:browser:reload", async (_event, payload) => {
@@ -198,32 +198,21 @@ export class BrowserController {
     });
   }
 
-  private back(tabId: string, fallbackUrl: string | null): void {
+  // Back/forward are driven by the renderer's Zustand history because
+  // it's the single source of truth across env-switch recreations of
+  // this WebContentsView. Using `navigationHistory.goBack/goForward`
+  // here would desync once the native history is wiped but the store
+  // still has entries — see PR #93 review thread.
+  private back(tabId: string, targetUrl: string): void {
     const tab = this.tabs.get(tabId);
     if (!tab) return;
-    const history = tab.view.webContents.navigationHistory;
-    if (history.canGoBack()) {
-      history.goBack();
-      return;
-    }
-    // View was recreated (env switch round-trip) — native history is
-    // empty but the renderer still has the URL it wants to return to.
-    if (fallbackUrl) {
-      void tab.view.webContents.loadURL(fallbackUrl).catch(() => {});
-    }
+    void tab.view.webContents.loadURL(targetUrl).catch(() => {});
   }
 
-  private forward(tabId: string, fallbackUrl: string | null): void {
+  private forward(tabId: string, targetUrl: string): void {
     const tab = this.tabs.get(tabId);
     if (!tab) return;
-    const history = tab.view.webContents.navigationHistory;
-    if (history.canGoForward()) {
-      history.goForward();
-      return;
-    }
-    if (fallbackUrl) {
-      void tab.view.webContents.loadURL(fallbackUrl).catch(() => {});
-    }
+    void tab.view.webContents.loadURL(targetUrl).catch(() => {});
   }
 
   private reload(tabId: string, hard: boolean): void {

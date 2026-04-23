@@ -148,20 +148,22 @@ export function BrowserPanel({ collapsed = false }: Props) {
   const handleBack = useCallback(() => {
     if (!environmentId || !activeTabId || !activeTab) return;
     if (activeTab.cursor <= 0) return;
-    const fallbackUrl = activeTab.history[activeTab.cursor - 1];
+    const targetUrl = activeTab.history[activeTab.cursor - 1];
+    if (!targetUrl) return;
     back(environmentId);
     void getDesktopApi()
-      ?.browser.back(activeTabId, fallbackUrl)
+      ?.browser.back(activeTabId, targetUrl)
       .catch(() => {});
   }, [environmentId, activeTabId, activeTab, back]);
 
   const handleForward = useCallback(() => {
     if (!environmentId || !activeTabId || !activeTab) return;
     if (activeTab.cursor >= activeTab.history.length - 1) return;
-    const fallbackUrl = activeTab.history[activeTab.cursor + 1];
+    const targetUrl = activeTab.history[activeTab.cursor + 1];
+    if (!targetUrl) return;
     forward(environmentId);
     void getDesktopApi()
-      ?.browser.forward(activeTabId, fallbackUrl)
+      ?.browser.forward(activeTabId, targetUrl)
       .catch(() => {});
   }, [environmentId, activeTabId, activeTab, forward]);
 
