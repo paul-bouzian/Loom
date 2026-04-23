@@ -1,6 +1,6 @@
-import { useRef, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 
-import { CloseIcon, PlusIcon } from "../../shared/Icons";
+import { CloseIcon, GlobeIcon, PlusIcon } from "../../shared/Icons";
 import { MAX_BROWSER_TABS, type BrowserTab } from "../../stores/browser-store";
 
 type Props = {
@@ -62,6 +62,7 @@ export function BrowserTabBar({
             key={tab.id}
             className={`browser-tab ${isActive ? "browser-tab--active" : ""}`}
           >
+            <TabFavicon src={tab.favicon} />
             <button
               type="button"
               role="tab"
@@ -99,5 +100,25 @@ export function BrowserTabBar({
         <PlusIcon size={12} />
       </button>
     </div>
+  );
+}
+
+function TabFavicon({ src }: { src: string | null }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <span className="browser-tab__favicon" aria-hidden>
+        <GlobeIcon size={11} />
+      </span>
+    );
+  }
+  return (
+    <img
+      className="browser-tab__favicon"
+      src={src}
+      alt=""
+      aria-hidden
+      onError={() => setFailed(true)}
+    />
   );
 }

@@ -8,9 +8,9 @@ export type BrowserTab = {
   id: string;
   history: string[];
   cursor: number;
-  reloadNonce: number;
   pending: boolean;
   title: string;
+  favicon: string | null;
 };
 
 export type DetectedUrl = {
@@ -41,7 +41,11 @@ type BrowserState = {
   back: (environmentId: string) => void;
   forward: (environmentId: string) => void;
   reload: (environmentId: string) => void;
-  markLoaded: (environmentId: string, tabId: string) => void;
+
+  navigateFromMain: (tabId: string, url: string, isInPlace: boolean) => void;
+  setTitle: (tabId: string, title: string) => void;
+  setFavicon: (tabId: string, favicon: string | null) => void;
+  markPending: (tabId: string, pending: boolean) => void;
 
   reportDetectedUrl: (environmentId: string, url: string) => void;
 };
@@ -61,9 +65,9 @@ function buildTab(initialUrl: string): BrowserTab {
     id: crypto.randomUUID(),
     history: [initialUrl],
     cursor: 0,
-    reloadNonce: 0,
     pending: initialUrl !== BROWSER_HOME_URL,
     title: hostFromUrl(initialUrl),
+    favicon: null,
   };
 }
 
@@ -80,6 +84,37 @@ function updateSlot(
   const next = update(current);
   if (next === null || next === current) return null;
   return { byEnv: { ...state.byEnv, [environmentId]: next } };
+}
+
+export function findEnvIdForTab(
+  byEnv: Record<string, BrowserEnvSlot>,
+  tabId: string,
+): string | null {
+  for (const [envId, slot] of Object.entries(byEnv)) {
+    if (slot.tabs.some((tab) => tab.id === tabId)) return envId;
+  }
+  return null;
+}
+
+function updateTabById(
+  state: BrowserState,
+  tabId: string,
+  patcher: (tab: BrowserTab) => BrowserTab | null,
+): Partial<BrowserState> | null {
+  const envId = findEnvIdForTab(state.byEnv, tabId);
+  if (!envId) return null;
+  return updateSlot(state, envId, (slot) => {
+    let changed = false;
+    const nextTabs = slot.tabs.map((tab) => {
+      if (tab.id !== tabId) return tab;
+      const next = patcher(tab);
+      if (next === null || next === tab) return tab;
+      changed = true;
+      return next;
+    });
+    if (!changed) return null;
+    return { ...slot, tabs: nextTabs };
+  });
 }
 
 export const useBrowserStore = create<BrowserState>((set, get) => ({
@@ -142,6 +177,7 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
           cursor: nextHistory.length - 1,
           pending: true,
           title: hostFromUrl(url),
+          favicon: null,
         };
       });
       return { ...slot, tabs: nextTabs };
@@ -196,26 +232,55 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       return {
         ...slot,
         tabs: slot.tabs.map((tab) =>
-          tab.id === activeId
-            ? { ...tab, reloadNonce: tab.reloadNonce + 1, pending: true }
-            : tab,
+          tab.id === activeId ? { ...tab, pending: true } : tab,
         ),
       };
     });
     if (patch) set(patch);
   },
 
-  markLoaded: (environmentId, tabId) => {
-    const patch = updateSlot(get(), environmentId, (slot) => {
-      if (!slot.tabs.some((tab) => tab.id === tabId && tab.pending)) {
-        return null;
+  navigateFromMain: (tabId, url, isInPlace) => {
+    const patch = updateTabById(get(), tabId, (tab) => {
+      const currentUrl = tab.history[tab.cursor];
+      if (currentUrl === url) return null;
+      if (isInPlace) {
+        const nextHistory = tab.history.slice();
+        nextHistory[tab.cursor] = url;
+        return { ...tab, history: nextHistory, title: hostFromUrl(url) };
       }
+      const trimmed = tab.history.slice(0, tab.cursor + 1);
+      const nextHistory = [...trimmed, url];
       return {
-        ...slot,
-        tabs: slot.tabs.map((tab) =>
-          tab.id === tabId ? { ...tab, pending: false } : tab,
-        ),
+        ...tab,
+        history: nextHistory,
+        cursor: nextHistory.length - 1,
+        title: hostFromUrl(url),
+        favicon: null,
       };
+    });
+    if (patch) set(patch);
+  },
+
+  setTitle: (tabId, title) => {
+    const patch = updateTabById(get(), tabId, (tab) => {
+      if (!title || tab.title === title) return null;
+      return { ...tab, title };
+    });
+    if (patch) set(patch);
+  },
+
+  setFavicon: (tabId, favicon) => {
+    const patch = updateTabById(get(), tabId, (tab) => {
+      if (tab.favicon === favicon) return null;
+      return { ...tab, favicon };
+    });
+    if (patch) set(patch);
+  },
+
+  markPending: (tabId, pending) => {
+    const patch = updateTabById(get(), tabId, (tab) => {
+      if (tab.pending === pending) return null;
+      return { ...tab, pending };
     });
     if (patch) set(patch);
   },
