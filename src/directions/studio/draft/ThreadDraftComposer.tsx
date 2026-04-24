@@ -453,8 +453,9 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
         : {
             kind: "environment" as const,
             environmentId: resolvedComposerEnvId,
+            provider: composer.provider,
           },
-    [resolvedComposerEnvId],
+    [composer.provider, resolvedComposerEnvId],
   );
   const catalogTarget =
     draft.kind === "chat"

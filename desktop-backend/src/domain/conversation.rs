@@ -72,6 +72,8 @@ pub enum ComposerTarget {
     Environment {
         #[serde(rename = "environmentId")]
         environment_id: String,
+        #[serde(default)]
+        provider: Option<ProviderKind>,
     },
     ChatWorkspace {},
 }
@@ -665,7 +667,7 @@ pub struct ConversationEventPayload {
 
 #[cfg(test)]
 mod tests {
-    use super::ComposerTarget;
+    use super::{ComposerTarget, ProviderKind};
 
     #[test]
     fn composer_target_deserializes_camel_case_variant_fields() {
@@ -690,6 +692,22 @@ mod tests {
             environment_target,
             ComposerTarget::Environment {
                 environment_id: "env-123".to_string(),
+                provider: None,
+            }
+        );
+
+        let provider_environment_target =
+            serde_json::from_value::<ComposerTarget>(serde_json::json!({
+                "kind": "environment",
+                "environmentId": "env-123",
+                "provider": "claude",
+            }))
+            .expect("environment target with provider should deserialize");
+        assert_eq!(
+            provider_environment_target,
+            ComposerTarget::Environment {
+                environment_id: "env-123".to_string(),
+                provider: Some(ProviderKind::Claude),
             }
         );
 

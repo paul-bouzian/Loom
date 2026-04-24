@@ -434,12 +434,13 @@ impl ClaudeRuntimeSession {
         } else {
             resolve_text_for_claude(&context, visible_text)?
         };
-        if let Some(prefix) = context
+        let hidden_handoff_context = context
             .handoff_bootstrap_context
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-        {
+            .map(ToString::to_string);
+        if let Some(prefix) = hidden_handoff_context.as_deref() {
             resolved_text = if resolved_text.trim().is_empty() {
                 prefix.to_string()
             } else {
@@ -560,7 +561,11 @@ impl ClaudeRuntimeSession {
         snapshot.pending_interactions.clear();
         if result.messages_authoritative.unwrap_or(true) {
             let messages = if show_user_message {
-                result.messages
+                strip_hidden_handoff_context_from_messages(
+                    result.messages,
+                    hidden_handoff_context.as_deref(),
+                    visible_text,
+                )
             } else {
                 filter_hidden_user_message(result.messages, visible_text)
             };
@@ -1331,6 +1336,34 @@ fn filter_hidden_user_message(
             !(matches!(&message.role, ConversationRole::User) && message.text.trim() == hidden_text)
         })
         .collect()
+}
+
+fn strip_hidden_handoff_context_from_messages(
+    messages: Vec<ClaudeSimpleMessage>,
+    hidden_context: Option<&str>,
+    visible_text: &str,
+) -> Vec<ClaudeSimpleMessage> {
+    let Some(hidden_context) = hidden_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return messages;
+    };
+    messages
+        .into_iter()
+        .map(|mut message| {
+            if matches!(message.role, ConversationRole::User)
+                && claude_text_starts_with_hidden_context(&message.text, hidden_context)
+            {
+                message.text = visible_text.to_string();
+            }
+            message
+        })
+        .collect()
+}
+
+fn claude_text_starts_with_hidden_context(text: &str, hidden_context: &str) -> bool {
+    text.trim_start().starts_with(hidden_context)
 }
 
 fn conversation_item_id(item: &ConversationItem) -> &str {
@@ -2638,6 +2671,57 @@ mod tests {
 
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].id, "assistant-final");
+    }
+
+    #[test]
+    fn handoff_context_filter_keeps_only_visible_current_user_text() {
+        let hidden = "<handoff_context>\nsource_provider: Claude\n</handoff_context>";
+        let messages = vec![
+            ClaudeSimpleMessage {
+                id: "user-handoff".to_string(),
+                role: ConversationRole::User,
+                text: format!("{hidden}\n\nMerci, et pour Paris ?"),
+                images: None,
+            },
+            ClaudeSimpleMessage {
+                id: "assistant-final".to_string(),
+                role: ConversationRole::Assistant,
+                text: "Pour Paris...".to_string(),
+                images: None,
+            },
+        ];
+
+        let visible = strip_hidden_handoff_context_from_messages(
+            messages,
+            Some(hidden),
+            "Merci, et pour Paris ?",
+        );
+
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].text, "Merci, et pour Paris ?");
+        assert_eq!(visible[1].text, "Pour Paris...");
+    }
+
+    #[test]
+    fn handoff_context_filter_preserves_image_only_messages_without_visible_text() {
+        let hidden = "<handoff_context>\nsource_provider: Codex\n</handoff_context>";
+        let messages = vec![ClaudeSimpleMessage {
+            id: "user-image".to_string(),
+            role: ConversationRole::User,
+            text: hidden.to_string(),
+            images: Some(vec![ConversationImageAttachment::Image {
+                url: "https://example.com/image.png".to_string(),
+            }]),
+        }];
+
+        let visible = strip_hidden_handoff_context_from_messages(messages, Some(hidden), "");
+
+        assert_eq!(visible.len(), 1);
+        assert!(visible[0].text.is_empty());
+        assert!(visible[0]
+            .images
+            .as_ref()
+            .is_some_and(|images| !images.is_empty()));
     }
 
     #[test]

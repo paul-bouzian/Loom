@@ -1823,7 +1823,10 @@ impl WorkspaceService {
                     file_search_enabled: true,
                 })
             }
-            ComposerTarget::Environment { environment_id } => {
+            ComposerTarget::Environment {
+                environment_id,
+                provider,
+            } => {
                 validate_non_blank_id(environment_id, "Environment")?;
                 let connection = self.database.open()?;
                 let environment_kind = connection
@@ -1843,11 +1846,12 @@ impl WorkspaceService {
                 let runtime_target = self.environment_runtime_target(environment_id)?;
                 let codex_thread_id = self
                     .latest_active_codex_thread_id_for_environment(&connection, environment_id)?;
+                let selected_provider = provider.unwrap_or(runtime_target.provider);
 
                 Ok(ComposerTargetContext {
                     environment_id: environment_id.to_string(),
                     environment_path: runtime_target.environment_path,
-                    provider: runtime_target.provider,
+                    provider: selected_provider,
                     codex_thread_id,
                     codex_binary_path: runtime_target.codex_binary_path,
                     file_search_enabled: true,
@@ -4650,12 +4654,52 @@ mod tests {
             .service
             .composer_target_context(&ComposerTarget::Environment {
                 environment_id: chat.environment.id,
+                provider: None,
             })
             .expect_err("chat environment should be rejected");
 
         assert!(
             matches!(error, AppError::Validation(message) if message == "Chat environments must use the chat workspace composer target.")
         );
+    }
+
+    #[test]
+    fn environment_composer_target_uses_requested_provider_over_default() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("composer-provider"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        harness
+            .service
+            .update_settings(GlobalSettingsPatch {
+                default_provider: Some(ProviderKind::Claude),
+                ..GlobalSettingsPatch::default()
+            })
+            .expect("settings should update");
+        let environment_id = project
+            .environments
+            .first()
+            .expect("local environment should exist")
+            .id
+            .clone();
+
+        let context = harness
+            .service
+            .composer_target_context(&ComposerTarget::Environment {
+                environment_id,
+                provider: Some(ProviderKind::Codex),
+            })
+            .expect("environment composer target should resolve");
+
+        assert_eq!(context.provider, ProviderKind::Codex);
+        assert!(context.file_search_enabled);
     }
 
     #[test]

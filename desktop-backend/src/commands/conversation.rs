@@ -531,7 +531,7 @@ fn validate_composer_target(target: &ComposerTarget) -> Result<(), CommandError>
                 return Err(AppError::Validation("Thread id cannot be empty.".to_string()).into());
             }
         }
-        ComposerTarget::Environment { environment_id } => {
+        ComposerTarget::Environment { environment_id, .. } => {
             if environment_id.trim().is_empty() {
                 return Err(
                     AppError::Validation("Environment id cannot be empty.".to_string()).into(),
@@ -631,6 +631,7 @@ mod tests {
     fn composer_target_rejects_blank_environment_ids() {
         let error = validate_composer_target(&ComposerTarget::Environment {
             environment_id: "   ".to_string(),
+            provider: None,
         })
         .expect_err("blank environment id should fail");
 

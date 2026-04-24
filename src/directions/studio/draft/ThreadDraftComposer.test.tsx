@@ -24,7 +24,7 @@ let latestEnvironmentSelectorProps: {
 let latestInlineComposerProps: {
   draft: string;
   images: Array<{ type: string }>;
-  composer: { model: string };
+  composer: { model: string; provider?: string };
   modelOptions: Array<{
     id: string;
     displayName: string;
@@ -60,7 +60,7 @@ vi.mock("../composer/InlineComposer", () => ({
     transportEnabled,
     onSend,
   }: {
-    composer: { model: string };
+    composer: { model: string; provider?: string };
     draft: string;
     images: Array<{ type: string }>;
     catalogTarget?: unknown;
@@ -493,12 +493,54 @@ describe("ThreadDraftComposer", () => {
       expect(latestInlineComposerProps?.catalogTarget).toEqual({
         kind: "environment",
         environmentId: "env-local",
+        provider: "codex",
       });
     });
     expect(latestInlineComposerProps?.fileSearchTarget).toEqual({
       kind: "environment",
       environmentId: "env-local",
+      provider: "codex",
     });
     expect(latestInlineComposerProps?.transportEnabled).toBe(false);
+  });
+
+  it("passes the selected draft provider to environment-backed composer targets", async () => {
+    mockedBridge.getDraftThreadState.mockResolvedValueOnce({
+      composerDraft: {
+        text: "",
+        images: [],
+        mentionBindings: [],
+        isRefiningPlan: false,
+      },
+      composer: {
+        provider: "claude",
+        model: "claude-sonnet-4-6",
+        reasoningEffort: "high",
+        collaborationMode: "build",
+        approvalPolicy: "askToEdit",
+        serviceTier: null,
+      },
+      projectSelection: null,
+    });
+
+    render(
+      <ThreadDraftComposer
+        draft={{ kind: "project", projectId: "project-1" }}
+        paneId="topLeft"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(latestInlineComposerProps?.catalogTarget).toEqual({
+        kind: "environment",
+        environmentId: "env-local",
+        provider: "claude",
+      });
+    });
+    expect(latestInlineComposerProps?.fileSearchTarget).toEqual({
+      kind: "environment",
+      environmentId: "env-local",
+      provider: "claude",
+    });
   });
 });
