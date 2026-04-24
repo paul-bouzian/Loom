@@ -1707,6 +1707,29 @@ describe("ThreadConversation", () => {
     });
   });
 
+  it("keeps pending input inside the scrollable timeline and uses the provider label", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        provider: "claude",
+        providerThreadId: "claude-session-1",
+        codexThreadId: null,
+        status: "waitingForExternalAction",
+        pendingInteractions: [makeUserInputRequest({ turnId: "turn-weather-1" })],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread({ provider: "claude", providerThreadId: "claude-session-1" })}
+      />,
+    );
+
+    const heading = await screen.findByText("Claude needs input");
+    expect(heading.closest(".tx-conversation__timeline")).not.toBeNull();
+  });
+
   it("keeps approvals, user input, and proposed plans visible outside compact work activity", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,

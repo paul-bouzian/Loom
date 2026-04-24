@@ -8,16 +8,18 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::domain::conversation::{
-    ComposerTarget, ConversationComposerDraft, ConversationComposerSettings,
+    ComposerTarget, ConversationComposerDraft, ConversationComposerSettings, ConversationItem,
+    ThreadConversationSnapshot,
 };
-use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch, OpenTarget};
+use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch, OpenTarget, ProviderKind};
 use crate::domain::shortcuts::ShortcutSettings;
 use crate::domain::workspace::{
     ChatThreadCreateResult, ChatWorkspaceSnapshot, DraftProjectSelection, DraftThreadTarget,
     EnvironmentKind, EnvironmentPullRequestSnapshot, EnvironmentRecord,
     FirstPromptRenameFailureEvent, ManagedWorktreeCreateResult, ProjectManualAction, ProjectRecord,
     ProjectSettings, ProjectSettingsPatch, RuntimeState, RuntimeStatusSnapshot,
-    SavedDraftThreadState, ThreadOverrides, ThreadRecord, ThreadStatus, WorkspaceSnapshot,
+    SavedDraftThreadState, ThreadHandoffBootstrapStatus, ThreadHandoffImportedMessage,
+    ThreadHandoffState, ThreadOverrides, ThreadRecord, ThreadStatus, WorkspaceSnapshot,
     WorktreeScriptTrigger,
 };
 use crate::error::{AppError, AppResult};
@@ -55,6 +57,13 @@ pub struct CreateThreadRequest {
 pub struct CreateChatThreadRequest {
     pub title: Option<String>,
     pub overrides: Option<ThreadOverrides>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateThreadHandoffRequest {
+    pub source_thread_id: String,
+    pub target_provider: ProviderKind,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -111,7 +120,9 @@ pub struct EnvironmentOpenContext {
 #[derive(Debug, Clone)]
 pub struct EnvironmentRuntimeTarget {
     pub environment_path: String,
+    pub provider: ProviderKind,
     pub codex_binary_path: Option<String>,
+    pub claude_binary_path: Option<String>,
     pub stream_assistant_responses: bool,
 }
 
@@ -172,9 +183,14 @@ pub struct ThreadRuntimeContext {
     pub thread_id: String,
     pub environment_id: String,
     pub environment_path: String,
+    pub provider: ProviderKind,
+    pub provider_thread_id: Option<String>,
     pub codex_thread_id: Option<String>,
     pub composer: ConversationComposerSettings,
     pub codex_binary_path: Option<String>,
+    pub claude_binary_path: Option<String>,
+    pub handoff: Option<crate::domain::workspace::ThreadHandoffState>,
+    pub handoff_bootstrap_context: Option<String>,
     pub stream_assistant_responses: bool,
     pub multi_agent_nudge_enabled: bool,
     pub multi_agent_nudge_max_subagents: u8,
@@ -184,7 +200,9 @@ impl ThreadRuntimeContext {
     pub fn environment_runtime_target(&self) -> EnvironmentRuntimeTarget {
         EnvironmentRuntimeTarget {
             environment_path: self.environment_path.clone(),
+            provider: self.provider,
             codex_binary_path: self.codex_binary_path.clone(),
+            claude_binary_path: self.claude_binary_path.clone(),
             stream_assistant_responses: self.stream_assistant_responses,
         }
     }
@@ -194,6 +212,7 @@ impl ThreadRuntimeContext {
 pub struct ComposerTargetContext {
     pub environment_id: String,
     pub environment_path: String,
+    pub provider: ProviderKind,
     pub codex_thread_id: Option<String>,
     pub codex_binary_path: Option<String>,
     pub file_search_enabled: bool,
@@ -773,6 +792,9 @@ impl WorkspaceService {
         let environment_id = Uuid::now_v7().to_string();
         let thread_id = Uuid::now_v7().to_string();
         let overrides = input.overrides.unwrap_or_default();
+        let provider = overrides
+            .provider
+            .unwrap_or(self.current_settings()?.default_provider);
         let mut connection = self.database.open()?;
         let transaction_result = (|| -> AppResult<()> {
             let transaction = connection.transaction()?;
@@ -803,14 +825,15 @@ impl WorkspaceService {
             let thread_insert = transaction.execute(
                 "
                 INSERT INTO threads (
-                  id, environment_id, title, status, codex_thread_id, overrides_json, created_at, updated_at, archived_at
-                ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, NULL)
+                  id, environment_id, title, status, provider, provider_thread_id, codex_thread_id, overrides_json, created_at, updated_at, archived_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, ?7, ?8, NULL)
                 ",
                 params![
                     thread_id,
                     environment_id,
                     "Thread 1",
                     thread_status_value(ThreadStatus::Active),
+                    provider_value(provider),
                     overrides_json,
                     now,
                     now,
@@ -852,8 +875,11 @@ impl WorkspaceService {
             environment_id: environment_id.clone(),
             title: "Thread 1".to_string(),
             status: ThreadStatus::Active,
+            provider,
+            provider_thread_id: None,
             codex_thread_id: None,
             overrides,
+            handoff: None,
             created_at: now,
             updated_at: now,
             archived_at: None,
@@ -899,6 +925,9 @@ impl WorkspaceService {
             .unwrap_or("Thread 1")
             .to_string();
         let overrides = input.overrides.unwrap_or_default();
+        let provider = overrides
+            .provider
+            .unwrap_or(self.current_settings()?.default_provider);
         let overrides_json = serde_json::to_string(&overrides)
             .map_err(|error| AppError::Validation(error.to_string()))?;
         let thread_id = Uuid::now_v7().to_string();
@@ -930,14 +959,15 @@ impl WorkspaceService {
             transaction.execute(
                 "
                 INSERT INTO threads (
-                  id, environment_id, title, status, codex_thread_id, overrides_json, created_at, updated_at, archived_at
-                ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?6, NULL)
+                  id, environment_id, title, status, provider, provider_thread_id, codex_thread_id, overrides_json, created_at, updated_at, archived_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, ?7, ?7, NULL)
                 ",
                 params![
                     thread_id,
                     environment_id,
                     thread_title,
                     thread_status_value(ThreadStatus::Active),
+                    provider_value(provider),
                     overrides_json,
                     now,
                 ],
@@ -957,8 +987,11 @@ impl WorkspaceService {
             environment_id: environment_id.clone(),
             title: thread_title,
             status: ThreadStatus::Active,
+            provider,
+            provider_thread_id: None,
             codex_thread_id: None,
             overrides,
+            handoff: None,
             created_at: now,
             updated_at: now,
             archived_at: None,
@@ -1081,6 +1114,9 @@ impl WorkspaceService {
             .trim()
             .to_string();
         let overrides = input.overrides.unwrap_or_default();
+        let provider = overrides
+            .provider
+            .unwrap_or(self.current_settings()?.default_provider);
         let overrides_json = serde_json::to_string(&overrides)
             .map_err(|error| AppError::Validation(error.to_string()))?;
         let now = Utc::now();
@@ -1089,14 +1125,15 @@ impl WorkspaceService {
         connection.execute(
             "
             INSERT INTO threads (
-              id, environment_id, title, status, codex_thread_id, overrides_json, created_at, updated_at, archived_at
-            ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, NULL)
+              id, environment_id, title, status, provider, provider_thread_id, codex_thread_id, overrides_json, created_at, updated_at, archived_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, ?7, ?8, NULL)
             ",
             params![
                 thread_id,
                 input.environment_id,
                 title,
                 thread_status_value(ThreadStatus::Active),
+                provider_value(provider),
                 overrides_json,
                 now,
                 now,
@@ -1104,6 +1141,159 @@ impl WorkspaceService {
         )?;
 
         self.thread_by_id(&thread_id)
+    }
+
+    pub fn create_thread_handoff(
+        &self,
+        input: CreateThreadHandoffRequest,
+        source_snapshot: &ThreadConversationSnapshot,
+    ) -> AppResult<ThreadRecord> {
+        validate_non_blank_id(&input.source_thread_id, "source thread")?;
+        if input.source_thread_id != source_snapshot.thread_id {
+            return Err(AppError::Validation(
+                "Handoff source snapshot does not match the requested thread.".to_string(),
+            ));
+        }
+        if input.target_provider == source_snapshot.provider {
+            return Err(AppError::Validation(
+                "Handoff target provider must differ from the source provider.".to_string(),
+            ));
+        }
+
+        let connection = self.database.open()?;
+        let (environment_id, source_title, source_provider, source_handoff_json) = connection
+            .query_row(
+                "
+                SELECT environment_id, title, provider, handoff_json
+                FROM threads
+                WHERE id = ?1 AND archived_at IS NULL
+                ",
+                params![input.source_thread_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        provider_from_str(&row.get::<_, String>(2)?)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::NotFound("Source thread not found.".to_string()))?;
+        if source_provider != source_snapshot.provider {
+            return Err(AppError::Validation(
+                "Handoff source provider does not match the active thread.".to_string(),
+            ));
+        }
+        if let Some(raw_handoff) = source_handoff_json.as_deref() {
+            let source_handoff = handoff_from_json(raw_handoff)?;
+            if matches!(
+                source_handoff.bootstrap_status,
+                ThreadHandoffBootstrapStatus::Pending
+            ) {
+                return Err(AppError::Validation(
+                    "Send one message in this handoff thread before handing it off again."
+                        .to_string(),
+                ));
+            }
+        }
+
+        let environment = connection
+            .query_row(
+                "
+                SELECT name, path, git_branch
+                FROM environments
+                WHERE id = ?1
+                ",
+                params![environment_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::NotFound("Source environment not found.".to_string()))?;
+
+        let imported_messages = handoff_imported_messages(source_snapshot);
+        if imported_messages.is_empty() {
+            return Err(AppError::Validation(
+                "Handoff requires at least one completed visible message.".to_string(),
+            ));
+        }
+
+        let now = Utc::now();
+        let handoff = ThreadHandoffState {
+            source_thread_id: input.source_thread_id,
+            source_provider,
+            source_thread_title: Some(source_title.clone()),
+            environment_name: Some(environment.0.clone()),
+            branch_name: environment.2.clone(),
+            worktree_path: Some(environment.1.clone()),
+            imported_at: now,
+            bootstrap_status: ThreadHandoffBootstrapStatus::Pending,
+            imported_messages,
+        };
+        let overrides = ThreadOverrides {
+            provider: Some(input.target_provider),
+            ..ThreadOverrides::default()
+        };
+        let thread_id = Uuid::now_v7().to_string();
+        let overrides_json = serde_json::to_string(&overrides)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        let handoff_json = serde_json::to_string(&handoff)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        connection.execute(
+            "
+            INSERT INTO threads (
+              id, environment_id, title, status, provider, provider_thread_id, codex_thread_id, overrides_json, handoff_json, created_at, updated_at, archived_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, ?7, ?8, ?8, NULL)
+            ",
+            params![
+                thread_id,
+                environment_id,
+                source_title,
+                thread_status_value(ThreadStatus::Active),
+                provider_value(input.target_provider),
+                overrides_json,
+                handoff_json,
+                now,
+            ],
+        )?;
+
+        self.thread_by_id(&thread_id)
+    }
+
+    pub fn complete_thread_handoff_bootstrap(&self, thread_id: &str) -> AppResult<()> {
+        let connection = self.database.open()?;
+        let handoff_json = connection
+            .query_row(
+                "SELECT handoff_json FROM threads WHERE id = ?1",
+                params![thread_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::NotFound("Thread not found.".to_string()))?;
+        let Some(raw_handoff) = handoff_json else {
+            return Ok(());
+        };
+        let mut handoff = handoff_from_json(&raw_handoff)?;
+        if matches!(
+            handoff.bootstrap_status,
+            ThreadHandoffBootstrapStatus::Completed
+        ) {
+            return Ok(());
+        }
+        handoff.bootstrap_status = ThreadHandoffBootstrapStatus::Completed;
+        let payload = serde_json::to_string(&handoff)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        connection.execute(
+            "UPDATE threads SET handoff_json = ?1, updated_at = ?2 WHERE id = ?3",
+            params![payload, Utc::now(), thread_id],
+        )?;
+        Ok(())
     }
 
     pub fn rename_thread(&self, input: RenameThreadRequest) -> AppResult<ThreadRecord> {
@@ -1124,17 +1314,25 @@ impl WorkspaceService {
         let connection = self.database.open()?;
         let maybe_thread = connection
             .query_row(
-                "SELECT title, codex_thread_id FROM threads WHERE id = ?1",
+                "SELECT title, provider_thread_id, handoff_json FROM threads WHERE id = ?1",
                 params![thread_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .optional()?;
 
-        let Some((title, codex_thread_id)) = maybe_thread else {
+        let Some((title, provider_thread_id, handoff_json)) = maybe_thread else {
             return Err(AppError::NotFound("Thread not found.".to_string()));
         };
 
-        Ok(codex_thread_id.is_none() && thread_titles::is_auto_generated_thread_title(&title))
+        Ok(handoff_json.is_none()
+            && provider_thread_id.is_none()
+            && thread_titles::is_auto_generated_thread_title(&title))
     }
 
     pub fn auto_rename_thread_from_message(
@@ -1430,7 +1628,9 @@ impl WorkspaceService {
 
         Ok(EnvironmentRuntimeTarget {
             environment_path,
+            provider: settings.default_provider,
             codex_binary_path: settings.codex_binary_path,
+            claude_binary_path: settings.claude_binary_path,
             stream_assistant_responses: settings.stream_assistant_responses,
         })
     }
@@ -1524,15 +1724,21 @@ impl WorkspaceService {
                   threads.id,
                   threads.environment_id,
                   environments.path,
+                  threads.provider,
+                  threads.provider_thread_id,
                   threads.codex_thread_id,
-                  threads.overrides_json
+                  threads.overrides_json,
+                  threads.handoff_json
                 FROM threads
                 JOIN environments ON environments.id = threads.environment_id
                 WHERE threads.id = ?1
                 ",
                 params![thread_id],
                 |row| {
-                    let overrides_json = row.get::<_, String>(4)?;
+                    let stored_provider = provider_from_str(&row.get::<_, String>(3)?)?;
+                    let provider_thread_id = row.get::<_, Option<String>>(4)?;
+                    let codex_thread_id = row.get::<_, Option<String>>(5)?;
+                    let overrides_json = row.get::<_, String>(6)?;
                     let overrides = serde_json::from_str::<ThreadOverrides>(&overrides_json)
                         .map_err(|error| {
                             rusqlite::Error::FromSqlConversionFailure(
@@ -1541,19 +1747,34 @@ impl WorkspaceService {
                                 Box::new(error),
                             )
                         })?;
+                    let provider = overrides.provider.unwrap_or(stored_provider);
+                    let handoff_json = row.get::<_, Option<String>>(7)?;
+                    let handoff = match handoff_json {
+                        Some(payload) => Some(serde_json::from_str(&payload).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                payload.len(),
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })?),
+                        None => None,
+                    };
 
                     Ok(ThreadRuntimeContext {
                         thread_id: row.get(0)?,
                         environment_id: row.get(1)?,
                         environment_path: row.get(2)?,
-                        codex_thread_id: row.get(3)?,
+                        provider,
+                        provider_thread_id,
+                        codex_thread_id,
                         composer: ConversationComposerSettings {
+                            provider,
                             model: overrides
                                 .model
-                                .unwrap_or_else(|| settings.default_model.clone()),
-                            reasoning_effort: overrides
-                                .reasoning_effort
-                                .unwrap_or(settings.default_reasoning_effort),
+                                .unwrap_or_else(|| default_model_for_provider(&settings, provider)),
+                            reasoning_effort: overrides.reasoning_effort.unwrap_or_else(|| {
+                                default_effort_for_provider(&settings, provider)
+                            }),
                             collaboration_mode: overrides
                                 .collaboration_mode
                                 .unwrap_or(settings.default_collaboration_mode),
@@ -1567,6 +1788,9 @@ impl WorkspaceService {
                             },
                         },
                         codex_binary_path: settings.codex_binary_path.clone(),
+                        claude_binary_path: settings.claude_binary_path.clone(),
+                        handoff,
+                        handoff_bootstrap_context: None,
                         stream_assistant_responses: settings.stream_assistant_responses,
                         multi_agent_nudge_enabled: settings.multi_agent_nudge_enabled,
                         multi_agent_nudge_max_subagents: settings.multi_agent_nudge_max_subagents,
@@ -1588,6 +1812,7 @@ impl WorkspaceService {
                 Ok(ComposerTargetContext {
                     environment_id: context.environment_id,
                     environment_path: context.environment_path,
+                    provider: context.provider,
                     codex_thread_id: context.codex_thread_id,
                     codex_binary_path: context.codex_binary_path,
                     file_search_enabled: true,
@@ -1617,6 +1842,7 @@ impl WorkspaceService {
                 Ok(ComposerTargetContext {
                     environment_id: environment_id.to_string(),
                     environment_path: runtime_target.environment_path,
+                    provider: runtime_target.provider,
                     codex_thread_id,
                     codex_binary_path: runtime_target.codex_binary_path,
                     file_search_enabled: true,
@@ -1631,6 +1857,7 @@ impl WorkspaceService {
                 Ok(ComposerTargetContext {
                     environment_id: environment_id.clone(),
                     environment_path: self.chats_root.to_string_lossy().to_string(),
+                    provider: settings.default_provider,
                     codex_thread_id: None,
                     codex_binary_path: settings.codex_binary_path,
                     file_search_enabled: false,
@@ -1640,13 +1867,29 @@ impl WorkspaceService {
     }
 
     pub fn persist_codex_thread_id(&self, thread_id: &str, codex_thread_id: &str) -> AppResult<()> {
+        self.persist_provider_thread_id(thread_id, ProviderKind::Codex, codex_thread_id)
+    }
+
+    pub fn persist_provider_thread_id(
+        &self,
+        thread_id: &str,
+        provider: ProviderKind,
+        provider_thread_id: &str,
+    ) -> AppResult<()> {
         let affected = self.database.open()?.execute(
             "
             UPDATE threads
-            SET codex_thread_id = ?1, updated_at = ?2
-            WHERE id = ?3
+            SET provider_thread_id = ?1,
+                codex_thread_id = CASE WHEN ?2 = 'codex' THEN ?1 ELSE codex_thread_id END,
+                updated_at = ?3
+            WHERE id = ?4 AND provider = ?2
             ",
-            params![codex_thread_id, Utc::now(), thread_id],
+            params![
+                provider_thread_id,
+                provider_value(provider),
+                Utc::now(),
+                thread_id
+            ],
         )?;
 
         if affected == 0 {
@@ -1663,6 +1906,7 @@ impl WorkspaceService {
     ) -> AppResult<()> {
         let default_service_tier = self.current_settings()?.default_service_tier;
         let overrides = ThreadOverrides {
+            provider: Some(composer.provider),
             model: Some(composer.model.clone()),
             reasoning_effort: Some(composer.reasoning_effort),
             collaboration_mode: Some(composer.collaboration_mode),
@@ -1676,13 +1920,20 @@ impl WorkspaceService {
             "
             UPDATE threads
             SET overrides_json = ?1, updated_at = ?2
-            WHERE id = ?3
+            WHERE id = ?3 AND provider = ?4
             ",
-            params![overrides_json, Utc::now(), thread_id],
+            params![
+                overrides_json,
+                Utc::now(),
+                thread_id,
+                provider_value(composer.provider)
+            ],
         )?;
 
         if affected == 0 {
-            return Err(AppError::NotFound("Thread not found.".to_string()));
+            return Err(AppError::Validation(
+                "Cannot change provider for an existing thread. Use handoff instead.".to_string(),
+            ));
         }
 
         Ok(())
@@ -2662,13 +2913,13 @@ impl WorkspaceService {
     ) -> AppResult<HashMap<String, Vec<ThreadRecord>>> {
         let mut statement = connection.prepare(
             "
-            SELECT id, environment_id, title, status, codex_thread_id, overrides_json, created_at, updated_at, archived_at
+            SELECT id, environment_id, title, status, provider, provider_thread_id, codex_thread_id, overrides_json, handoff_json, created_at, updated_at, archived_at
             FROM threads
             ORDER BY created_at ASC
             ",
         )?;
         let rows = statement.query_map([], |row| {
-            let overrides_json = row.get::<_, String>(5)?;
+            let overrides_json = row.get::<_, String>(7)?;
             let overrides =
                 serde_json::from_str::<ThreadOverrides>(&overrides_json).map_err(|error| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -2677,16 +2928,30 @@ impl WorkspaceService {
                         Box::new(error),
                     )
                 })?;
+            let handoff_json = row.get::<_, Option<String>>(8)?;
+            let handoff = match handoff_json {
+                Some(payload) => Some(serde_json::from_str(&payload).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        payload.len(),
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?),
+                None => None,
+            };
             Ok(ThreadRecord {
                 id: row.get(0)?,
                 environment_id: row.get(1)?,
                 title: row.get(2)?,
                 status: thread_status_from_str(&row.get::<_, String>(3)?)?,
-                codex_thread_id: row.get(4)?,
+                provider: provider_from_str(&row.get::<_, String>(4)?)?,
+                provider_thread_id: row.get(5)?,
+                codex_thread_id: row.get(6)?,
                 overrides,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-                archived_at: row.get(8)?,
+                handoff,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                archived_at: row.get(11)?,
             })
         })?;
 
@@ -2997,6 +3262,84 @@ fn project_kind_from_str(value: &str) -> Result<ProjectKind, rusqlite::Error> {
     }
 }
 
+fn provider_value(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Codex => "codex",
+        ProviderKind::Claude => "claude",
+    }
+}
+
+fn provider_from_str(value: &str) -> Result<ProviderKind, rusqlite::Error> {
+    match value {
+        "codex" => Ok(ProviderKind::Codex),
+        "claude" => Ok(ProviderKind::Claude),
+        other => Err(rusqlite::Error::InvalidParameterName(other.to_string())),
+    }
+}
+
+fn default_model_for_provider(settings: &GlobalSettings, provider: ProviderKind) -> String {
+    match provider {
+        ProviderKind::Codex => {
+            if matches!(settings.default_provider, ProviderKind::Codex) {
+                settings.default_model.clone()
+            } else {
+                "gpt-5.4".to_string()
+            }
+        }
+        ProviderKind::Claude => {
+            if matches!(settings.default_provider, ProviderKind::Claude) {
+                settings.default_model.clone()
+            } else {
+                "claude-sonnet-4-6".to_string()
+            }
+        }
+    }
+}
+
+fn default_effort_for_provider(
+    settings: &GlobalSettings,
+    provider: ProviderKind,
+) -> crate::domain::settings::ReasoningEffort {
+    match provider {
+        ProviderKind::Codex => match settings.default_reasoning_effort {
+            crate::domain::settings::ReasoningEffort::Max => {
+                crate::domain::settings::ReasoningEffort::High
+            }
+            effort => effort,
+        },
+        ProviderKind::Claude => settings.default_reasoning_effort,
+    }
+}
+
+fn handoff_from_json(value: &str) -> AppResult<ThreadHandoffState> {
+    serde_json::from_str::<ThreadHandoffState>(value)
+        .map_err(|error| AppError::Validation(error.to_string()))
+}
+
+fn handoff_imported_messages(
+    snapshot: &ThreadConversationSnapshot,
+) -> Vec<ThreadHandoffImportedMessage> {
+    let created_at = Utc::now();
+    snapshot
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ConversationItem::Message(message)
+                if !message.is_streaming && !message.text.trim().is_empty() =>
+            {
+                Some(ThreadHandoffImportedMessage {
+                    id: message.id.clone(),
+                    role: message.role,
+                    text: message.text.clone(),
+                    images: message.images.clone(),
+                    created_at,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn thread_status_value(status: ThreadStatus) -> &'static str {
     match status {
         ThreadStatus::Active => "active",
@@ -3074,19 +3417,20 @@ mod tests {
 
     use super::{
         AddProjectRequest, ArchiveThreadRequest, AutoRenameFirstPromptRequest,
-        CreateChatThreadRequest, CreateManagedWorktreeRequest, CreateThreadRequest,
-        RenameProjectRequest, ReorderProjectsRequest, RunProjectActionRequest,
+        CreateChatThreadRequest, CreateManagedWorktreeRequest, CreateThreadHandoffRequest,
+        CreateThreadRequest, RenameProjectRequest, ReorderProjectsRequest, RunProjectActionRequest,
         SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest, WorkspaceService,
         CHAT_WORKSPACE_PROJECT_ID,
     };
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ComposerTarget,
         ConversationComposerDraft, ConversationComposerSettings, ConversationImageAttachment,
+        ConversationItem, ConversationMessageItem, ConversationRole, ThreadConversationSnapshot,
     };
     use crate::domain::settings::{
         GlobalSettings, GlobalSettingsPatch, NotificationSoundChannelSettingsPatch,
         NotificationSoundId, NotificationSoundSettingsPatch, OpenTarget, OpenTargetKind,
-        ServiceTier,
+        ProviderKind, ServiceTier,
     };
     use crate::domain::shortcuts::{ShortcutSettings, ShortcutSettingsPatch};
     use crate::domain::workspace::{
@@ -3753,6 +4097,92 @@ mod tests {
             .expect_err("blank environment ids should fail");
 
         assert!(error.to_string().contains("environment id cannot be empty"));
+    }
+
+    #[test]
+    fn create_thread_handoff_preserves_title_and_blocks_auto_title() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("handoff-title"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let environment_id = project
+            .environments
+            .first()
+            .expect("local environment should exist")
+            .id
+            .clone();
+        let source = harness
+            .service
+            .create_thread(CreateThreadRequest {
+                environment_id: environment_id.clone(),
+                title: Some("Thread 1".to_string()),
+                overrides: Some(ThreadOverrides {
+                    provider: Some(ProviderKind::Claude),
+                    model: Some("claude-opus-4-7".to_string()),
+                    ..ThreadOverrides::default()
+                }),
+            })
+            .expect("source thread should be created");
+        let mut composer = default_composer_settings();
+        composer.provider = ProviderKind::Claude;
+        composer.model = "claude-opus-4-7".to_string();
+        let mut snapshot = ThreadConversationSnapshot::new_for_provider(
+            source.id.clone(),
+            environment_id,
+            ProviderKind::Claude,
+            Some("claude-session-1".to_string()),
+            None,
+            composer,
+        );
+        snapshot.items = vec![
+            ConversationItem::Message(ConversationMessageItem {
+                id: "user-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                role: ConversationRole::User,
+                text: "salut".to_string(),
+                images: None,
+                is_streaming: false,
+            }),
+            ConversationItem::Message(ConversationMessageItem {
+                id: "assistant-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                role: ConversationRole::Assistant,
+                text: "Salut !".to_string(),
+                images: None,
+                is_streaming: false,
+            }),
+        ];
+
+        let handoff = harness
+            .service
+            .create_thread_handoff(
+                CreateThreadHandoffRequest {
+                    source_thread_id: source.id,
+                    target_provider: ProviderKind::Codex,
+                },
+                &snapshot,
+            )
+            .expect("handoff thread should be created");
+
+        assert_eq!(handoff.title, "Thread 1");
+        assert_eq!(handoff.provider, ProviderKind::Codex);
+        let handoff_state = handoff.handoff.expect("handoff metadata");
+        assert_eq!(handoff_state.source_provider, ProviderKind::Claude);
+        assert_eq!(
+            handoff_state.source_thread_title.as_deref(),
+            Some("Thread 1")
+        );
+        assert!(!harness
+            .service
+            .thread_needs_auto_title(&handoff.id)
+            .expect("handoff title check should load"));
     }
 
     #[test]
@@ -5536,6 +5966,7 @@ mod tests {
     fn default_composer_settings() -> ConversationComposerSettings {
         let settings = GlobalSettings::default();
         ConversationComposerSettings {
+            provider: settings.default_provider,
             model: settings.default_model,
             reasoning_effort: settings.default_reasoning_effort,
             collaboration_mode: settings.default_collaboration_mode,

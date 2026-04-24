@@ -40,6 +40,7 @@ export function draftThreadTargetKey(target: DraftThreadTarget) {
 
 export function composerFromSettings(settings: GlobalSettings) {
   return {
+    provider: settings.defaultProvider,
     model: settings.defaultModel,
     reasoningEffort: settings.defaultReasoningEffort,
     collaborationMode: settings.defaultCollaborationMode,

@@ -42,12 +42,6 @@ vi.mock("./useProjectImport", () => ({
   }),
 }));
 
-vi.mock("./SidebarUsagePanel", () => ({
-  SidebarUsagePanel: () => <div data-testid="sidebar-usage-panel" />,
-}));
-
-
-
 const mockedBridge = vi.mocked(bridge);
 const onOpenSettings = vi.fn();
 const onToggleTheme = vi.fn();
@@ -700,6 +694,52 @@ describe("TreeSidebar", () => {
     expect(
       screen.getByRole("button", { name: "Worktree thread" }),
     ).toHaveClass("tree-sidebar__thread--with-worktree");
+  });
+
+  it("shows handoff direction in the provider mark without renaming the thread", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                id: "env-local",
+                kind: "local",
+                isDefault: true,
+                threads: [
+                  makeThread({
+                    id: "thread-handoff",
+                    environmentId: "env-local",
+                    title: "salut",
+                    provider: "codex",
+                    handoff: {
+                      sourceThreadId: "thread-source",
+                      sourceProvider: "claude",
+                      sourceThreadTitle: "salut",
+                      importedAt: "2026-04-24T15:00:00Z",
+                      bootstrapStatus: "completed",
+                      importedMessages: [],
+                    },
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+      selectedEnvironmentId: "env-local",
+      selectedThreadId: "thread-handoff",
+    }));
+
+    const { container } = renderSidebar();
+
+    expect(screen.getByText("salut")).toBeInTheDocument();
+    expect(screen.queryByText("salut -> OpenAI")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Anthropic handoff to OpenAI")).toBeInTheDocument();
+    expect(
+      container.querySelector(".tree-sidebar__thread-provider-arrow"),
+    ).toBeInTheDocument();
   });
 
   it("sorts flattened worktree threads globally by most recent activity", () => {

@@ -24,7 +24,6 @@ import type {
   ThreadRecord,
 } from "../../lib/types";
 import { SidebarThreadRow } from "./SidebarThreadRow";
-import { SidebarUsagePanel } from "./SidebarUsagePanel";
 import { SidebarUtilityActions } from "./SidebarUtilityActions";
 import type { Theme } from "./StudioShell";
 import {
@@ -651,7 +650,6 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
         </div>
       </div>
       <div className="tree-sidebar__footer">
-        <SidebarUsagePanel />
         <SidebarUtilityActions
           theme={theme}
           onOpenSettings={onOpenSettings}

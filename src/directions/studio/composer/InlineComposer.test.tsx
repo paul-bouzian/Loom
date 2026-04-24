@@ -1,11 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useMemo, useState, type ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dialogOpenMock } from "../../../test/desktop-mock";
 
 import * as bridge from "../../../lib/bridge";
-import type { ComposerDraftMentionBinding } from "../../../lib/types";
+import type { ComposerDraftMentionBinding, ModelOption } from "../../../lib/types";
 import {
   baseComposer,
   capabilitiesFixture,
@@ -677,6 +677,24 @@ describe("InlineComposer image attachments", () => {
     ).toBeInTheDocument();
   });
 
+  it("blocks sending when the selected model is unavailable", async () => {
+    const onSend = vi.fn();
+    renderComposer("Try newest model", {
+      composer: { ...baseComposer, model: "gpt-5.5" },
+      modelOptions: [capabilitiesFixture.models[0]],
+      onSend,
+    });
+
+    expect(
+      await screen.findByText(
+        "GPT-5.5 is unavailable for the active runtime. Switch to an available model.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" }))
+      .toBeDisabled();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("keeps the image support notice visible for draft composers without transport", async () => {
     renderComposer("", {
       modelOptions: [
@@ -709,6 +727,102 @@ describe("InlineComposer image attachments", () => {
         query: "main",
         limit: 50,
       });
+    });
+  });
+
+  it("uses one model picker and cascades provider choices for draft threads", async () => {
+    const onUpdateComposer = vi.fn();
+    renderComposer("", {
+      providerLocked: false,
+      onUpdateComposer,
+      modelOptions: [
+        ...capabilitiesFixture.models,
+        {
+          provider: "claude",
+          id: "claude-sonnet-4-6",
+          displayName: "Claude Sonnet 4.6",
+          description: "Balanced Anthropic model.",
+          defaultReasoningEffort: "high",
+          supportedReasoningEfforts: ["low", "medium", "high", "max"],
+          inputModalities: ["text", "image"],
+          supportedServiceTiers: [],
+          supportsThinking: true,
+          isDefault: true,
+        },
+      ],
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Model picker" }));
+    const providers = screen.getByRole("listbox", { name: "Provider options" });
+    expect(within(providers).getByRole("option", { name: /OpenAI/ })).toBeInTheDocument();
+    expect(within(providers).getByRole("option", { name: /Anthropic/ })).toBeInTheDocument();
+    expect(within(providers).queryByText("GPT-5.4")).toBeNull();
+    expect(
+      within(screen.getByRole("listbox", { name: "OpenAI model options" })).getByRole(
+        "option",
+        { name: "GPT-5.4" },
+      ),
+    ).toBeInTheDocument();
+
+    await userEvent.hover(screen.getByRole("option", { name: /Anthropic/ }));
+    await userEvent.click(
+      screen.getByRole("option", { name: "Sonnet 4.6" }),
+    );
+
+    expect(onUpdateComposer).toHaveBeenCalledWith({
+      provider: "claude",
+      model: "claude-sonnet-4-6",
+      reasoningEffort: "high",
+      serviceTier: null,
+    });
+  });
+
+  it("keeps Claude 1M context in the thinking menu instead of the model list", async () => {
+    const onUpdateComposer = vi.fn();
+    const claudeBase: ModelOption = {
+      provider: "claude" as const,
+      id: "claude-opus-4-7",
+      displayName: "Claude Opus 4.7",
+      description: "Most capable Anthropic model.",
+      defaultReasoningEffort: "xhigh",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      inputModalities: ["text", "image"],
+      supportedServiceTiers: ["fast"],
+      supportsThinking: true,
+      isDefault: false,
+    };
+    const claudeLargeContext: ModelOption = {
+      ...claudeBase,
+      id: "claude-opus-4-7[1m]",
+      displayName: "Claude Opus 4.7 1M",
+    };
+    renderComposer("", {
+      composer: {
+        ...baseComposer,
+        provider: "claude",
+        model: "claude-opus-4-7[1m]",
+        reasoningEffort: "xhigh",
+      },
+      modelOptions: [claudeBase, claudeLargeContext],
+      onUpdateComposer,
+    });
+
+    expect(screen.getByRole("button", { name: "Model picker" }))
+      .toHaveTextContent("Opus 4.7");
+    expect(screen.getByRole("button", { name: "Thinking picker" }))
+      .toHaveTextContent("Extra High · 1M");
+
+    await userEvent.click(screen.getByRole("button", { name: "Model picker" }));
+    const modelMenu = screen.getByRole("listbox", { name: "Model options" });
+    expect(within(modelMenu).getAllByRole("option")).toHaveLength(1);
+    expect(within(modelMenu).getByRole("option", { name: "Opus 4.7" }))
+      .toBeInTheDocument();
+    expect(within(modelMenu).queryByText("Opus 4.7 1M")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Thinking picker" }));
+    await userEvent.click(screen.getByRole("option", { name: "Default context" }));
+    expect(onUpdateComposer).toHaveBeenCalledWith({
+      model: "claude-opus-4-7",
     });
   });
 
@@ -772,6 +886,7 @@ function renderComposer(
     >["imageSupportNoticeEnabled"];
     transportEnabled?: boolean;
     voiceEnabled?: boolean;
+    providerLocked?: boolean;
   } = {},
 ) {
   function Harness() {
@@ -823,6 +938,7 @@ function renderComposer(
         imageSupportNoticeEnabled={options.imageSupportNoticeEnabled}
         transportEnabled={options.transportEnabled}
         voiceEnabled={options.voiceEnabled}
+        providerLocked={options.providerLocked}
       />
     );
   }

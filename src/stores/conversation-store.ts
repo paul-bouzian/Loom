@@ -132,6 +132,15 @@ const inflightEnvironmentCapabilityLoads = new Map<
   string,
   Promise<EnvironmentCapabilitiesSnapshot | null>
 >();
+type PendingOptimisticUserMessage = {
+  item: ConversationMessageItem;
+  afterItemId: string | null;
+  baseItemCount: number;
+};
+const pendingOptimisticUserMessages = new Map<
+  string,
+  PendingOptimisticUserMessage
+>();
 
 function refreshWorkspaceSnapshotNonBlocking() {
   requestWorkspaceRefresh();
@@ -150,17 +159,21 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     const generation = listenerGeneration;
     const initialization = bridge
       .listenToConversationEvents((payload) => {
+        const snapshot = snapshotWithPendingOptimisticMessage(
+          payload.threadId,
+          payload.snapshot,
+        );
         set((state) => ({
           snapshotsByThreadId: {
             ...state.snapshotsByThreadId,
-            [payload.threadId]: payload.snapshot,
+            [payload.threadId]: snapshot,
           },
           capabilitiesByEnvironmentId: state.capabilitiesByEnvironmentId,
           composerByThreadId: state.composerByThreadId[payload.threadId]
             ? state.composerByThreadId
             : {
                 ...state.composerByThreadId,
-                [payload.threadId]: payload.snapshot.composer,
+                [payload.threadId]: snapshot.composer,
               },
           hydrationByThreadId: {
             ...state.hydrationByThreadId,
@@ -243,7 +256,10 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
 
   refreshThread: async (threadId) => {
     try {
-      const snapshot = await bridge.refreshThreadConversation(threadId);
+      const snapshot = snapshotWithPendingOptimisticMessage(
+        threadId,
+        await bridge.refreshThreadConversation(threadId),
+      );
       set((state) => ({
         snapshotsByThreadId: {
           ...state.snapshotsByThreadId,
@@ -342,6 +358,12 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       : null;
 
     if (optimisticMessage) {
+      pendingOptimisticUserMessages.set(threadId, {
+        item: optimisticMessage.item,
+        afterItemId:
+          previousSnapshot.items[previousSnapshot.items.length - 1]?.id ?? null,
+        baseItemCount: previousSnapshot.items.length,
+      });
       set((state) => ({
         snapshotsByThreadId: {
           ...state.snapshotsByThreadId,
@@ -358,21 +380,35 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         ...(images.length > 0 ? { images } : {}),
         ...(mentionBindings.length > 0 ? { mentionBindings } : {}),
       });
-      set((state) => ({
-        snapshotsByThreadId: {
-          ...state.snapshotsByThreadId,
-          [threadId]: snapshot,
-        },
-        composerByThreadId: {
-          ...state.composerByThreadId,
-          [threadId]: snapshot.composer,
-        },
-        draftByThreadId: removeDraftEntry(state.draftByThreadId, threadId),
-      }));
+      const nextSnapshot = snapshotWithPendingOptimisticMessage(
+        threadId,
+        snapshot,
+      );
+      set((state) => {
+        const existingSnapshot = state.snapshotsByThreadId[threadId];
+        const shouldKeepExisting =
+          existingSnapshot !== undefined &&
+          existingSnapshot.items.length > nextSnapshot.items.length;
+        const storedSnapshot = shouldKeepExisting
+          ? existingSnapshot
+          : nextSnapshot;
+        return {
+          snapshotsByThreadId: {
+            ...state.snapshotsByThreadId,
+            [threadId]: storedSnapshot,
+          },
+          composerByThreadId: {
+            ...state.composerByThreadId,
+            [threadId]: storedSnapshot.composer,
+          },
+          draftByThreadId: removeDraftEntry(state.draftByThreadId, threadId),
+        };
+      });
       clearThreadDraftPersistence(threadId);
       refreshWorkspaceSnapshotNonBlocking();
       return true;
     } catch (cause: unknown) {
+      pendingOptimisticUserMessages.delete(threadId);
       const message =
         cause instanceof Error ? cause.message : "Failed to send message";
       set((state) => ({
@@ -381,7 +417,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           previousSnapshot &&
           snapshotContainsItem(
             state.snapshotsByThreadId[threadId],
-            optimisticMessage.itemId,
+            optimisticMessage.item.id,
           )
             ? {
                 ...state.snapshotsByThreadId,
@@ -558,6 +594,7 @@ export function teardownConversationListener() {
   listenerInitialization = null;
   inflightThreadLoads.clear();
   inflightEnvironmentCapabilityLoads.clear();
+  pendingOptimisticUserMessages.clear();
   clearDraftPersistenceControllers();
   useConversationStore.setState({ listenerReady: false });
 }
@@ -606,10 +643,14 @@ async function openThreadWithOptions(
         const nextSnapshot = shouldKeepExisting
           ? existingSnapshot
           : response.snapshot;
+        const reconciledSnapshot = snapshotWithPendingOptimisticMessage(
+          threadId,
+          nextSnapshot,
+        );
         return {
           snapshotsByThreadId: {
             ...state.snapshotsByThreadId,
-            [threadId]: nextSnapshot,
+            [threadId]: reconciledSnapshot,
           },
           capabilitiesByEnvironmentId: {
             ...state.capabilitiesByEnvironmentId,
@@ -622,7 +663,7 @@ async function openThreadWithOptions(
             ? state.composerByThreadId
             : {
                 ...state.composerByThreadId,
-                [threadId]: response.snapshot.composer,
+                [threadId]: reconciledSnapshot.composer,
               },
           draftByThreadId: hydrateDraftEntry(
             state.draftByThreadId,
@@ -666,7 +707,7 @@ function buildOptimisticUserMessageSnapshot(
   text: string,
   images: ConversationImageAttachment[],
 ): {
-  itemId: string;
+  item: ConversationMessageItem;
   snapshot: ThreadConversationSnapshot;
 } | null {
   if (text.length === 0 && images.length === 0) {
@@ -683,13 +724,98 @@ function buildOptimisticUserMessageSnapshot(
   };
 
   return {
-    itemId: messageItem.id,
+    item: messageItem,
     snapshot: {
       ...snapshot,
       items: [...snapshot.items, messageItem],
       error: null,
     },
   };
+}
+
+function snapshotWithPendingOptimisticMessage(
+  threadId: string,
+  snapshot: ThreadConversationSnapshot,
+): ThreadConversationSnapshot {
+  const pending = pendingOptimisticUserMessages.get(threadId);
+  if (!pending) {
+    return snapshot;
+  }
+
+  if (hasConfirmedUserMessage(snapshot, pending.item)) {
+    pendingOptimisticUserMessages.delete(threadId);
+    if (!snapshotContainsItem(snapshot, pending.item.id)) {
+      return snapshot;
+    }
+    return {
+      ...snapshot,
+      items: snapshot.items.filter((item) => item.id !== pending.item.id),
+    };
+  }
+
+  if (snapshotContainsItem(snapshot, pending.item.id)) {
+    return snapshot;
+  }
+
+  const afterIndex = pending.afterItemId
+    ? snapshot.items.findIndex((item) => item.id === pending.afterItemId)
+    : -1;
+  const insertAt =
+    afterIndex >= 0
+      ? afterIndex + 1
+      : Math.min(pending.baseItemCount, snapshot.items.length);
+
+  return {
+    ...snapshot,
+    items: [
+      ...snapshot.items.slice(0, insertAt),
+      pending.item,
+      ...snapshot.items.slice(insertAt),
+    ],
+    error: null,
+  };
+}
+
+function hasConfirmedUserMessage(
+  snapshot: ThreadConversationSnapshot,
+  pending: ConversationMessageItem,
+): boolean {
+  return snapshot.items.some(
+    (item) =>
+      item.kind === "message" &&
+      item.id !== pending.id &&
+      item.role === "user" &&
+      item.text === pending.text &&
+      sameImageAttachments(item.images ?? null, pending.images ?? null),
+  );
+}
+
+function sameImageAttachments(
+  left: ConversationImageAttachment[] | null,
+  right: ConversationImageAttachment[] | null,
+): boolean {
+  if (!left?.length && !right?.length) {
+    return true;
+  }
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+  return left.every((item, index) => {
+    const other = right[index];
+    if (!other) {
+      return false;
+    }
+    if (item.type !== other.type) {
+      // Local uploads can be rewritten to provider-hosted image URLs by the runtime.
+      return true;
+    }
+    if (item.type === "image" && other.type === "image") {
+      return item.url === other.url;
+    }
+    return item.type === "localImage" && other.type === "localImage"
+      ? item.path === other.path
+      : false;
+  });
 }
 
 function snapshotContainsItem(

@@ -4,7 +4,9 @@ use crate::domain::conversation::{
     ConversationComposerSettings, ConversationInteraction, ConversationItem, ConversationStatus,
     ConversationTaskStatus, InputModality, ProposedPlanSnapshot, ProposedPlanStatus,
 };
-use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort, ServiceTier};
+use crate::domain::settings::{
+    ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort, ServiceTier,
+};
 
 use super::protocol::{
     approval_policy_value, build_history_snapshot, collaboration_mode_options_from_response,
@@ -19,6 +21,7 @@ use super::protocol::{
 
 fn composer() -> ConversationComposerSettings {
     ConversationComposerSettings {
+        provider: ProviderKind::Codex,
         model: "gpt-5.4".to_string(),
         reasoning_effort: ReasoningEffort::High,
         collaboration_mode: CollaborationMode::Build,
@@ -738,10 +741,14 @@ fn filters_hidden_models_and_preserves_effort_metadata() {
         ],
     });
 
-    assert_eq!(models.len(), 1);
-    assert_eq!(models[0].id, "gpt-5.4");
-    assert_eq!(models[0].supported_reasoning_efforts.len(), 2);
-    assert_eq!(models[0].supported_service_tiers, vec![ServiceTier::Fast]);
+    let model = models
+        .iter()
+        .find(|model| model.id == "gpt-5.4")
+        .expect("visible model should be preserved");
+    assert_eq!(model.supported_reasoning_efforts.len(), 2);
+    assert_eq!(model.supported_service_tiers, vec![ServiceTier::Fast]);
+    assert!(!models.iter().any(|model| model.id == "hidden"));
+    assert!(!models.iter().any(|model| model.id == "gpt-5.5"));
 }
 
 #[test]
@@ -764,9 +771,12 @@ fn ignores_unknown_additional_speed_tiers() {
         .expect("model list response should decode"),
     );
 
-    assert_eq!(models.len(), 1);
+    let model = models
+        .iter()
+        .find(|model| model.id == "gpt-5.4")
+        .expect("visible model should be preserved");
     assert_eq!(
-        models[0].supported_service_tiers,
+        model.supported_service_tiers,
         vec![ServiceTier::Fast, ServiceTier::Flex]
     );
 }
@@ -790,8 +800,11 @@ fn defaults_missing_input_modalities_to_text_only() {
         .expect("model list response should decode"),
     );
 
-    assert_eq!(models.len(), 1);
-    assert_eq!(models[0].input_modalities, vec![InputModality::Text]);
+    let model = models
+        .iter()
+        .find(|model| model.id == "gpt-5.4-mini")
+        .expect("visible model should be preserved");
+    assert_eq!(model.input_modalities, vec![InputModality::Text]);
 }
 
 #[test]

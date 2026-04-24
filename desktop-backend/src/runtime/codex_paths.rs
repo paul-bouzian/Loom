@@ -5,6 +5,37 @@ use std::process::Command;
 
 use crate::error::{AppError, AppResult};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodexCliVersion {
+    major: u64,
+    minor: u64,
+    patch: u64,
+    prerelease: bool,
+}
+
+impl Ord for CodexCliVersion {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (
+            self.major,
+            self.minor,
+            self.patch,
+            stable_release_rank(self.prerelease),
+        )
+            .cmp(&(
+                other.major,
+                other.minor,
+                other.patch,
+                stable_release_rank(other.prerelease),
+            ))
+    }
+}
+
+impl PartialOrd for CodexCliVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 pub fn resolve_auto_binary_path() -> Option<PathBuf> {
     resolve_bare_executable_path("codex")
 }
@@ -85,16 +116,66 @@ pub fn sync_process_path_from_login_shell() {
 }
 
 fn resolve_bare_executable_path(executable_name: &str) -> Option<PathBuf> {
-    which::which(executable_name).ok().or_else(|| {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        binary_candidates(executable_name, home.as_deref())
-            .into_iter()
-            .find_map(|candidate| which::which(&candidate).ok())
-    })
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let candidates = executable_path_candidates(executable_name, home.as_deref());
+    choose_best_executable_candidate(candidates)
+}
+
+fn executable_path_candidates(executable_name: &str, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(path) = which::which(executable_name) {
+        push_unique(&mut candidates, path);
+    }
+    for candidate in binary_candidates(executable_name, home) {
+        if let Ok(path) = which::which(&candidate) {
+            push_unique(&mut candidates, path);
+        }
+    }
+    candidates
+}
+
+fn choose_best_executable_candidate(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    let mut fallback = None;
+    let mut best: Option<(CodexCliVersion, PathBuf)> = None;
+
+    for candidate in candidates {
+        fallback.get_or_insert_with(|| candidate.clone());
+        let Some(version) = codex_binary_version(&candidate) else {
+            continue;
+        };
+        if best
+            .as_ref()
+            .is_none_or(|(current_version, _)| version > *current_version)
+        {
+            best = Some((version, candidate));
+        }
+    }
+
+    best.map(|(_, path)| path).or(fallback)
 }
 
 fn binary_candidates(executable_name: &str, home: Option<&Path>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
+    if executable_name == "codex" {
+        push_unique(
+            &mut candidates,
+            PathBuf::from("/Applications/Codex.app/Contents/Resources/codex"),
+        );
+        push_unique(
+            &mut candidates,
+            PathBuf::from("/Applications/Codex.app/Contents/Resources/bin/codex"),
+        );
+        if let Some(home) = home {
+            push_unique(
+                &mut candidates,
+                home.join("Applications/Codex.app/Contents/Resources/codex"),
+            );
+            push_unique(
+                &mut candidates,
+                home.join("Applications/Codex.app/Contents/Resources/bin/codex"),
+            );
+        }
+    }
     push_unique(
         &mut candidates,
         PathBuf::from("/opt/homebrew/bin").join(executable_name),
@@ -108,6 +189,42 @@ fn binary_candidates(executable_name: &str, home: Option<&Path>) -> Vec<PathBuf>
     }
 
     candidates
+}
+
+pub fn parse_codex_cli_version(output: &str) -> Option<CodexCliVersion> {
+    let token = output.split_whitespace().find(|part| {
+        part.chars()
+            .next()
+            .is_some_and(|char| char.is_ascii_digit())
+    })?;
+    let (version, prerelease) = token
+        .split_once('-')
+        .map_or((token, false), |(version, _)| (version, true));
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some(CodexCliVersion {
+        major,
+        minor,
+        patch,
+        prerelease,
+    })
+}
+
+pub fn codex_binary_version(path: &Path) -> Option<CodexCliVersion> {
+    let output = Command::new(path).arg("--version").output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    parse_codex_cli_version(&stdout).or_else(|| parse_codex_cli_version(&stderr))
+}
+
+fn stable_release_rank(prerelease: bool) -> u8 {
+    if prerelease {
+        0
+    } else {
+        1
+    }
 }
 
 fn shell_path_candidates(home: Option<&Path>) -> Vec<PathBuf> {
@@ -223,13 +340,12 @@ fn read_path_from_login_shell(shell: &Path) -> Option<OsString> {
 #[cfg(test)]
 mod tests {
     use super::{
-        binary_candidates, build_codex_process_path, missing_codex_binary_message,
-        resolve_codex_binary_path, versioned_node_bin_paths,
+        binary_candidates, build_codex_process_path, choose_best_executable_candidate,
+        missing_codex_binary_message, parse_codex_cli_version, resolve_codex_binary_path,
+        versioned_node_bin_paths,
     };
-    use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::{Mutex, OnceLock};
     use uuid::Uuid;
 
     #[test]
@@ -260,49 +376,53 @@ mod tests {
 
     #[test]
     fn resolve_explicit_binary_path_resolves_bare_names_from_path() {
-        let _guard = environment_lock()
-            .lock()
-            .expect("environment lock should not be poisoned");
-        let executable_name = format!("codex-test-{}", Uuid::now_v7().simple());
-        let root = std::env::temp_dir().join(format!("skein-codex-binary-{}", Uuid::now_v7()));
-        let binary_path = root.join(&executable_name);
-        fs::create_dir_all(&root).expect("binary dir should exist");
-        fs::write(&binary_path, "#!/bin/sh\n").expect("binary should be written");
-        make_executable(&binary_path);
-        let _path_restore = EnvVarRestore::capture("PATH");
-        std::env::set_var("PATH", &root);
-
-        let resolved = resolve_codex_binary_path(Some(&executable_name))
+        let resolved = resolve_codex_binary_path(Some("git"))
             .expect("bare binary name should resolve from PATH");
 
-        let _ = fs::remove_dir_all(root);
-        assert_eq!(resolved, binary_path.to_string_lossy());
+        assert!(Path::new(&resolved).is_absolute());
+        assert_eq!(
+            Path::new(&resolved)
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("git")
+        );
     }
 
     #[test]
-    fn resolve_explicit_binary_path_resolves_bare_names_from_known_install_candidates() {
-        let _guard = environment_lock()
-            .lock()
-            .expect("environment lock should not be poisoned");
+    fn choose_best_executable_candidate_falls_back_to_the_first_path_without_versions() {
         let executable_name = format!("codex-test-{}", Uuid::now_v7().simple());
-        let root = std::env::temp_dir().join(format!("skein-codex-home-{}", Uuid::now_v7()));
-        let empty_path = root.join("empty-path");
-        let binary_dir = root.join(".local/bin");
+        let root = std::env::temp_dir().join(format!("skein-codex-binary-{}", Uuid::now_v7()));
+        let binary_dir = root.join("bin");
         let binary_path = binary_dir.join(&executable_name);
-        fs::create_dir_all(&empty_path).expect("empty PATH dir should exist");
         fs::create_dir_all(&binary_dir).expect("binary dir should exist");
         fs::write(&binary_path, "#!/bin/sh\n").expect("binary should be written");
         make_executable(&binary_path);
-        let _path_restore = EnvVarRestore::capture("PATH");
-        let _home_restore = EnvVarRestore::capture("HOME");
-        std::env::set_var("PATH", &empty_path);
-        std::env::set_var("HOME", &root);
 
-        let resolved = resolve_codex_binary_path(Some(&executable_name))
-            .expect("bare binary name should resolve from known install candidates");
+        let resolved = choose_best_executable_candidate(vec![binary_path.clone()])
+            .expect("candidate should resolve");
 
         let _ = fs::remove_dir_all(root);
-        assert_eq!(resolved, binary_path.to_string_lossy());
+        assert_eq!(resolved, binary_path);
+    }
+
+    #[test]
+    fn choose_best_executable_candidate_prefers_the_newer_codex_binary() {
+        let root = std::env::temp_dir().join(format!("skein-codex-home-{}", Uuid::now_v7()));
+        let old_binary_path = root.join("path-bin/codex");
+        let new_binary_path = root.join("Applications/Codex.app/Contents/Resources/codex");
+        fs::create_dir_all(old_binary_path.parent().expect("path binary parent"))
+            .expect("PATH dir should exist");
+        fs::create_dir_all(new_binary_path.parent().expect("app binary parent"))
+            .expect("app binary dir should exist");
+        write_versioned_binary(&old_binary_path, "codex-cli 0.122.0");
+        write_versioned_binary(&new_binary_path, "codex-cli 99.0.0");
+
+        let resolved =
+            choose_best_executable_candidate(vec![old_binary_path, new_binary_path.clone()])
+                .expect("best binary should resolve");
+
+        let _ = fs::remove_dir_all(root);
+        assert_eq!(resolved, new_binary_path);
     }
 
     #[test]
@@ -322,10 +442,27 @@ mod tests {
     fn binary_candidates_cover_common_npm_and_tooling_locations() {
         let candidates = binary_candidates("codex", Some(Path::new("/Users/tester")));
 
+        assert!(candidates.contains(&PathBuf::from(
+            "/Applications/Codex.app/Contents/Resources/codex"
+        )));
+        assert!(candidates.contains(&PathBuf::from(
+            "/Users/tester/Applications/Codex.app/Contents/Resources/codex"
+        )));
         assert!(candidates.contains(&PathBuf::from("/Users/tester/.npm-global/bin/codex")));
         assert!(candidates.contains(&PathBuf::from("/Users/tester/.volta/bin/codex")));
         assert!(candidates.contains(&PathBuf::from("/Users/tester/.asdf/shims/codex")));
         assert!(candidates.contains(&PathBuf::from("/Users/tester/.n/bin/codex")));
+    }
+
+    #[test]
+    fn parse_codex_cli_version_orders_releases_and_prereleases() {
+        let stable = parse_codex_cli_version("codex-cli 0.124.0").expect("stable version");
+        let prerelease =
+            parse_codex_cli_version("codex-cli 0.124.0-alpha.2").expect("prerelease version");
+        let older = parse_codex_cli_version("codex-cli 0.122.0").expect("older version");
+
+        assert!(prerelease > older);
+        assert!(stable > prerelease);
     }
 
     #[test]
@@ -354,35 +491,6 @@ mod tests {
         assert!(message.contains("Settings -> Codex binary"));
     }
 
-    fn environment_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvVarRestore {
-        name: &'static str,
-        value: Option<OsString>,
-    }
-
-    impl EnvVarRestore {
-        fn capture(name: &'static str) -> Self {
-            Self {
-                name,
-                value: std::env::var_os(name),
-            }
-        }
-    }
-
-    impl Drop for EnvVarRestore {
-        fn drop(&mut self) {
-            if let Some(value) = self.value.take() {
-                std::env::set_var(self.name, value);
-            } else {
-                std::env::remove_var(self.name);
-            }
-        }
-    }
-
     fn make_executable(path: &Path) {
         #[cfg(unix)]
         {
@@ -392,5 +500,14 @@ mod tests {
             permissions.set_mode(0o755);
             fs::set_permissions(path, permissions).expect("binary permissions should update");
         }
+    }
+
+    fn write_versioned_binary(path: &Path, version: &str) {
+        fs::write(
+            path,
+            format!("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"{version}\"; fi\n"),
+        )
+        .expect("versioned binary should be written");
+        make_executable(path);
     }
 }

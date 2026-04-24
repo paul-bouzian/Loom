@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as bridge from "../lib/bridge";
-import type { ThreadConversationSnapshot } from "../lib/types";
+import type {
+  ConversationImageAttachment,
+  ConversationMessageItem,
+  ThreadConversationSnapshot,
+} from "../lib/types";
 import {
   capabilitiesFixture,
   makeConversationSnapshot,
@@ -59,6 +63,22 @@ function resetConversationState() {
     ...state,
     ...INITIAL_CONVERSATION_STATE,
   });
+}
+
+function userMessage(
+  id: string,
+  text: string,
+  images: ConversationImageAttachment[] | null = null,
+): ConversationMessageItem {
+  return {
+    kind: "message",
+    id,
+    turnId: "turn-user",
+    role: "user",
+    text,
+    images,
+    isStreaming: false,
+  };
 }
 
 beforeEach(() => {
@@ -237,6 +257,7 @@ describe("conversation store", () => {
       activeTurnId: "turn-1",
       items: [
         ...initialSnapshot.items,
+        userMessage("user-2", "Ship it"),
         {
           kind: "message",
           id: "assistant-2",
@@ -339,6 +360,7 @@ describe("conversation store", () => {
     const nextSnapshot = makeConversationSnapshot({
       status: "running",
       activeTurnId: "turn-3",
+      items: [...initialSnapshot.items, userMessage("user-3", "Ship it")],
     });
     const refreshSnapshot = vi.fn(async () => {
       throw new Error("refresh failed");
@@ -451,6 +473,87 @@ describe("conversation store", () => {
     expect(useConversationStore.getState().errorByThreadId["thread-1"]).toBe(
       "send failed",
     );
+  });
+
+  it("keeps an optimistic user message while stale runtime snapshots arrive", async () => {
+    const initialSnapshot = makeConversationSnapshot({ status: "idle" });
+    const staleSnapshot = makeConversationSnapshot({
+      status: "running",
+      activeTurnId: "turn-optimistic",
+      items: initialSnapshot.items,
+    });
+    const confirmedSnapshot = makeConversationSnapshot({
+      status: "running",
+      activeTurnId: "turn-optimistic",
+      items: [
+        ...initialSnapshot.items,
+        userMessage("user-confirmed", "tu vas bien?"),
+      ],
+    });
+    const deferred = deferredPromise<ThreadConversationSnapshot>();
+    let callback: (payload: {
+      threadId: string;
+      environmentId: string;
+      snapshot: ThreadConversationSnapshot;
+    }) => void = () => undefined;
+
+    mockedBridge.listenToConversationEvents.mockImplementation(async (...args) => {
+      callback = args[0] as typeof callback;
+      return () => undefined;
+    });
+    mockedBridge.sendThreadMessage.mockReturnValue(deferred.promise);
+    useConversationStore.setState((state) => ({
+      ...state,
+      snapshotsByThreadId: { "thread-1": initialSnapshot },
+      composerByThreadId: { "thread-1": initialSnapshot.composer },
+    }));
+
+    await useConversationStore.getState().initializeListener();
+    const sendPromise = useConversationStore
+      .getState()
+      .sendMessage("thread-1", "tu vas bien?");
+
+    expect(
+      useConversationStore
+        .getState()
+        .snapshotsByThreadId["thread-1"].items.some(
+          (item) =>
+            item.kind === "message" &&
+            item.id.startsWith("optimistic-user-") &&
+            item.text === "tu vas bien?",
+        ),
+    ).toBe(true);
+
+    callback({
+      threadId: "thread-1",
+      environmentId: "env-1",
+      snapshot: staleSnapshot,
+    });
+
+    expect(
+      useConversationStore
+        .getState()
+        .snapshotsByThreadId["thread-1"].items.some(
+          (item) =>
+            item.kind === "message" &&
+            item.id.startsWith("optimistic-user-") &&
+            item.text === "tu vas bien?",
+        ),
+    ).toBe(true);
+
+    deferred.resolve(confirmedSnapshot);
+    await sendPromise;
+
+    const items = useConversationStore.getState().snapshotsByThreadId["thread-1"].items;
+    expect(
+      items.some(
+        (item) => item.kind === "message" && item.id.startsWith("optimistic-user-"),
+      ),
+    ).toBe(false);
+    expect(items[items.length - 1]).toMatchObject({
+      id: "user-confirmed",
+      text: "tu vas bien?",
+    });
   });
 
   it("keeps submitPlanDecision successful when the workspace refresh fails afterwards", async () => {

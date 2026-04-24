@@ -1195,6 +1195,7 @@ describe("workspace store — grid 2x2 panes", () => {
           isRefiningPlan: false,
         },
         composer: {
+          provider: "codex",
           model: "gpt-5.4",
           reasoningEffort: "high",
           collaborationMode: "build",

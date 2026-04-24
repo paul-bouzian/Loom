@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::conversation::{ConversationComposerDraft, ConversationComposerSettings};
-use super::settings::{GlobalSettings, ServiceTier};
+use super::settings::{GlobalSettings, ProviderKind, ServiceTier};
 use super::shortcuts::{normalize_shortcut_option, shortcut_signature, ShortcutSettings};
 
 fn is_false(value: &bool) -> bool {
@@ -96,6 +96,9 @@ pub struct EnvironmentPullRequestSnapshot {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadOverrides {
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderKind>,
     pub model: Option<String>,
     pub reasoning_effort: Option<super::settings::ReasoningEffort>,
     pub collaboration_mode: Option<super::settings::CollaborationMode>,
@@ -106,6 +109,48 @@ pub struct ThreadOverrides {
     #[serde(default)]
     #[serde(skip_serializing_if = "is_false")]
     pub service_tier_overridden: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadHandoffImportedMessage {
+    pub id: String,
+    pub role: super::conversation::ConversationRole,
+    pub text: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<super::conversation::ConversationImageAttachment>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadHandoffState {
+    pub source_thread_id: String,
+    pub source_provider: ProviderKind,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_thread_title: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_name: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_name: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    pub imported_at: DateTime<Utc>,
+    pub bootstrap_status: ThreadHandoffBootstrapStatus,
+    #[serde(default)]
+    pub imported_messages: Vec<ThreadHandoffImportedMessage>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadHandoffBootstrapStatus {
+    Pending,
+    Completed,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -233,8 +278,12 @@ pub struct ThreadRecord {
     pub environment_id: String,
     pub title: String,
     pub status: ThreadStatus,
+    pub provider: ProviderKind,
+    pub provider_thread_id: Option<String>,
     pub codex_thread_id: Option<String>,
     pub overrides: ThreadOverrides,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<ThreadHandoffState>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
@@ -428,6 +477,33 @@ pub struct CodexRateLimitSnapshot {
     pub plan_type: Option<CodexPlanType>,
     pub primary: Option<CodexRateLimitWindow>,
     pub secondary: Option<CodexRateLimitWindow>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderRateLimitStatus {
+    Ok,
+    Error,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRateLimitWindow {
+    pub resets_at: Option<i64>,
+    pub used_percent: i32,
+    pub window_duration_mins: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRateLimitSnapshot {
+    pub provider: ProviderKind,
+    pub primary: Option<ProviderRateLimitWindow>,
+    pub secondary: Option<ProviderRateLimitWindow>,
+    pub updated_at: i64,
+    pub error: Option<String>,
+    pub status: ProviderRateLimitStatus,
 }
 
 fn normalize_project_script(value: Option<String>) -> Option<String> {

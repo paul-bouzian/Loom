@@ -7,8 +7,8 @@ use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch};
 use crate::domain::shortcuts::ShortcutSettings;
 use crate::domain::workspace::{
     ChatThreadCreateResult, CodexRateLimitSnapshot, DraftThreadTarget, ManagedWorktreeCreateResult,
-    ProjectActionIcon, ProjectRecord, RuntimeStatusSnapshot, SavedDraftThreadState, ThreadRecord,
-    WorkspaceSnapshot,
+    ProjectActionIcon, ProjectRecord, ProviderRateLimitSnapshot, RuntimeStatusSnapshot,
+    SavedDraftThreadState, ThreadRecord, WorkspaceSnapshot,
 };
 use crate::error::{AppError, CommandError};
 use crate::services::terminal::ManualActionLaunch;
@@ -330,6 +330,12 @@ pub(crate) async fn get_environment_codex_rate_limits_impl(
             runtime_target.codex_binary_path,
         )
         .await?)
+}
+
+pub(crate) async fn get_claude_rate_limits_impl(
+    state: &AppState,
+) -> Result<ProviderRateLimitSnapshot, CommandError> {
+    Ok(state.provider_usage.read_claude_rate_limits().await?)
 }
 
 pub(crate) async fn get_environment_capabilities_impl(

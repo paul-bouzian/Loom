@@ -31,6 +31,7 @@
 }
 
 .studio-main__toggle-sidebar,
+.studio-main__handoff,
 .studio-main__toggle-terminal,
 .studio-main__toggle-browser,
 .studio-main__toggle-inspector {
@@ -55,11 +56,21 @@
 }
 
 .studio-main__toggle-sidebar:hover,
+.studio-main__handoff:hover:not(:disabled),
 .studio-main__toggle-terminal:hover,
 .studio-main__toggle-browser:hover,
 .studio-main__toggle-inspector:hover {
   color: var(--tx-text-primary);
   background: var(--tx-bg-hover);
+}
+
+.studio-main__handoff {
+  gap: 2px;
+}
+
+.studio-main__handoff:disabled {
+  color: var(--tx-text-disabled);
+  cursor: default;
 }
 
 .studio-main__resize-handle {

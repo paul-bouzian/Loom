@@ -1,4 +1,5 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { makeUserInputRequest } from "../../test/fixtures/conversation";
@@ -15,6 +16,7 @@ describe("ConversationInteractionPanel", () => {
     const { rerender } = render(
       <ConversationInteractionPanel
         interaction={firstInteraction}
+        provider="codex"
         queueCount={1}
         submitShortcutKey={0}
         onRespondApproval={onRespondApproval}
@@ -25,6 +27,7 @@ describe("ConversationInteractionPanel", () => {
     rerender(
       <ConversationInteractionPanel
         interaction={firstInteraction}
+        provider="codex"
         queueCount={1}
         submitShortcutKey={1}
         onRespondApproval={onRespondApproval}
@@ -42,6 +45,7 @@ describe("ConversationInteractionPanel", () => {
           id: "interaction-2",
           questions: [],
         })}
+        provider="codex"
         queueCount={1}
         submitShortcutKey={1}
         onRespondApproval={onRespondApproval}
@@ -51,5 +55,40 @@ describe("ConversationInteractionPanel", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onSubmitAnswers).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits free-text answers for questions that support other responses", async () => {
+    const onSubmitAnswers = vi.fn(async () => undefined);
+    const onRespondApproval = vi.fn(async () => undefined);
+    render(
+      <ConversationInteractionPanel
+        interaction={makeUserInputRequest({
+          questions: [
+            {
+              ...makeUserInputRequest().questions[0],
+              id: "question-custom",
+              isOther: true,
+            },
+          ],
+        })}
+        provider="claude"
+        queueCount={1}
+        submitShortcutKey={0}
+        onRespondApproval={onRespondApproval}
+        onSubmitAnswers={onSubmitAnswers}
+      />,
+    );
+
+    await userEvent.type(
+      screen.getByPlaceholderText("Or write a custom answer"),
+      "Réponse personnalisée",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Submit answers" }));
+
+    await waitFor(() => {
+      expect(onSubmitAnswers).toHaveBeenCalledWith({
+        "question-custom": ["Réponse personnalisée"],
+      });
+    });
   });
 });

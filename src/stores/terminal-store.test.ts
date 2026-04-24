@@ -792,6 +792,7 @@ describe("terminal-store", () => {
         shortcuts: {},
         openTargets: [],
         defaultOpenTargetId: "file-manager",
+        defaultProvider: "codex",
         defaultModel: "gpt-5.4",
         defaultReasoningEffort: "high",
         defaultCollaborationMode: "build",

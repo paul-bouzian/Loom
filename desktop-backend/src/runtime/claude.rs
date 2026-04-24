@@ -1,0 +1,2108 @@
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::time::Duration;
+
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::{mpsc, Mutex};
+use tokio::time::timeout;
+use uuid::Uuid;
+
+use crate::domain::conversation::{
+    ApprovalResponseInput, CollaborationModeOption, CommandApprovalDecisionInput,
+    ConversationApprovalKind, ConversationComposerSettings, ConversationErrorSnapshot,
+    ConversationEventPayload, ConversationImageAttachment, ConversationInteraction,
+    ConversationItem, ConversationItemStatus, ConversationMessageItem, ConversationRole,
+    ConversationStatus, ConversationTone, ConversationToolItem, EnvironmentCapabilitiesSnapshot,
+    FileChangeApprovalDecisionInput, InputModality, ModelOption, PendingApprovalRequest,
+    PendingUserInputOption, PendingUserInputQuestion, PendingUserInputRequest,
+    PermissionsApprovalDecisionInput, PlanDecisionAction, ProposedPlanSnapshot, ProposedPlanStatus,
+    ProviderOption, RespondToUserInputRequestInput, SubmitPlanDecisionInput,
+    ThreadConversationOpenResponse, ThreadConversationSnapshot, ThreadTokenUsageSnapshot,
+    TokenUsageBreakdown,
+};
+use crate::domain::settings::{
+    ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort, ServiceTier,
+};
+use crate::error::{AppError, AppResult};
+use crate::events::EventSink;
+use crate::runtime::protocol::{
+    clear_streaming_flags, mark_plan_approved, mark_plan_superseded, plan_approval_message,
+    reconcile_snapshot_status, upsert_item, CONVERSATION_EVENT_NAME,
+};
+use crate::runtime::session::SendMessageResult;
+use crate::services::composer::{load_prompt_definitions, resolve_composer_text};
+use crate::services::workspace::ThreadRuntimeContext;
+
+const CLAUDE_WORKER_PATH_ENV: &str = "SKEIN_CLAUDE_WORKER_PATH";
+const NODE_EXECUTABLE_ENV: &str = "SKEIN_NODE_EXECUTABLE";
+const CLAUDE_WORKER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
+#[derive(Debug)]
+pub struct ClaudeRuntimeSession {
+    events: EventSink,
+    app_version: String,
+    state: Mutex<ClaudeRuntimeState>,
+}
+
+#[derive(Debug, Default)]
+struct ClaudeRuntimeState {
+    snapshots_by_thread: HashMap<String, ThreadConversationSnapshot>,
+    control_senders_by_thread: HashMap<String, mpsc::UnboundedSender<ClaudeControlMessage>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeSimpleMessage {
+    id: String,
+    role: ConversationRole,
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeOpenResult {
+    provider_thread_id: Option<String>,
+    messages: Vec<ClaudeSimpleMessage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeSendResult {
+    provider_thread_id: Option<String>,
+    messages: Vec<ClaudeSimpleMessage>,
+    plan_markdown: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum ClaudeControlMessage {
+    UserInputResponse {
+        interaction_id: String,
+        answers: HashMap<String, Vec<String>>,
+    },
+    ApprovalResponse {
+        interaction_id: String,
+        approved: bool,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum ClaudeRuntimeEvent {
+    Session {
+        provider_thread_id: String,
+    },
+    AssistantDelta {
+        item_id: String,
+        delta: String,
+    },
+    ToolStarted {
+        item_id: String,
+        tool_name: String,
+        title: String,
+        summary: Option<String>,
+    },
+    ToolUpdated {
+        item_id: String,
+        tool_name: String,
+        title: String,
+        summary: Option<String>,
+    },
+    ToolOutput {
+        item_id: String,
+        delta: String,
+        is_error: Option<bool>,
+    },
+    ToolCompleted {
+        item_id: String,
+        is_error: Option<bool>,
+    },
+    Reasoning {
+        item_id: String,
+        delta: String,
+    },
+    TokenUsage {
+        total: TokenUsageBreakdown,
+        last: TokenUsageBreakdown,
+        model_context_window: Option<i64>,
+    },
+    PlanReady {
+        item_id: Option<String>,
+        markdown: String,
+    },
+    UserInputRequest {
+        interaction_id: String,
+        item_id: String,
+        questions: Vec<ClaudeUserInputQuestion>,
+    },
+    ApprovalRequest {
+        interaction_id: String,
+        item_id: String,
+        tool_name: String,
+        title: String,
+        summary: Option<String>,
+        command: Option<String>,
+        reason: Option<String>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeUserInputQuestion {
+    id: String,
+    header: String,
+    question: String,
+    options: Vec<ClaudeUserInputOption>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeUserInputOption {
+    label: String,
+    description: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeOpenPayload {
+    provider_thread_id: String,
+    cwd: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeSendPayload {
+    provider_thread_id: Option<String>,
+    cwd: String,
+    model: String,
+    effort: ReasoningEffort,
+    service_tier: Option<ServiceTier>,
+    collaboration_mode: CollaborationMode,
+    approval_policy: ApprovalPolicy,
+    claude_binary_path: Option<String>,
+    app_version: String,
+    visible_text: String,
+    text: String,
+    images: Vec<ConversationImageAttachment>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeWorkerRequest<T> {
+    id: u64,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    payload: T,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeWorkerResponse<T> {
+    id: u64,
+    ok: bool,
+    result: Option<T>,
+    error: Option<ClaudeWorkerError>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeWorkerEventEnvelope {
+    id: u64,
+    event: ClaudeRuntimeEvent,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeWorkerError {
+    message: String,
+}
+
+impl ClaudeRuntimeSession {
+    pub fn new(events: EventSink, app_version: String) -> Self {
+        Self {
+            events,
+            app_version,
+            state: Mutex::new(ClaudeRuntimeState::default()),
+        }
+    }
+
+    pub async fn open_thread(
+        &self,
+        context: ThreadRuntimeContext,
+    ) -> AppResult<ThreadConversationOpenResponse> {
+        if let Some(snapshot) = self
+            .state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .get_mut(&context.thread_id)
+        {
+            snapshot.composer = context.composer.clone();
+            snapshot.provider_thread_id = context.provider_thread_id.clone();
+            return Ok(ThreadConversationOpenResponse {
+                snapshot: snapshot.clone(),
+                capabilities: claude_capabilities(&context),
+                composer_draft: None,
+            });
+        }
+
+        let snapshot = if let Some(provider_thread_id) = context.provider_thread_id.clone() {
+            let result = run_claude_worker::<_, ClaudeOpenResult>(
+                None,
+                "open",
+                ClaudeOpenPayload {
+                    provider_thread_id: provider_thread_id.clone(),
+                    cwd: context.environment_path.clone(),
+                },
+            )
+            .await?;
+            snapshot_from_claude_messages(
+                &context,
+                result.provider_thread_id.or(Some(provider_thread_id)),
+                result.messages,
+                ConversationStatus::Completed,
+                None,
+            )
+        } else {
+            let messages = context
+                .handoff
+                .as_ref()
+                .map(|handoff| {
+                    handoff
+                        .imported_messages
+                        .iter()
+                        .map(|message| ClaudeSimpleMessage {
+                            id: message.id.clone(),
+                            role: message.role,
+                            text: message.text.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            snapshot_from_claude_messages(&context, None, messages, ConversationStatus::Idle, None)
+        };
+
+        self.state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .insert(context.thread_id.clone(), snapshot.clone());
+
+        Ok(ThreadConversationOpenResponse {
+            snapshot,
+            capabilities: claude_capabilities(&context),
+            composer_draft: None,
+        })
+    }
+
+    pub async fn send_message(
+        &self,
+        context: ThreadRuntimeContext,
+        text: String,
+        images: Vec<ConversationImageAttachment>,
+        mention_bindings: Vec<crate::domain::conversation::ComposerMentionBindingInput>,
+    ) -> AppResult<SendMessageResult> {
+        self.send_message_with_visibility(context, text, images, mention_bindings, true, true)
+            .await
+    }
+
+    pub async fn submit_plan_decision(
+        &self,
+        mut context: ThreadRuntimeContext,
+        input: SubmitPlanDecisionInput,
+    ) -> AppResult<SendMessageResult> {
+        if let Some(composer) = input.composer {
+            context.composer = composer;
+        }
+
+        match input.action {
+            PlanDecisionAction::Approve => {
+                let thread_id = context.thread_id.clone();
+                self.take_pending_plan_decision(&thread_id).await?;
+                let system_item_id = format!("system-plan-approved-{}", Uuid::now_v7());
+                self.push_system_item(
+                    &thread_id,
+                    &system_item_id,
+                    "Plan approved",
+                    "Skein approved the current plan and switched the thread to Build mode.",
+                )
+                .await?;
+                context.composer.collaboration_mode = CollaborationMode::Build;
+                let mut result = match self
+                    .send_message_with_visibility(
+                        context,
+                        plan_approval_message().to_string(),
+                        Vec::new(),
+                        Vec::new(),
+                        false,
+                        false,
+                    )
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        self.remove_item(&thread_id, &system_item_id).await;
+                        self.restore_pending_plan_decision(&thread_id).await;
+                        return Err(error);
+                    }
+                };
+                result.snapshot = self
+                    .mark_plan_state(&result.snapshot.thread_id, mark_plan_approved)
+                    .await?;
+                Ok(result)
+            }
+            PlanDecisionAction::Refine => {
+                let feedback = input.feedback.unwrap_or_default();
+                let trimmed = feedback.trim();
+                if trimmed.is_empty() {
+                    return Err(AppError::Validation(
+                        "Add refinement guidance before asking Claude to revise the plan."
+                            .to_string(),
+                    ));
+                }
+                let thread_id = context.thread_id.clone();
+                self.take_pending_plan_decision(&thread_id).await?;
+                let mut result = match self
+                    .send_message_with_visibility(
+                        context,
+                        trimmed.to_string(),
+                        input.images.unwrap_or_default(),
+                        input.mention_bindings.unwrap_or_default(),
+                        true,
+                        true,
+                    )
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        self.restore_pending_plan_decision(&thread_id).await;
+                        return Err(error);
+                    }
+                };
+                result.snapshot = self
+                    .mark_plan_state(&result.snapshot.thread_id, mark_plan_superseded)
+                    .await?;
+                Ok(result)
+            }
+        }
+    }
+
+    async fn send_message_with_visibility(
+        &self,
+        context: ThreadRuntimeContext,
+        text: String,
+        images: Vec<ConversationImageAttachment>,
+        mention_bindings: Vec<crate::domain::conversation::ComposerMentionBindingInput>,
+        show_user_message: bool,
+        accept_plan_markdown: bool,
+    ) -> AppResult<SendMessageResult> {
+        if !mention_bindings.is_empty() {
+            return Err(AppError::Validation(
+                "Claude threads currently support prompt expansion but not app or skill mentions."
+                    .to_string(),
+            ));
+        }
+        let visible_text = text.trim();
+        if visible_text.is_empty() {
+            return Err(AppError::Validation(
+                "Message must include text.".to_string(),
+            ));
+        }
+
+        let mut resolved_text = resolve_text_for_claude(&context, visible_text)?;
+        if let Some(prefix) = context
+            .handoff_bootstrap_context
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            resolved_text = format!("{prefix}\n\n{resolved_text}");
+        }
+
+        let mut open = self.open_thread(context.clone()).await?;
+        let rollback_snapshot = open.snapshot.clone();
+        open.snapshot.status = ConversationStatus::Running;
+        open.snapshot.active_turn_id = Some(format!("claude-turn-{}", Uuid::now_v7()));
+        open.snapshot.error = None;
+        open.snapshot.pending_interactions.clear();
+        if show_user_message {
+            open.snapshot
+                .items
+                .push(ConversationItem::Message(ConversationMessageItem {
+                    id: format!("local-user-{}", Uuid::now_v7()),
+                    turn_id: None,
+                    role: ConversationRole::User,
+                    text: visible_text.to_string(),
+                    images: if images.is_empty() {
+                        None
+                    } else {
+                        Some(images.clone())
+                    },
+                    is_streaming: false,
+                }));
+        }
+        self.store_and_emit(open.snapshot.clone()).await;
+
+        let result = run_claude_worker::<_, ClaudeSendResult>(
+            Some((self, context.thread_id.as_str())),
+            "send",
+            ClaudeSendPayload {
+                provider_thread_id: context.provider_thread_id.clone(),
+                cwd: context.environment_path.clone(),
+                model: context.composer.model.clone(),
+                effort: context.composer.reasoning_effort,
+                service_tier: supported_claude_service_tier(
+                    &context.composer.model,
+                    context.composer.service_tier,
+                ),
+                collaboration_mode: context.composer.collaboration_mode,
+                approval_policy: context.composer.approval_policy,
+                claude_binary_path: context.claude_binary_path.clone(),
+                app_version: self.app_version.clone(),
+                visible_text: if show_user_message {
+                    visible_text.to_string()
+                } else {
+                    String::new()
+                },
+                text: resolved_text,
+                images: images.clone(),
+            },
+        )
+        .await;
+
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                let mut snapshot = rollback_snapshot;
+                snapshot.status = ConversationStatus::Failed;
+                snapshot.error = Some(ConversationErrorSnapshot {
+                    message: error.to_string(),
+                    codex_error_info: None,
+                    additional_details: None,
+                });
+                self.store_and_emit(snapshot.clone()).await;
+                return Err(error);
+            }
+        };
+
+        let provider_thread_id = result.provider_thread_id.clone();
+        let mut snapshot = self
+            .state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .get(&context.thread_id)
+            .cloned()
+            .unwrap_or_else(|| open.snapshot.clone());
+        snapshot.provider_thread_id = provider_thread_id.clone();
+        snapshot.status = ConversationStatus::Completed;
+        snapshot.pending_interactions.clear();
+        let messages = if show_user_message {
+            result.messages
+        } else {
+            filter_hidden_user_message(result.messages, visible_text)
+        };
+        merge_claude_messages(&mut snapshot, messages);
+        if accept_plan_markdown {
+            complete_claude_plan(&mut snapshot, result.plan_markdown);
+        }
+        complete_current_claude_turn(&mut snapshot, show_user_message);
+        clear_streaming_flags(&mut snapshot.items);
+        complete_running_tools(&mut snapshot.items);
+        snapshot.active_turn_id = None;
+        if show_user_message {
+            attach_current_user_images(&mut snapshot, visible_text, &images);
+        }
+        reconcile_snapshot_status(&mut snapshot);
+        self.store_and_emit(snapshot.clone()).await;
+
+        Ok(SendMessageResult {
+            snapshot,
+            new_provider_thread_id: provider_thread_id
+                .filter(|id| context.provider_thread_id.as_deref() != Some(id.as_str())),
+            new_codex_thread_id: None,
+        })
+    }
+
+    pub async fn refresh_thread(
+        &self,
+        context: ThreadRuntimeContext,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        Ok(self.open_thread(context).await?.snapshot)
+    }
+
+    pub async fn respond_to_user_input_request(
+        &self,
+        input: RespondToUserInputRequestInput,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let (sender, snapshot) = {
+            let mut state = self.state.lock().await;
+            let sender = state
+                .control_senders_by_thread
+                .get(&input.thread_id)
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::Runtime("Claude runtime is no longer waiting for input.".to_string())
+                })?;
+            let snapshot = state
+                .snapshots_by_thread
+                .get_mut(&input.thread_id)
+                .ok_or_else(|| AppError::Validation("Claude thread is not open.".to_string()))?;
+            let before = snapshot.pending_interactions.len();
+            snapshot.pending_interactions.retain(|interaction| {
+                !matches!(interaction, ConversationInteraction::UserInput(request) if request.id == input.interaction_id)
+            });
+            if before == snapshot.pending_interactions.len() {
+                return Err(AppError::Validation(
+                    "User input request is no longer pending.".to_string(),
+                ));
+            }
+            if snapshot.pending_interactions.is_empty()
+                && snapshot.status == ConversationStatus::WaitingForExternalAction
+            {
+                snapshot.status = ConversationStatus::Running;
+            }
+            (sender, snapshot.clone())
+        };
+        sender
+            .send(ClaudeControlMessage::UserInputResponse {
+                interaction_id: input.interaction_id,
+                answers: input.answers,
+            })
+            .map_err(|_| {
+                AppError::Runtime("Claude runtime stopped before receiving input.".to_string())
+            })?;
+        self.store_and_emit(snapshot.clone()).await;
+        Ok(snapshot)
+    }
+
+    pub async fn respond_to_approval_request(
+        &self,
+        thread_id: &str,
+        interaction_id: &str,
+        response: ApprovalResponseInput,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let approved = claude_approval_response_is_approved(&response);
+        let (sender, snapshot) = {
+            let mut state = self.state.lock().await;
+            let sender = state
+                .control_senders_by_thread
+                .get(thread_id)
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::Runtime(
+                        "Claude runtime is no longer waiting for approval.".to_string(),
+                    )
+                })?;
+            let snapshot = state
+                .snapshots_by_thread
+                .get_mut(thread_id)
+                .ok_or_else(|| AppError::Validation("Claude thread is not open.".to_string()))?;
+            let before = snapshot.pending_interactions.len();
+            snapshot.pending_interactions.retain(|interaction| {
+                !matches!(interaction, ConversationInteraction::Approval(request) if request.id == interaction_id)
+            });
+            if before == snapshot.pending_interactions.len() {
+                return Err(AppError::Validation(
+                    "Approval request is no longer pending.".to_string(),
+                ));
+            }
+            if snapshot.pending_interactions.is_empty()
+                && snapshot.status == ConversationStatus::WaitingForExternalAction
+            {
+                snapshot.status = ConversationStatus::Running;
+            }
+            (sender, snapshot.clone())
+        };
+        sender
+            .send(ClaudeControlMessage::ApprovalResponse {
+                interaction_id: interaction_id.to_string(),
+                approved,
+            })
+            .map_err(|_| {
+                AppError::Runtime("Claude runtime stopped before receiving approval.".to_string())
+            })?;
+        self.store_and_emit(snapshot.clone()).await;
+        Ok(snapshot)
+    }
+
+    async fn take_pending_plan_decision(
+        &self,
+        thread_id: &str,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            let snapshot = state
+                .snapshots_by_thread
+                .get_mut(thread_id)
+                .ok_or_else(|| AppError::Validation("Claude thread is not open.".to_string()))?;
+            let plan = snapshot.proposed_plan.as_mut().ok_or_else(|| {
+                AppError::Validation("There is no proposed plan to update.".to_string())
+            })?;
+            if !matches!(plan.status, ProposedPlanStatus::Ready) {
+                return Err(AppError::Validation(
+                    "There is no proposed plan to update.".to_string(),
+                ));
+            }
+            if !plan.is_awaiting_decision {
+                return Err(AppError::Validation(
+                    "The current plan is no longer awaiting a decision.".to_string(),
+                ));
+            }
+            plan.is_awaiting_decision = false;
+            reconcile_snapshot_status(snapshot);
+            snapshot.clone()
+        };
+        self.store_and_emit(snapshot.clone()).await;
+        Ok(snapshot)
+    }
+
+    async fn restore_pending_plan_decision(&self, thread_id: &str) {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            let Some(snapshot) = state.snapshots_by_thread.get_mut(thread_id) else {
+                return;
+            };
+            let Some(plan) = snapshot.proposed_plan.as_mut() else {
+                return;
+            };
+            if !matches!(plan.status, ProposedPlanStatus::Ready) || plan.is_awaiting_decision {
+                return;
+            }
+            plan.is_awaiting_decision = true;
+            reconcile_snapshot_status(snapshot);
+            snapshot.clone()
+        };
+        self.store_and_emit(snapshot).await;
+    }
+
+    async fn mark_plan_state<F>(
+        &self,
+        thread_id: &str,
+        mutate: F,
+    ) -> AppResult<ThreadConversationSnapshot>
+    where
+        F: FnOnce(&mut ProposedPlanSnapshot),
+    {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            let snapshot = state
+                .snapshots_by_thread
+                .get_mut(thread_id)
+                .ok_or_else(|| AppError::Validation("Claude thread is not open.".to_string()))?;
+            let plan = snapshot.proposed_plan.as_mut().ok_or_else(|| {
+                AppError::Validation("There is no proposed plan to update.".to_string())
+            })?;
+            mutate(plan);
+            reconcile_snapshot_status(snapshot);
+            snapshot.clone()
+        };
+        self.store_and_emit(snapshot.clone()).await;
+        Ok(snapshot)
+    }
+
+    async fn push_system_item(
+        &self,
+        thread_id: &str,
+        item_id: &str,
+        title: &str,
+        body: &str,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            let snapshot = state
+                .snapshots_by_thread
+                .get_mut(thread_id)
+                .ok_or_else(|| AppError::Validation("Claude thread is not open.".to_string()))?;
+            upsert_item(
+                &mut snapshot.items,
+                ConversationItem::System(crate::domain::conversation::ConversationSystemItem {
+                    id: item_id.to_string(),
+                    turn_id: None,
+                    tone: ConversationTone::Info,
+                    title: title.to_string(),
+                    body: body.to_string(),
+                }),
+            );
+            reconcile_snapshot_status(snapshot);
+            snapshot.clone()
+        };
+        self.store_and_emit(snapshot.clone()).await;
+        Ok(snapshot)
+    }
+
+    async fn remove_item(&self, thread_id: &str, item_id: &str) {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            let Some(snapshot) = state.snapshots_by_thread.get_mut(thread_id) else {
+                return;
+            };
+            snapshot
+                .items
+                .retain(|item| conversation_item_id(item) != item_id);
+            reconcile_snapshot_status(snapshot);
+            snapshot.clone()
+        };
+        self.store_and_emit(snapshot).await;
+    }
+
+    async fn apply_runtime_event(&self, thread_id: &str, event: ClaudeRuntimeEvent) {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            let Some(snapshot) = state.snapshots_by_thread.get_mut(thread_id) else {
+                return;
+            };
+            apply_claude_event(snapshot, event);
+            snapshot.clone()
+        };
+        self.events.emit(
+            CONVERSATION_EVENT_NAME,
+            ConversationEventPayload {
+                thread_id: snapshot.thread_id.clone(),
+                environment_id: snapshot.environment_id.clone(),
+                snapshot,
+            },
+        );
+    }
+
+    async fn store_and_emit(&self, snapshot: ThreadConversationSnapshot) {
+        self.state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .insert(snapshot.thread_id.clone(), snapshot.clone());
+        self.events.emit(
+            CONVERSATION_EVENT_NAME,
+            ConversationEventPayload {
+                thread_id: snapshot.thread_id.clone(),
+                environment_id: snapshot.environment_id.clone(),
+                snapshot,
+            },
+        );
+    }
+}
+
+pub fn claude_provider_option(is_default: bool) -> ProviderOption {
+    let models = claude_model_options();
+    ProviderOption {
+        id: ProviderKind::Claude,
+        display_name: "Anthropic".to_string(),
+        icon: "claude".to_string(),
+        is_default,
+        models,
+    }
+}
+
+pub fn claude_model_options() -> Vec<ModelOption> {
+    vec![
+        ModelOption {
+            provider: ProviderKind::Claude,
+            id: "claude-opus-4-7".to_string(),
+            display_name: "Claude Opus 4.7".to_string(),
+            description: "Most capable Claude model for complex agentic coding.".to_string(),
+            default_reasoning_effort: ReasoningEffort::XHigh,
+            supported_reasoning_efforts: vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::XHigh,
+                ReasoningEffort::Max,
+            ],
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supported_service_tiers: vec![ServiceTier::Fast],
+            supports_thinking: true,
+            is_default: false,
+        },
+        ModelOption {
+            provider: ProviderKind::Claude,
+            id: "claude-opus-4-7[1m]".to_string(),
+            display_name: "Claude Opus 4.7 1M".to_string(),
+            description: "Claude Opus 4.7 with the 1M-token context window enabled.".to_string(),
+            default_reasoning_effort: ReasoningEffort::XHigh,
+            supported_reasoning_efforts: vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::XHigh,
+                ReasoningEffort::Max,
+            ],
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supported_service_tiers: vec![ServiceTier::Fast],
+            supports_thinking: true,
+            is_default: false,
+        },
+        ModelOption {
+            provider: ProviderKind::Claude,
+            id: "claude-opus-4-6".to_string(),
+            display_name: "Claude Opus 4.6".to_string(),
+            description: "Previous Opus model with strong reasoning and fast mode support."
+                .to_string(),
+            default_reasoning_effort: ReasoningEffort::High,
+            supported_reasoning_efforts: vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supported_service_tiers: vec![ServiceTier::Fast],
+            supports_thinking: true,
+            is_default: false,
+        },
+        ModelOption {
+            provider: ProviderKind::Claude,
+            id: "claude-opus-4-6[1m]".to_string(),
+            display_name: "Claude Opus 4.6 1M".to_string(),
+            description: "Claude Opus 4.6 with the 1M-token context window enabled.".to_string(),
+            default_reasoning_effort: ReasoningEffort::High,
+            supported_reasoning_efforts: vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supported_service_tiers: vec![ServiceTier::Fast],
+            supports_thinking: true,
+            is_default: false,
+        },
+        ModelOption {
+            provider: ProviderKind::Claude,
+            id: "claude-opus-4-5".to_string(),
+            display_name: "Claude Opus 4.5".to_string(),
+            description: "Anthropic Opus model for agentic coding.".to_string(),
+            default_reasoning_effort: ReasoningEffort::High,
+            supported_reasoning_efforts: vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+            ],
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supported_service_tiers: Vec::new(),
+            supports_thinking: true,
+            is_default: true,
+        },
+        ModelOption {
+            provider: ProviderKind::Claude,
+            id: "claude-opus-4-5[1m]".to_string(),
+            display_name: "Claude Opus 4.5 1M".to_string(),
+            description: "Claude Opus 4.5 with the 1M-token context window enabled.".to_string(),
+            default_reasoning_effort: ReasoningEffort::High,
+            supported_reasoning_efforts: vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+            ],
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supported_service_tiers: Vec::new(),
+            supports_thinking: true,
+            is_default: false,
+        },
+        ModelOption {
+            provider: ProviderKind::Claude,
+            id: "claude-sonnet-4-6".to_string(),
+            display_name: "Claude Sonnet 4.6".to_string(),
+            description: "Balanced Claude model for fast coding and planning.".to_string(),
+            default_reasoning_effort: ReasoningEffort::High,
+            supported_reasoning_efforts: vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supported_service_tiers: Vec::new(),
+            supports_thinking: true,
+            is_default: false,
+        },
+        ModelOption {
+            provider: ProviderKind::Claude,
+            id: "claude-sonnet-4-6[1m]".to_string(),
+            display_name: "Claude Sonnet 4.6 1M".to_string(),
+            description: "Claude Sonnet 4.6 with the 1M-token context window enabled.".to_string(),
+            default_reasoning_effort: ReasoningEffort::High,
+            supported_reasoning_efforts: vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supported_service_tiers: Vec::new(),
+            supports_thinking: true,
+            is_default: false,
+        },
+        ModelOption {
+            provider: ProviderKind::Claude,
+            id: "claude-haiku-4-5".to_string(),
+            display_name: "Claude Haiku 4.5".to_string(),
+            description: "Fast Claude model for simple scoped coding tasks.".to_string(),
+            default_reasoning_effort: ReasoningEffort::Low,
+            supported_reasoning_efforts: vec![ReasoningEffort::Low],
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supported_service_tiers: Vec::new(),
+            supports_thinking: false,
+            is_default: false,
+        },
+    ]
+}
+
+pub fn claude_capabilities(context: &ThreadRuntimeContext) -> EnvironmentCapabilitiesSnapshot {
+    EnvironmentCapabilitiesSnapshot {
+        environment_id: context.environment_id.clone(),
+        providers: vec![claude_provider_option(matches!(
+            context.composer.provider,
+            ProviderKind::Claude
+        ))],
+        models: claude_model_options(),
+        collaboration_modes: vec![
+            CollaborationModeOption {
+                id: "build".to_string(),
+                label: "Build".to_string(),
+                mode: CollaborationMode::Build,
+                model: None,
+                reasoning_effort: None,
+            },
+            CollaborationModeOption {
+                id: "plan".to_string(),
+                label: "Plan".to_string(),
+                mode: CollaborationMode::Plan,
+                model: None,
+                reasoning_effort: None,
+            },
+        ],
+    }
+}
+
+pub fn append_claude_provider(capabilities: &mut EnvironmentCapabilitiesSnapshot) {
+    if capabilities
+        .providers
+        .iter()
+        .any(|provider| matches!(provider.id, ProviderKind::Claude))
+    {
+        return;
+    }
+    let provider = claude_provider_option(false);
+    capabilities.models.extend(provider.models.clone());
+    capabilities.providers.push(provider);
+}
+
+fn resolve_text_for_claude(
+    context: &ThreadRuntimeContext,
+    visible_text: &str,
+) -> AppResult<String> {
+    if !visible_text.contains("/prompts:") {
+        return Ok(visible_text.to_string());
+    }
+    let prompts = load_prompt_definitions(&context.environment_path).unwrap_or_default();
+    let resolved = resolve_composer_text(visible_text, &prompts, &[], &[], &[])?;
+    Ok(resolved.text)
+}
+
+fn snapshot_from_claude_messages(
+    context: &ThreadRuntimeContext,
+    provider_thread_id: Option<String>,
+    messages: Vec<ClaudeSimpleMessage>,
+    status: ConversationStatus,
+    plan_markdown: Option<String>,
+) -> ThreadConversationSnapshot {
+    let mut snapshot = ThreadConversationSnapshot::new_for_provider(
+        context.thread_id.clone(),
+        context.environment_id.clone(),
+        ProviderKind::Claude,
+        provider_thread_id,
+        None,
+        ConversationComposerSettings {
+            provider: ProviderKind::Claude,
+            ..context.composer.clone()
+        },
+    );
+    snapshot.status = status;
+    snapshot.items = messages
+        .into_iter()
+        .filter(|message| !message.text.trim().is_empty())
+        .map(|message| {
+            ConversationItem::Message(ConversationMessageItem {
+                id: message.id,
+                turn_id: None,
+                role: message.role,
+                text: message.text,
+                images: None,
+                is_streaming: false,
+            })
+        })
+        .collect();
+    if let Some(markdown) = plan_markdown.filter(|value| !value.trim().is_empty()) {
+        let turn_id = format!("claude-plan-{}", Uuid::now_v7());
+        snapshot.proposed_plan = Some(ProposedPlanSnapshot {
+            turn_id,
+            item_id: None,
+            explanation: String::new(),
+            steps: Vec::new(),
+            markdown,
+            status: ProposedPlanStatus::Ready,
+            is_awaiting_decision: true,
+        });
+    }
+    reconcile_snapshot_status(&mut snapshot);
+    snapshot
+}
+
+fn attach_current_user_images(
+    snapshot: &mut ThreadConversationSnapshot,
+    visible_text: &str,
+    images: &[ConversationImageAttachment],
+) {
+    if images.is_empty() {
+        return;
+    }
+    let Some(ConversationItem::Message(message)) = snapshot
+        .items
+        .iter_mut()
+        .rev()
+        .find(|item| matches!(item, ConversationItem::Message(message) if matches!(message.role, ConversationRole::User) && message.text.trim() == visible_text.trim()))
+    else {
+        return;
+    };
+    message.images = Some(images.to_vec());
+}
+
+fn merge_claude_messages(
+    snapshot: &mut ThreadConversationSnapshot,
+    messages: Vec<ClaudeSimpleMessage>,
+) {
+    for message in messages {
+        if message.text.trim().is_empty() {
+            continue;
+        }
+        if snapshot.items.iter().any(|item| {
+            matches!(
+                item,
+                ConversationItem::Message(existing)
+                    if existing.id == message.id
+                        || (existing.role == message.role
+                            && existing.text.trim() == message.text.trim())
+            )
+        }) {
+            continue;
+        }
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: message.id,
+                turn_id: snapshot.active_turn_id.clone(),
+                role: message.role,
+                text: message.text,
+                images: None,
+                is_streaming: false,
+            }));
+    }
+}
+
+fn filter_hidden_user_message(
+    messages: Vec<ClaudeSimpleMessage>,
+    hidden_text: &str,
+) -> Vec<ClaudeSimpleMessage> {
+    let hidden_text = hidden_text.trim();
+    messages
+        .into_iter()
+        .filter(|message| {
+            !(matches!(&message.role, ConversationRole::User) && message.text.trim() == hidden_text)
+        })
+        .collect()
+}
+
+fn conversation_item_id(item: &ConversationItem) -> &str {
+    match item {
+        ConversationItem::Message(item) => &item.id,
+        ConversationItem::Reasoning(item) => &item.id,
+        ConversationItem::Tool(item) => &item.id,
+        ConversationItem::System(item) => &item.id,
+    }
+}
+
+fn complete_claude_plan(snapshot: &mut ThreadConversationSnapshot, markdown: Option<String>) {
+    if let Some(markdown) = markdown.filter(|value| !value.trim().is_empty()) {
+        upsert_claude_plan(snapshot, None, markdown, ProposedPlanStatus::Ready, true);
+    }
+}
+
+fn complete_running_tools(items: &mut [ConversationItem]) {
+    for item in items {
+        if let ConversationItem::Tool(tool) = item {
+            if tool.status == ConversationItemStatus::InProgress {
+                tool.status = ConversationItemStatus::Completed;
+            }
+        }
+    }
+}
+
+fn complete_current_claude_turn(
+    snapshot: &mut ThreadConversationSnapshot,
+    include_visible_user_message: bool,
+) {
+    let Some(turn_id) = snapshot.active_turn_id.clone() else {
+        return;
+    };
+
+    let first_current_item_index = snapshot.items.iter().position(|item| match item {
+        ConversationItem::Message(message) => message.turn_id.as_deref() == Some(turn_id.as_str()),
+        ConversationItem::Reasoning(reasoning) => {
+            reasoning.turn_id.as_deref() == Some(turn_id.as_str())
+        }
+        ConversationItem::Tool(tool) => tool.turn_id.as_deref() == Some(turn_id.as_str()),
+        ConversationItem::System(system) => system.turn_id.as_deref() == Some(turn_id.as_str()),
+    });
+    let latest_user_index = if include_visible_user_message {
+        snapshot.items.iter().rposition(|item| {
+            matches!(
+                item,
+                ConversationItem::Message(message) if message.role == ConversationRole::User
+            )
+        })
+    } else {
+        None
+    };
+
+    if let Some(user_index) = latest_user_index {
+        if let Some(ConversationItem::Message(message)) = snapshot.items.get_mut(user_index) {
+            message.turn_id.get_or_insert_with(|| turn_id.clone());
+        }
+    }
+
+    let start_index = latest_user_index
+        .map(|index| index + 1)
+        .or(first_current_item_index)
+        .unwrap_or(snapshot.items.len());
+    for item in snapshot.items.iter_mut().skip(start_index) {
+        match item {
+            ConversationItem::Message(message) if message.role == ConversationRole::Assistant => {
+                message.turn_id.get_or_insert_with(|| turn_id.clone());
+            }
+            ConversationItem::Reasoning(reasoning) => {
+                reasoning.turn_id.get_or_insert_with(|| turn_id.clone());
+            }
+            ConversationItem::Tool(tool) => {
+                tool.turn_id.get_or_insert_with(|| turn_id.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn apply_claude_event(snapshot: &mut ThreadConversationSnapshot, event: ClaudeRuntimeEvent) {
+    let turn_id = snapshot
+        .active_turn_id
+        .clone()
+        .unwrap_or_else(|| format!("claude-turn-{}", Uuid::now_v7()));
+    snapshot.active_turn_id = Some(turn_id.clone());
+    snapshot.status = ConversationStatus::Running;
+    match event {
+        ClaudeRuntimeEvent::Session { provider_thread_id } => {
+            snapshot.provider_thread_id = Some(provider_thread_id);
+        }
+        ClaudeRuntimeEvent::AssistantDelta { item_id, delta } => {
+            append_assistant_delta(snapshot, &turn_id, &item_id, &delta);
+        }
+        ClaudeRuntimeEvent::ToolStarted {
+            item_id,
+            tool_name,
+            title,
+            summary,
+        }
+        | ClaudeRuntimeEvent::ToolUpdated {
+            item_id,
+            tool_name,
+            title,
+            summary,
+        } => {
+            upsert_tool(snapshot, &turn_id, &item_id, &tool_name, &title, summary);
+        }
+        ClaudeRuntimeEvent::ToolOutput {
+            item_id,
+            delta,
+            is_error,
+        } => {
+            append_tool_delta(
+                snapshot,
+                &turn_id,
+                &item_id,
+                &delta,
+                is_error.unwrap_or(false),
+            );
+        }
+        ClaudeRuntimeEvent::ToolCompleted { item_id, is_error } => {
+            complete_tool(snapshot, &turn_id, &item_id, is_error.unwrap_or(false));
+        }
+        ClaudeRuntimeEvent::Reasoning { item_id, delta } => {
+            append_reasoning(snapshot, &turn_id, &item_id, &delta);
+        }
+        ClaudeRuntimeEvent::TokenUsage {
+            total,
+            last,
+            model_context_window,
+        } => {
+            snapshot.token_usage = Some(ThreadTokenUsageSnapshot {
+                total,
+                last,
+                model_context_window,
+            });
+        }
+        ClaudeRuntimeEvent::PlanReady { item_id, markdown } => {
+            upsert_claude_plan(snapshot, item_id, markdown, ProposedPlanStatus::Ready, true);
+        }
+        ClaudeRuntimeEvent::UserInputRequest {
+            interaction_id,
+            item_id,
+            questions,
+        } => {
+            snapshot.status = ConversationStatus::WaitingForExternalAction;
+            if !snapshot.pending_interactions.iter().any(|interaction| {
+                matches!(interaction, ConversationInteraction::UserInput(request) if request.id == interaction_id)
+            }) {
+                snapshot
+                    .pending_interactions
+                    .push(ConversationInteraction::UserInput(Box::new(
+                        PendingUserInputRequest {
+                            id: interaction_id,
+                            method: "claude/tool/AskUserQuestion".to_string(),
+                            thread_id: snapshot.thread_id.clone(),
+                            turn_id,
+                            item_id,
+                            questions: questions
+                                .into_iter()
+                                .map(|question| PendingUserInputQuestion {
+                                    id: question.id,
+                                    header: question.header,
+                                    question: question.question,
+                                    options: question
+                                        .options
+                                        .into_iter()
+                                        .map(|option| PendingUserInputOption {
+                                            label: option.label,
+                                            description: option.description,
+                                    })
+                                    .collect(),
+                                    is_other: true,
+                                    is_secret: false,
+                                })
+                                .collect(),
+                        },
+                    )));
+            }
+        }
+        ClaudeRuntimeEvent::ApprovalRequest {
+            interaction_id,
+            item_id,
+            tool_name,
+            title,
+            summary,
+            command,
+            reason,
+        } => {
+            snapshot.status = ConversationStatus::WaitingForExternalAction;
+            if !snapshot.pending_interactions.iter().any(|interaction| {
+                matches!(interaction, ConversationInteraction::Approval(request) if request.id == interaction_id)
+            }) {
+                snapshot
+                    .pending_interactions
+                    .push(ConversationInteraction::Approval(Box::new(
+                        PendingApprovalRequest {
+                            id: interaction_id,
+                            method: "claude/tool/canUseTool".to_string(),
+                            thread_id: snapshot.thread_id.clone(),
+                            turn_id,
+                            item_id,
+                            approval_kind: claude_approval_kind(&tool_name),
+                            title,
+                            summary,
+                            reason,
+                            command,
+                            cwd: None,
+                            grant_root: None,
+                            permissions: None,
+                            network_context: None,
+                            proposed_execpolicy_amendment: Vec::new(),
+                            proposed_network_policy_amendments: Vec::new(),
+                        },
+                    )));
+            }
+        }
+    }
+}
+
+fn claude_approval_kind(tool_name: &str) -> ConversationApprovalKind {
+    match tool_name {
+        "Bash" => ConversationApprovalKind::CommandExecution,
+        "Edit" | "MultiEdit" | "Write" => ConversationApprovalKind::FileChange,
+        _ => ConversationApprovalKind::Permissions,
+    }
+}
+
+fn claude_approval_response_is_approved(response: &ApprovalResponseInput) -> bool {
+    match response {
+        ApprovalResponseInput::CommandExecution { decision, .. } => matches!(
+            decision,
+            CommandApprovalDecisionInput::Accept
+                | CommandApprovalDecisionInput::AcceptForSession
+                | CommandApprovalDecisionInput::AcceptWithExecpolicyAmendment
+                | CommandApprovalDecisionInput::ApplyNetworkPolicyAmendment
+        ),
+        ApprovalResponseInput::FileChange { decision } => matches!(
+            decision,
+            FileChangeApprovalDecisionInput::Accept
+                | FileChangeApprovalDecisionInput::AcceptForSession
+        ),
+        ApprovalResponseInput::Permissions { decision, .. } => {
+            matches!(decision, PermissionsApprovalDecisionInput::Approve)
+        }
+    }
+}
+
+fn append_assistant_delta(
+    snapshot: &mut ThreadConversationSnapshot,
+    turn_id: &str,
+    item_id: &str,
+    delta: &str,
+) {
+    if delta.is_empty() {
+        return;
+    }
+    if let Some(message) = snapshot.items.iter_mut().find_map(|item| match item {
+        ConversationItem::Message(message)
+            if message.id == item_id && message.role == ConversationRole::Assistant =>
+        {
+            Some(message)
+        }
+        _ => None,
+    }) {
+        message.turn_id.get_or_insert_with(|| turn_id.to_string());
+        message.text.push_str(delta);
+        message.is_streaming = true;
+        return;
+    }
+    snapshot
+        .items
+        .push(ConversationItem::Message(ConversationMessageItem {
+            id: item_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            role: ConversationRole::Assistant,
+            text: delta.to_string(),
+            images: None,
+            is_streaming: true,
+        }));
+}
+
+fn append_reasoning(
+    snapshot: &mut ThreadConversationSnapshot,
+    turn_id: &str,
+    item_id: &str,
+    delta: &str,
+) {
+    if delta.trim().is_empty() {
+        return;
+    }
+    snapshot.items.push(ConversationItem::Reasoning(
+        crate::domain::conversation::ConversationReasoningItem {
+            id: item_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            summary: delta.to_string(),
+            content: String::new(),
+            is_streaming: false,
+        },
+    ));
+}
+
+fn upsert_tool(
+    snapshot: &mut ThreadConversationSnapshot,
+    turn_id: &str,
+    item_id: &str,
+    tool_name: &str,
+    title: &str,
+    summary: Option<String>,
+) {
+    if let Some(tool) = snapshot.items.iter_mut().find_map(|item| match item {
+        ConversationItem::Tool(tool) if tool.id == item_id => Some(tool),
+        _ => None,
+    }) {
+        tool.turn_id.get_or_insert_with(|| turn_id.to_string());
+        tool.tool_type = tool_name.to_string();
+        tool.title = title.to_string();
+        tool.summary = summary;
+        tool.status = ConversationItemStatus::InProgress;
+        return;
+    }
+    snapshot
+        .items
+        .push(ConversationItem::Tool(ConversationToolItem {
+            id: item_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            tool_type: tool_name.to_string(),
+            title: title.to_string(),
+            status: ConversationItemStatus::InProgress,
+            summary,
+            output: String::new(),
+        }));
+}
+
+fn append_tool_delta(
+    snapshot: &mut ThreadConversationSnapshot,
+    turn_id: &str,
+    item_id: &str,
+    delta: &str,
+    is_error: bool,
+) {
+    if let Some(tool) = snapshot.items.iter_mut().find_map(|item| match item {
+        ConversationItem::Tool(tool) if tool.id == item_id => Some(tool),
+        _ => None,
+    }) {
+        tool.turn_id.get_or_insert_with(|| turn_id.to_string());
+        if !tool.output.is_empty() && !tool.output.ends_with('\n') {
+            tool.output.push('\n');
+        }
+        tool.output.push_str(delta);
+        if is_error {
+            tool.status = ConversationItemStatus::Failed;
+        }
+    }
+}
+
+fn complete_tool(
+    snapshot: &mut ThreadConversationSnapshot,
+    turn_id: &str,
+    item_id: &str,
+    is_error: bool,
+) {
+    if let Some(tool) = snapshot.items.iter_mut().find_map(|item| match item {
+        ConversationItem::Tool(tool) if tool.id == item_id => Some(tool),
+        _ => None,
+    }) {
+        tool.turn_id.get_or_insert_with(|| turn_id.to_string());
+        tool.status = if is_error {
+            ConversationItemStatus::Failed
+        } else {
+            ConversationItemStatus::Completed
+        };
+    }
+}
+
+fn upsert_claude_plan(
+    snapshot: &mut ThreadConversationSnapshot,
+    item_id: Option<String>,
+    markdown: String,
+    status: ProposedPlanStatus,
+    is_awaiting_decision: bool,
+) {
+    if markdown.trim().is_empty() {
+        return;
+    }
+    let turn_id = snapshot
+        .active_turn_id
+        .clone()
+        .unwrap_or_else(|| format!("claude-plan-{}", Uuid::now_v7()));
+    snapshot.proposed_plan = Some(ProposedPlanSnapshot {
+        turn_id,
+        item_id,
+        explanation: String::new(),
+        steps: Vec::new(),
+        markdown,
+        status,
+        is_awaiting_decision,
+    });
+}
+
+fn supported_claude_service_tier(
+    model_id: &str,
+    requested: Option<ServiceTier>,
+) -> Option<ServiceTier> {
+    requested.filter(|tier| {
+        claude_model_options()
+            .into_iter()
+            .find(|model| model.id == model_id)
+            .is_some_and(|model| model.supported_service_tiers.contains(tier))
+    })
+}
+
+async fn run_claude_worker<P, R>(
+    session: Option<(&ClaudeRuntimeSession, &str)>,
+    kind: &'static str,
+    payload: P,
+) -> AppResult<R>
+where
+    P: Serialize,
+    R: DeserializeOwned,
+{
+    let worker_path = std::env::var(CLAUDE_WORKER_PATH_ENV).map_err(|_| {
+        AppError::Runtime(
+            "Claude runtime worker is unavailable. Rebuild the Electron shell before using Claude."
+                .to_string(),
+        )
+    })?;
+    let node_executable = std::env::var(NODE_EXECUTABLE_ENV).unwrap_or_else(|_| "node".to_string());
+    let mut child = Command::new(node_executable)
+        .arg(worker_path)
+        .env("ELECTRON_RUN_AS_NODE", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| AppError::Runtime(format!("Failed to start Claude worker: {error}")))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| AppError::Runtime("Claude worker stdin was unavailable.".to_string()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::Runtime("Claude worker stdout was unavailable.".to_string()))?;
+    let stderr = child.stderr.take();
+
+    if let Some(stderr) = stderr {
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::warn!("Claude worker: {line}");
+            }
+        });
+    }
+
+    let request = ClaudeWorkerRequest {
+        id: 1,
+        kind,
+        payload,
+    };
+    let line = serde_json::to_string(&request)
+        .map_err(|error| AppError::Runtime(format!("Failed to encode Claude request: {error}")))?;
+    stdin.write_all(line.as_bytes()).await?;
+    stdin.write_all(b"\n").await?;
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel::<ClaudeControlMessage>();
+    if let Some((session, thread_id)) = session {
+        session
+            .state
+            .lock()
+            .await
+            .control_senders_by_thread
+            .insert(thread_id.to_string(), control_tx);
+    }
+
+    let mut child_stdin = stdin;
+    tokio::spawn(async move {
+        while let Some(message) = control_rx.recv().await {
+            let Ok(line) = serde_json::to_string(&message) else {
+                continue;
+            };
+            if child_stdin.write_all(line.as_bytes()).await.is_err() {
+                break;
+            }
+            if child_stdin.write_all(b"\n").await.is_err() {
+                break;
+            }
+        }
+        let _ = child_stdin.shutdown().await;
+    });
+
+    let mut lines = BufReader::new(stdout).lines();
+    loop {
+        let line = match timeout(CLAUDE_WORKER_RESPONSE_TIMEOUT, lines.next_line()).await {
+            Ok(Ok(Some(line))) => line,
+            Ok(Ok(None)) => break,
+            Ok(Err(error)) => {
+                clear_claude_control_sender(session).await;
+                return Err(error.into());
+            }
+            Err(_) => {
+                stop_claude_worker_after_error(child, session).await;
+                return Err(AppError::Runtime(
+                    "Claude worker timed out before returning a response.".to_string(),
+                ));
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let raw = match serde_json::from_str::<serde_json::Value>(&line) {
+            Ok(raw) => raw,
+            Err(error) => {
+                stop_claude_worker_after_error(child, session).await;
+                return Err(AppError::Runtime(format!(
+                    "Failed to decode Claude worker message: {error}"
+                )));
+            }
+        };
+        if raw.get("type").and_then(serde_json::Value::as_str) == Some("event") {
+            let event = match serde_json::from_value::<ClaudeWorkerEventEnvelope>(raw) {
+                Ok(event) => event,
+                Err(error) => {
+                    stop_claude_worker_after_error(child, session).await;
+                    return Err(AppError::Runtime(format!(
+                        "Failed to decode Claude worker event: {error}"
+                    )));
+                }
+            };
+            if event.id == 1 {
+                if let Some((session, thread_id)) = session {
+                    session.apply_runtime_event(thread_id, event.event).await;
+                }
+            }
+            continue;
+        }
+        let response = match serde_json::from_str::<ClaudeWorkerResponse<R>>(&line) {
+            Ok(response) => response,
+            Err(error) => {
+                stop_claude_worker_after_error(child, session).await;
+                return Err(AppError::Runtime(format!(
+                    "Failed to decode Claude worker response: {error}"
+                )));
+            }
+        };
+        if response.id != 1 {
+            continue;
+        }
+        if response.ok {
+            let result = response
+                .result
+                .ok_or_else(|| AppError::Runtime("Claude worker returned no result.".to_string()));
+            let _ = child.start_kill();
+            clear_claude_control_sender(session).await;
+            tokio::spawn(async move {
+                let _ = child.wait().await;
+            });
+            return result;
+        }
+        stop_claude_worker_after_error(child, session).await;
+        return Err(AppError::Runtime(
+            response
+                .error
+                .map(|error| error.message)
+                .unwrap_or_else(|| "Claude worker failed.".to_string()),
+        ));
+    }
+
+    clear_claude_control_sender(session).await;
+    let status = child.wait().await?;
+    Err(AppError::Runtime(format!(
+        "Claude worker exited without a response: {status}."
+    )))
+}
+
+async fn stop_claude_worker_after_error(
+    mut child: Child,
+    session: Option<(&ClaudeRuntimeSession, &str)>,
+) {
+    let _ = child.start_kill();
+    clear_claude_control_sender(session).await;
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
+}
+
+async fn clear_claude_control_sender(session: Option<(&ClaudeRuntimeSession, &str)>) {
+    if let Some((session, thread_id)) = session {
+        session
+            .state
+            .lock()
+            .await
+            .control_senders_by_thread
+            .remove(thread_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot() -> ThreadConversationSnapshot {
+        ThreadConversationSnapshot::new_for_provider(
+            "thread-1".to_string(),
+            "env-1".to_string(),
+            ProviderKind::Claude,
+            None,
+            None,
+            ConversationComposerSettings {
+                provider: ProviderKind::Claude,
+                model: "claude-sonnet-4-6".to_string(),
+                reasoning_effort: ReasoningEffort::High,
+                collaboration_mode: CollaborationMode::Build,
+                approval_policy: ApprovalPolicy::AskToEdit,
+                service_tier: None,
+            },
+        )
+    }
+
+    #[test]
+    fn claude_events_surface_tool_activity_and_assistant_streams() {
+        let mut snapshot = snapshot();
+        snapshot.active_turn_id = Some("turn-1".to_string());
+
+        apply_claude_event(
+            &mut snapshot,
+            ClaudeRuntimeEvent::ToolStarted {
+                item_id: "tool-1".to_string(),
+                tool_name: "Read".to_string(),
+                title: "Search".to_string(),
+                summary: Some("src/main.ts".to_string()),
+            },
+        );
+        apply_claude_event(
+            &mut snapshot,
+            ClaudeRuntimeEvent::ToolOutput {
+                item_id: "tool-1".to_string(),
+                delta: "file contents".to_string(),
+                is_error: Some(false),
+            },
+        );
+        apply_claude_event(
+            &mut snapshot,
+            ClaudeRuntimeEvent::ToolCompleted {
+                item_id: "tool-1".to_string(),
+                is_error: Some(false),
+            },
+        );
+        apply_claude_event(
+            &mut snapshot,
+            ClaudeRuntimeEvent::AssistantDelta {
+                item_id: "assistant-1".to_string(),
+                delta: "Done".to_string(),
+            },
+        );
+
+        assert!(snapshot.items.iter().any(|item| {
+            matches!(
+                item,
+                ConversationItem::Tool(tool)
+                    if tool.id == "tool-1"
+                        && tool.status == ConversationItemStatus::Completed
+                        && tool.output.contains("file contents")
+            )
+        }));
+        assert!(snapshot.items.iter().any(|item| {
+            matches!(
+                item,
+                ConversationItem::Message(message)
+                    if message.id == "assistant-1"
+                        && message.role == ConversationRole::Assistant
+                        && message.text == "Done"
+                        && message.is_streaming
+            )
+        }));
+    }
+
+    #[test]
+    fn finalizing_hidden_claude_turn_keeps_work_activity_attached_to_answer() {
+        let mut snapshot = snapshot();
+        snapshot.active_turn_id = Some("turn-approved".to_string());
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "user-plan".to_string(),
+                turn_id: None,
+                role: ConversationRole::User,
+                text: "Fais un plan.".to_string(),
+                images: None,
+                is_streaming: false,
+            }));
+        snapshot.items.push(ConversationItem::System(
+            crate::domain::conversation::ConversationSystemItem {
+                id: "system-plan-approved".to_string(),
+                turn_id: None,
+                tone: ConversationTone::Info,
+                title: "Plan approved".to_string(),
+                body: "Skein approved the current plan.".to_string(),
+            },
+        ));
+        snapshot.items.push(ConversationItem::Reasoning(
+            crate::domain::conversation::ConversationReasoningItem {
+                id: "reasoning-approved".to_string(),
+                turn_id: Some("turn-approved".to_string()),
+                summary: "Checking sources.".to_string(),
+                content: String::new(),
+                is_streaming: false,
+            },
+        ));
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "assistant-approved".to_string(),
+                turn_id: None,
+                role: ConversationRole::Assistant,
+                text: "Done.".to_string(),
+                images: None,
+                is_streaming: true,
+            }));
+
+        complete_current_claude_turn(&mut snapshot, false);
+
+        assert!(matches!(
+            &snapshot.items[0],
+            ConversationItem::Message(message) if message.turn_id.is_none()
+        ));
+        assert!(matches!(
+            &snapshot.items[3],
+            ConversationItem::Message(message)
+                if message.turn_id.as_deref() == Some("turn-approved")
+        ));
+    }
+
+    #[test]
+    fn claude_user_input_event_creates_actionable_interaction() {
+        let mut snapshot = snapshot();
+        snapshot.active_turn_id = Some("turn-1".to_string());
+
+        apply_claude_event(
+            &mut snapshot,
+            ClaudeRuntimeEvent::UserInputRequest {
+                interaction_id: "input-1".to_string(),
+                item_id: "tool-ask".to_string(),
+                questions: vec![ClaudeUserInputQuestion {
+                    id: "scope".to_string(),
+                    header: "Scope".to_string(),
+                    question: "Which option?".to_string(),
+                    options: vec![ClaudeUserInputOption {
+                        label: "A".to_string(),
+                        description: "Use A".to_string(),
+                    }],
+                }],
+            },
+        );
+
+        assert_eq!(
+            snapshot.status,
+            ConversationStatus::WaitingForExternalAction
+        );
+        assert!(matches!(
+            snapshot.pending_interactions.first(),
+            Some(ConversationInteraction::UserInput(request))
+                if request.id == "input-1"
+                    && request.questions.first().is_some_and(|question| {
+                        question.header == "Scope" && question.is_other
+                    })
+        ));
+    }
+
+    #[test]
+    fn claude_plan_event_populates_proposed_plan() {
+        let mut snapshot = snapshot();
+        snapshot.active_turn_id = Some("turn-1".to_string());
+
+        apply_claude_event(
+            &mut snapshot,
+            ClaudeRuntimeEvent::PlanReady {
+                item_id: Some("plan-tool".to_string()),
+                markdown: "# Plan\n\n- Inspect".to_string(),
+            },
+        );
+
+        assert!(snapshot.proposed_plan.as_ref().is_some_and(|plan| {
+            plan.item_id.as_deref() == Some("plan-tool")
+                && plan.markdown.contains("Inspect")
+                && plan.is_awaiting_decision
+                && plan.status == ProposedPlanStatus::Ready
+        }));
+    }
+
+    #[tokio::test]
+    async fn claude_plan_decision_hides_ready_plan_before_marking_approved() {
+        let session = ClaudeRuntimeSession::new(EventSink::noop(), "test".to_string());
+        let mut snapshot = snapshot();
+        snapshot.proposed_plan = Some(ProposedPlanSnapshot {
+            turn_id: "turn-plan".to_string(),
+            item_id: Some("plan-tool".to_string()),
+            explanation: String::new(),
+            steps: Vec::new(),
+            markdown: "# Plan\n\n- Inspect".to_string(),
+            status: ProposedPlanStatus::Ready,
+            is_awaiting_decision: true,
+        });
+        session
+            .state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .insert("thread-1".to_string(), snapshot);
+
+        let hidden = session
+            .take_pending_plan_decision("thread-1")
+            .await
+            .expect("ready plan can be taken once");
+        assert!(hidden.proposed_plan.as_ref().is_some_and(|plan| {
+            plan.status == ProposedPlanStatus::Ready && !plan.is_awaiting_decision
+        }));
+
+        let with_system = session
+            .push_system_item(
+                "thread-1",
+                "system-plan-approved-test",
+                "Plan approved",
+                "Skein approved the current plan and switched the thread to Build mode.",
+            )
+            .await
+            .expect("approval status item can be emitted before the follow-up turn");
+        assert!(matches!(
+            with_system.items.last(),
+            Some(ConversationItem::System(item)) if item.id == "system-plan-approved-test"
+        ));
+
+        let approved = session
+            .mark_plan_state("thread-1", mark_plan_approved)
+            .await
+            .expect("taken plan can be marked approved");
+        assert!(approved.proposed_plan.as_ref().is_some_and(|plan| {
+            plan.status == ProposedPlanStatus::Approved && !plan.is_awaiting_decision
+        }));
+    }
+
+    #[tokio::test]
+    async fn clear_claude_control_sender_removes_registered_thread() {
+        let session = ClaudeRuntimeSession::new(EventSink::noop(), "test".to_string());
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        session
+            .state
+            .lock()
+            .await
+            .control_senders_by_thread
+            .insert("thread-1".to_string(), sender);
+
+        clear_claude_control_sender(Some((&session, "thread-1"))).await;
+
+        assert!(!session
+            .state
+            .lock()
+            .await
+            .control_senders_by_thread
+            .contains_key("thread-1"));
+    }
+
+    #[test]
+    fn hidden_user_message_filter_removes_internal_plan_approval_prompt() {
+        let messages = vec![
+            ClaudeSimpleMessage {
+                id: "user-internal".to_string(),
+                role: ConversationRole::User,
+                text: plan_approval_message().to_string(),
+            },
+            ClaudeSimpleMessage {
+                id: "assistant-final".to_string(),
+                role: ConversationRole::Assistant,
+                text: "Done.".to_string(),
+            },
+        ];
+
+        let visible = filter_hidden_user_message(messages, plan_approval_message());
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, "assistant-final");
+    }
+
+    #[test]
+    fn worker_event_deserializes_camel_case_fields() {
+        let event = serde_json::from_value::<ClaudeWorkerEventEnvelope>(serde_json::json!({
+            "type": "event",
+            "id": 1,
+            "event": {
+                "kind": "session",
+                "providerThreadId": "claude-session-1"
+            }
+        }))
+        .expect("worker events use camelCase fields");
+
+        assert!(matches!(
+            event.event,
+            ClaudeRuntimeEvent::Session { provider_thread_id }
+                if provider_thread_id == "claude-session-1"
+        ));
+    }
+
+    #[test]
+    fn claude_token_usage_event_updates_context_window_snapshot() {
+        let mut snapshot = snapshot();
+
+        apply_claude_event(
+            &mut snapshot,
+            ClaudeRuntimeEvent::TokenUsage {
+                total: TokenUsageBreakdown {
+                    total_tokens: 12_000,
+                    input_tokens: 10_000,
+                    cached_input_tokens: 1_000,
+                    output_tokens: 1_000,
+                    reasoning_output_tokens: 0,
+                },
+                last: TokenUsageBreakdown {
+                    total_tokens: 8_000,
+                    input_tokens: 8_000,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                },
+                model_context_window: Some(1_000_000),
+            },
+        );
+
+        let usage = snapshot
+            .token_usage
+            .as_ref()
+            .expect("Claude token usage is projected into the conversation");
+        assert_eq!(usage.last.total_tokens, 8_000);
+        assert_eq!(usage.total.total_tokens, 12_000);
+        assert_eq!(usage.model_context_window, Some(1_000_000));
+    }
+
+    #[test]
+    fn control_messages_serialize_for_worker_camel_case_contract() {
+        let message = serde_json::to_value(ClaudeControlMessage::ApprovalResponse {
+            interaction_id: "approval-1".to_string(),
+            approved: true,
+        })
+        .expect("control message should serialize");
+
+        assert_eq!(
+            message,
+            serde_json::json!({
+                "type": "approvalResponse",
+                "interactionId": "approval-1",
+                "approved": true
+            })
+        );
+    }
+
+    #[test]
+    fn claude_approval_event_creates_actionable_request() {
+        let mut snapshot = snapshot();
+        snapshot.active_turn_id = Some("turn-1".to_string());
+
+        apply_claude_event(
+            &mut snapshot,
+            ClaudeRuntimeEvent::ApprovalRequest {
+                interaction_id: "approval-1".to_string(),
+                item_id: "tool-bash".to_string(),
+                tool_name: "Bash".to_string(),
+                title: "Command approval".to_string(),
+                summary: Some("Run tests".to_string()),
+                command: Some("bun run test".to_string()),
+                reason: Some("Claude wants to use this tool.".to_string()),
+            },
+        );
+
+        assert_eq!(
+            snapshot.status,
+            ConversationStatus::WaitingForExternalAction
+        );
+        assert!(matches!(
+            snapshot.pending_interactions.first(),
+            Some(ConversationInteraction::Approval(request))
+                if request.id == "approval-1"
+                    && request.approval_kind == ConversationApprovalKind::CommandExecution
+                    && request.command.as_deref() == Some("bun run test")
+        ));
+    }
+}

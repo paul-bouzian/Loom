@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { SubagentThreadSnapshot } from "../../lib/types";
+import type { ProviderKind, SubagentThreadSnapshot } from "../../lib/types";
 import { ChevronRightIcon } from "../../shared/Icons";
 import { ConversationItemRow } from "./ConversationItemRow";
 import { ConversationTaskCard } from "./ConversationTaskCard";
@@ -11,9 +11,10 @@ import type {
 
 type Props = {
   group: ConversationWorkActivityGroupData;
+  provider: ProviderKind;
 };
 
-export function ConversationWorkActivityGroup({ group }: Props) {
+export function ConversationWorkActivityGroup({ group, provider }: Props) {
   const [expanded, setExpanded] = useState(false);
   const sectionRef = useRef<HTMLElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -93,7 +94,7 @@ export function ConversationWorkActivityGroup({ group }: Props) {
             </div>
           ) : null}
           {group.items.map((item) => (
-            <ConversationItemRow key={item.id} item={item} compact />
+            <ConversationItemRow key={item.id} item={item} compact provider={provider} />
           ))}
         </div>
       </div>

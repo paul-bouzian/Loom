@@ -11,10 +11,17 @@ const buildTargets = [
   {
     entryPoint: resolve("electron/main.ts"),
     outfile: resolve("dist-electron/electron/main.js"),
+    packages: "external",
   },
   {
     entryPoint: resolve("electron/preload.ts"),
     outfile: resolve("dist-electron/electron/preload.js"),
+    packages: "external",
+  },
+  {
+    entryPoint: resolve("electron/claude-agent-worker.ts"),
+    outfile: resolve("dist-electron/electron/claude-agent-worker.mjs"),
+    format: "esm",
   },
 ];
 
@@ -23,7 +30,6 @@ const sharedOptions = {
   format: "cjs",
   platform: "node",
   target: "node20",
-  packages: "external",
   sourcemap: true,
   logLevel: "info",
 };
@@ -35,6 +41,8 @@ if (watchMode) {
     buildTargets.map((target) =>
       context({
         ...sharedOptions,
+        ...(target.format ? { format: target.format } : {}),
+        ...(target.packages ? { packages: target.packages } : {}),
         entryPoints: [target.entryPoint],
         outfile: target.outfile,
       }),
@@ -47,6 +55,8 @@ if (watchMode) {
     buildTargets.map((target) =>
       build({
         ...sharedOptions,
+        ...(target.format ? { format: target.format } : {}),
+        ...(target.packages ? { packages: target.packages } : {}),
         entryPoints: [target.entryPoint],
         outfile: target.outfile,
       }),

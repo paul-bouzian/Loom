@@ -572,10 +572,18 @@
 
 .tree-sidebar__thread-row {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   flex: 1;
   min-width: 0;
   position: relative;
+}
+
+.tree-sidebar__thread-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  padding-right: 28px;
 }
 
 .tree-sidebar__thread-split {
@@ -616,7 +624,7 @@
   flex: 1;
   min-width: 0;
   min-height: 30px;
-  padding: 0 32px 0 var(--tx-space-sm);
+  padding: 0 var(--tx-space-sm);
   border-radius: var(--tx-radius-sm);
   background: transparent;
   color: var(--tx-text-muted);
@@ -629,7 +637,7 @@
 }
 
 .tree-sidebar__thread--with-worktree {
-  padding-right: 58px;
+  min-height: 24px;
 }
 
 .tree-sidebar__thread:hover {
@@ -702,21 +710,42 @@
   flex: 1;
 }
 
-.tree-sidebar__thread-row > .tx-tooltip-anchor:has(> .tree-sidebar__thread-branch) {
-  position: absolute;
-  top: 50%;
-  right: 28px;
-  transform: translateY(-50%);
+.tree-sidebar__thread-provider {
+  margin-left: var(--tx-space-xs);
+}
+
+.tree-sidebar__thread-provider-handoff {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  color: var(--tx-text-muted);
+}
+
+.tree-sidebar__thread-provider-arrow {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  color: var(--tx-text-muted);
+}
+
+.tree-sidebar__thread-content > .tx-tooltip-anchor:has(> .tree-sidebar__thread-branch) {
+  display: flex;
+  min-width: 0;
 }
 
 .tree-sidebar__thread-branch {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex-shrink: 0;
-  padding: 2px 4px;
+  min-width: 0;
+  max-width: 100%;
+  margin: -1px var(--tx-space-sm) 4px 30px;
+  padding: 1px 4px;
   border-radius: 3px;
   background: transparent;
+  color: var(--tx-text-muted);
+  font-size: 10px;
   line-height: 1;
   transition:
     background var(--tx-transition-fast),
@@ -726,6 +755,13 @@
 
 .tree-sidebar__thread-branch-icon {
   flex-shrink: 0;
+}
+
+.tree-sidebar__thread-branch-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tree-sidebar__thread-branch[data-pr-state="none"] {

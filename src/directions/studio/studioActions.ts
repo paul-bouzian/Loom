@@ -6,6 +6,7 @@ import type {
   ConversationComposerSettings,
   ConversationImageAttachment,
   EnvironmentRecord,
+  ProviderKind,
   SavedDraftThreadState,
   ThreadRecord,
   WorkspaceSnapshot,
@@ -40,6 +41,37 @@ export async function createThreadForEnvironment(environmentId: string) {
   }
   useWorkspaceStore.getState().selectThread(thread.id);
   return true;
+}
+
+export async function createThreadHandoff(
+  sourceThreadId: string,
+  targetProvider: ProviderKind,
+): Promise<SendThreadDraftResult> {
+  const target = findThreadInWorkspace(
+    useWorkspaceStore.getState().snapshot,
+    sourceThreadId,
+  );
+  if (!target) {
+    return { ok: false, error: "Thread not found." };
+  }
+
+  let thread: ThreadRecord;
+  try {
+    thread = await bridge.createThreadHandoff({
+      sourceThreadId,
+      targetProvider,
+    });
+  } catch (cause: unknown) {
+    return {
+      ok: false,
+      error: extractErrorMessage(cause) ?? "Failed to create handoff thread.",
+    };
+  }
+
+  mergeCreatedThreadIntoSnapshot(target.projectId, thread, undefined);
+  void useWorkspaceStore.getState().refreshSnapshot();
+  useWorkspaceStore.getState().selectThread(thread.id);
+  return { ok: true, thread };
 }
 
 export function openThreadDraftForProject(
@@ -231,6 +263,7 @@ function threadOverridesFromComposer(
   defaultServiceTier: ConversationComposerSettings["serviceTier"],
 ): ThreadRecord["overrides"] {
   return {
+    provider: composer.provider,
     model: composer.model,
     reasoningEffort: composer.reasoningEffort,
     collaborationMode: composer.collaborationMode,

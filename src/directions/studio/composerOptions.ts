@@ -2,25 +2,65 @@ import type {
   ApprovalPolicy,
   CollaborationMode,
   ModelOption,
+  ProviderKind,
   ReasoningEffort,
   ServiceTier,
 } from "../../lib/types";
 import { formatModelLabel, labelForModelOption } from "./modelLabels";
 import type { ComposerPickerOption } from "./ComposerPicker";
+import {
+  claudeBaseModelId,
+  claudeModelPickerLabel,
+  stripClaudeModelLabelPrefix,
+} from "./claudeModelContext";
 
-const MODEL_FALLBACK_IDS = [
+const MODEL_ORDER_IDS = [
+  "gpt-5.5",
   "gpt-5.4",
+  "gpt-5.4-mini",
   "gpt-5.3-codex",
-  "gpt-5",
-  "o4-mini",
-  "o3",
-  "codex-mini-latest",
+  "gpt-5.3-codex-spark",
+  "gpt-5.2-codex",
+  "gpt-5.2",
 ] as const;
+
+const MODEL_FALLBACK_IDS = MODEL_ORDER_IDS;
+
+const CLAUDE_MODEL_FALLBACK_IDS = [
+  "claude-opus-4-7",
+  "claude-opus-4-7[1m]",
+  "claude-opus-4-6",
+  "claude-opus-4-6[1m]",
+  "claude-opus-4-5",
+  "claude-opus-4-5[1m]",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4-6[1m]",
+  "claude-haiku-4-5",
+] as const;
+
+const MODEL_ORDER = new Map<string, number>(
+  [...MODEL_ORDER_IDS, ...CLAUDE_MODEL_FALLBACK_IDS].map((modelId, index) => [
+    modelId,
+    index,
+  ]),
+);
+
+const FALLBACK_MODEL_LABELS: Partial<Record<string, string>> = {
+  "claude-opus-4-7": "Opus 4.7",
+  "claude-opus-4-7[1m]": "Opus 4.7 1M",
+  "claude-opus-4-6": "Opus 4.6",
+  "claude-opus-4-6[1m]": "Opus 4.6 1M",
+  "claude-opus-4-5": "Opus 4.5",
+  "claude-opus-4-5[1m]": "Opus 4.5 1M",
+  "claude-sonnet-4-6": "Sonnet 4.6",
+  "claude-sonnet-4-6[1m]": "Sonnet 4.6 1M",
+  "claude-haiku-4-5": "Haiku 4.5",
+};
 
 export const MODEL_FALLBACK_OPTIONS: ComposerPickerOption[] =
   MODEL_FALLBACK_IDS.map((modelId) => ({
     value: modelId,
-    label: formatModelLabel(modelId),
+    label: fallbackModelLabel(modelId),
   }));
 
 export const REASONING_OPTIONS: ComposerPickerOption<ReasoningEffort>[] = [
@@ -28,6 +68,12 @@ export const REASONING_OPTIONS: ComposerPickerOption<ReasoningEffort>[] = [
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
   { value: "xhigh", label: "Extra High" },
+  { value: "max", label: "Max" },
+];
+
+export const PROVIDER_OPTIONS: ComposerPickerOption<ProviderKind>[] = [
+  { value: "codex", label: "OpenAI" },
+  { value: "claude", label: "Anthropic" },
 ];
 
 export const COLLABORATION_OPTIONS: ComposerPickerOption<CollaborationMode>[] = [
@@ -48,9 +94,19 @@ export const SPEED_MODE_OPTIONS: ComposerPickerOption<ServiceTier>[] = [
 export function composerModelOptions(
   models: ModelOption[],
   selectedValue?: string,
+  provider?: ProviderKind,
 ): ComposerPickerOption[] {
+  const scopedModels = provider
+    ? models.filter((model) => (model.provider ?? "codex") === provider)
+    : models;
+  if (provider === "claude") {
+    return ensureSelectedOption(
+      collapsedClaudeModelOptions(scopedModels, selectedValue),
+      selectedValue,
+    );
+  }
   return ensureSelectedOption(
-    models.map((model) => ({
+    sortModelOptionsByPreference(scopedModels).map((model) => ({
       value: model.id,
       label: labelForModelOption(model, model.id),
     })),
@@ -58,12 +114,63 @@ export function composerModelOptions(
   );
 }
 
+function collapsedClaudeModelOptions(
+  models: ModelOption[],
+  selectedValue?: string,
+): ComposerPickerOption[] {
+  const seen = new Set<string>();
+  return sortModelOptionsByPreference(models).flatMap((model) => {
+    const baseModelId = claudeBaseModelId(model.id);
+    if (seen.has(baseModelId)) {
+      return [];
+    }
+    seen.add(baseModelId);
+    const selectedSameBase =
+      selectedValue && claudeBaseModelId(selectedValue) === baseModelId;
+    return [
+      {
+        value: selectedSameBase ? selectedValue : baseModelId,
+        label: claudeModelPickerLabel(labelForModelOption(model, model.id)),
+      },
+    ];
+  });
+}
+
+export function sortModelOptionsByPreference<T extends Pick<ModelOption, "id" | "displayName">>(
+  models: T[],
+): T[] {
+  return [...models].sort(compareModelOptionsByPreference);
+}
+
+function compareModelOptionsByPreference<T extends Pick<ModelOption, "id" | "displayName">>(
+  left: T,
+  right: T,
+) {
+  const leftOrder = MODEL_ORDER.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = MODEL_ORDER.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+
+  return labelForModelOption(left, left.id).localeCompare(
+    labelForModelOption(right, right.id),
+  );
+}
+
 export function settingsModelOptions(
   models: ModelOption[],
   selectedValue: string,
+  provider: ProviderKind = "codex",
 ): ComposerPickerOption[] {
+  const fallback =
+    provider === "claude"
+      ? CLAUDE_MODEL_FALLBACK_IDS.map((modelId) => ({
+          value: modelId,
+          label: fallbackModelLabel(modelId),
+        }))
+      : MODEL_FALLBACK_OPTIONS;
   return ensureSelectedOption(
-    models.length > 0 ? composerModelOptions(models) : MODEL_FALLBACK_OPTIONS,
+    models.length > 0 ? composerModelOptions(models, undefined, provider) : fallback,
     selectedValue,
   );
 }
@@ -105,8 +212,15 @@ function ensureSelectedOption<T extends string>(
   return [
     {
       value: selectedValue as T,
-      label: formatModelLabel(selectedValue),
+      label: fallbackModelLabel(selectedValue),
     },
     ...options,
   ];
+}
+
+function fallbackModelLabel(modelId: string): string {
+  const label = FALLBACK_MODEL_LABELS[modelId] ?? formatModelLabel(modelId);
+  return modelId.startsWith("claude-")
+    ? stripClaudeModelLabelPrefix(label)
+    : label;
 }

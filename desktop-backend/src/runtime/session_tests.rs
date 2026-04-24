@@ -9,7 +9,9 @@ use tokio::sync::Mutex;
 use crate::domain::conversation::{
     ConversationComposerSettings, ConversationImageAttachment, ConversationItem, ConversationRole,
 };
-use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort, ServiceTier};
+use crate::domain::settings::{
+    ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort, ServiceTier,
+};
 use crate::domain::voice::VoiceAuthMode;
 use crate::runtime::protocol::AGENT_MESSAGE_DELTA_METHOD;
 use crate::services::workspace::ThreadRuntimeContext;
@@ -446,8 +448,11 @@ fn context_with_environment(
         thread_id: local_thread_id.to_string(),
         environment_id: "env-1".to_string(),
         environment_path: environment_path.to_string(),
+        provider: ProviderKind::Codex,
+        provider_thread_id: codex_thread_id.map(ToString::to_string),
         codex_thread_id: codex_thread_id.map(ToString::to_string),
         composer: ConversationComposerSettings {
+            provider: ProviderKind::Codex,
             model: "gpt-5.4".to_string(),
             reasoning_effort: ReasoningEffort::High,
             collaboration_mode,
@@ -455,6 +460,9 @@ fn context_with_environment(
             service_tier: None,
         },
         codex_binary_path: Some("/opt/homebrew/bin/codex".to_string()),
+        claude_binary_path: None,
+        handoff: None,
+        handoff_bootstrap_context: None,
         stream_assistant_responses: true,
         multi_agent_nudge_enabled: false,
         multi_agent_nudge_max_subagents: 4,
@@ -521,7 +529,16 @@ async fn open_thread_hydrates_history_and_capabilities() {
         Some("thr-existing")
     );
     assert_eq!(response.snapshot.items.len(), 2);
-    assert_eq!(response.capabilities.models.len(), 2);
+    assert!(response
+        .capabilities
+        .models
+        .iter()
+        .any(|model| model.id == "claude-sonnet-4-6"));
+    assert!(response
+        .capabilities
+        .models
+        .iter()
+        .any(|model| model.id == "claude-opus-4-6[1m]"));
     assert_eq!(
         response.capabilities.models[0].supported_service_tiers,
         vec![ServiceTier::Fast]
@@ -905,6 +922,36 @@ async fn send_message_clears_fast_service_tier_for_unsupported_models() {
 
     assert!(thread_start.params["serviceTier"].is_null());
     assert!(turn_start.params["serviceTier"].is_null());
+}
+
+#[tokio::test]
+async fn send_message_rejects_unavailable_models_before_starting_turn() {
+    let (session, harness) = FakeCodexHarness::new().await;
+    let mut runtime_context = context(
+        "thread-unavailable-model",
+        None,
+        CollaborationMode::Build,
+        ApprovalPolicy::AskToEdit,
+    );
+    runtime_context.composer.model = "gpt-5.5".to_string();
+
+    let error = session
+        .send_message(
+            runtime_context,
+            "Use the newest model".to_string(),
+            Vec::new(),
+        )
+        .await
+        .expect_err("unavailable models should fail before app-server turn start");
+
+    assert!(
+        error.to_string().contains("unavailable"),
+        "unexpected error: {error}"
+    );
+    let requests = harness.requests().await;
+    assert!(!requests
+        .iter()
+        .any(|request| request.method == "turn/start"));
 }
 
 #[tokio::test]

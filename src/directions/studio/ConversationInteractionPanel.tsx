@@ -5,12 +5,14 @@ import type {
   ConversationInteraction,
   PendingApprovalRequest,
   PendingUserInputQuestion,
+  ProviderKind,
 } from "../../lib/types";
 import { ConversationLinkedText } from "./ConversationLinkedText";
 
 type Props = {
   interaction: ConversationInteraction | null;
   queueCount: number;
+  provider: ProviderKind;
   submitShortcutKey: number;
   onRespondApproval: (response: ApprovalResponseInput) => Promise<void>;
   onSubmitAnswers: (answers: Record<string, string[]>) => Promise<void>;
@@ -19,6 +21,7 @@ type Props = {
 export function ConversationInteractionPanel({
   interaction,
   queueCount,
+  provider,
   submitShortcutKey,
   onRespondApproval,
   onSubmitAnswers,
@@ -89,10 +92,10 @@ export function ConversationInteractionPanel({
 
   const requestTitle = useMemo(() => {
     if (!interaction) return "";
-    if (interaction.kind === "userInput") return "Codex needs input";
+    if (interaction.kind === "userInput") return `${providerInputLabel(provider)} needs input`;
     if (interaction.kind === "approval") return interaction.title;
     return interaction.title;
-  }, [interaction]);
+  }, [interaction, provider]);
 
   if (!interaction) return null;
 
@@ -224,6 +227,15 @@ export function ConversationInteractionPanel({
       )}
     </section>
   );
+}
+
+function providerInputLabel(provider: ProviderKind) {
+  switch (provider) {
+    case "claude":
+      return "Claude";
+    default:
+      return "Codex";
+  }
 }
 
 function ApprovalPanel({
@@ -430,11 +442,9 @@ function buildUserInputAnswers(
 ) {
   return Object.fromEntries(
     questions.map((question) => {
-      const answers = [];
       const selected = selectedOptions[question.id];
       const custom = freeText[question.id]?.trim();
-      if (selected) answers.push(selected);
-      if (custom) answers.push(custom);
+      const answers = custom ? [custom] : selected ? [selected] : [];
       return [question.id, answers];
     }),
   );

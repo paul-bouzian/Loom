@@ -21,6 +21,7 @@ import type {
   CodexRateLimitSnapshot,
   CodexUsageEventPayload,
   ConversationEventPayload,
+  CreateThreadHandoffRequest,
   CreateThreadRequest,
   DraftThreadTarget,
   EnvironmentCapabilitiesSnapshot,
@@ -39,6 +40,7 @@ import type {
   PersistThreadComposerDraftInput,
   ProjectActionStateEventPayload,
   ProjectRecord,
+  ProviderRateLimitSnapshot,
   ReorderProjectsRequest,
   RunProjectActionRequest,
   RunProjectActionResult,
@@ -219,6 +221,12 @@ export function sendThreadMessage(
   return invoke<ThreadConversationSnapshot>("send_thread_message", { input });
 }
 
+export function createThreadHandoff(
+  input: CreateThreadHandoffRequest,
+): Promise<ThreadRecord> {
+  return invoke<ThreadRecord>("create_thread_handoff", { input });
+}
+
 export function readImageAsDataUrl(path: string): Promise<string> {
   return invoke<string>("read_image_as_data_url", { path });
 }
@@ -261,6 +269,10 @@ export function getEnvironmentCodexRateLimits(
   return invoke<CodexRateLimitSnapshot>("get_environment_codex_rate_limits", {
     environmentId,
   });
+}
+
+export function getClaudeRateLimits(): Promise<ProviderRateLimitSnapshot> {
+  return invoke<ProviderRateLimitSnapshot>("get_claude_rate_limits");
 }
 
 export function getEnvironmentCapabilities(

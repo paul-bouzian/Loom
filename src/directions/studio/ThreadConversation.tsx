@@ -341,8 +341,14 @@ export function ThreadConversation({
   ]);
 
   const selectedModel =
-    capabilities?.models.find((candidate) => candidate.id === resolvedComposer.model) ?? null;
+    capabilities?.models.find(
+      (candidate) =>
+        candidate.id === resolvedComposer.model &&
+        (candidate.provider ?? "codex") === resolvedComposer.provider,
+    ) ?? null;
   const selectedModelSupportsImages = modelSupportsImageInput(selectedModel);
+  const selectedModelUnavailable =
+    Boolean(capabilities?.models.length) && selectedModel === null;
   const effortOptions = selectedModel?.supportedReasoningEfforts ?? [
     resolvedComposer.reasoningEffort,
   ];
@@ -359,6 +365,7 @@ export function ThreadConversation({
     : !hasDraftContent && !hasAttachedImages;
   const sendDisabled =
     (missingRequiredContent ||
+      selectedModelUnavailable ||
       (hasAttachedImages && !selectedModelSupportsImages) ||
       isRunning ||
       isMutating ||
@@ -397,6 +404,7 @@ export function ThreadConversation({
     if (shouldShowFirstPromptNamingNotice(environment, thread, payload.text)) {
       setIsPreparingWorktreeName(true);
     }
+    resetComposerState();
     void sendMessage(
       thread.id,
       payload.text,
@@ -540,9 +548,17 @@ export function ThreadConversation({
         ) : null}
         {timelineEntries.map((entry) =>
           entry.kind === "item" ? (
-            <ConversationItemRow key={entry.item.id} item={entry.item} />
+            <ConversationItemRow
+              key={entry.item.id}
+              item={entry.item}
+              provider={snapshot?.provider ?? thread.provider}
+            />
           ) : (
-            <ConversationWorkActivityGroup key={entry.group.id} group={entry.group} />
+            <ConversationWorkActivityGroup
+              key={entry.group.id}
+              group={entry.group}
+              provider={snapshot?.provider ?? thread.provider}
+            />
           ),
         )}
         {isPreparingWorktreeName ? <FirstPromptNamingNotice /> : null}
@@ -567,18 +583,19 @@ export function ThreadConversation({
         {storeError ? (
           <ConversationBanner tone="error" title="Action failed" body={storeError} />
         ) : null}
+        <ConversationInteractionPanel
+          interaction={interaction}
+          provider={snapshot?.provider ?? thread.provider}
+          submitShortcutKey={approveOrSubmitKey}
+          queueCount={snapshot?.pendingInteractions.length ?? 0}
+          onRespondApproval={(response) =>
+            respondToApproval(thread.id, interaction?.id ?? "", response)
+          }
+          onSubmitAnswers={(answers) =>
+            respondToUserInput(thread.id, interaction?.id ?? "", answers)
+          }
+        />
       </div>
-      <ConversationInteractionPanel
-        interaction={interaction}
-        submitShortcutKey={approveOrSubmitKey}
-        queueCount={snapshot?.pendingInteractions.length ?? 0}
-        onRespondApproval={(response) =>
-          respondToApproval(thread.id, interaction?.id ?? "", response)
-        }
-        onSubmitAnswers={(answers) =>
-          respondToUserInput(thread.id, interaction?.id ?? "", answers)
-        }
-      />
       {!compactWorkActivity && snapshot ? (
         <SubagentStrip subagents={snapshot.subagents} />
       ) : null}
@@ -698,8 +715,17 @@ function resolveFallbackComposer(
   thread: ThreadRecord,
   settings: GlobalSettings | null,
 ): ConversationComposerSettings {
+  const provider =
+    thread.provider ??
+    thread.overrides.provider ??
+    settings?.defaultProvider ??
+    "codex";
   return {
-    model: thread.overrides.model ?? settings?.defaultModel ?? "gpt-5.4",
+    provider,
+    model:
+      thread.overrides.model ??
+      (settings?.defaultProvider === provider ? settings.defaultModel : null) ??
+      (provider === "claude" ? "claude-sonnet-4-6" : "gpt-5.4"),
     reasoningEffort:
       thread.overrides.reasoningEffort ??
       settings?.defaultReasoningEffort ??

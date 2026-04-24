@@ -35,8 +35,8 @@ use crate::error::{AppError, CommandError};
 use crate::events::{EmittedEvent, EventSink};
 use crate::services::workspace::{
     AddProjectRequest, ArchiveThreadRequest, CreateChatThreadRequest, CreateManagedWorktreeRequest,
-    CreateThreadRequest, RenameProjectRequest, RenameThreadRequest, ReorderProjectsRequest,
-    SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest,
+    CreateThreadHandoffRequest, CreateThreadRequest, RenameProjectRequest, RenameThreadRequest,
+    ReorderProjectsRequest, SetProjectSidebarCollapsedRequest, UpdateProjectSettingsRequest,
 };
 use crate::state::AppState;
 
@@ -313,6 +313,10 @@ async fn dispatch_request(
             let payload: InputEnvelope<SendThreadMessageInput> = decode_params(params)?;
             encode_result(conversation::send_thread_message_impl(state, payload.input).await)
         }
+        "create_thread_handoff" => {
+            let payload: InputEnvelope<CreateThreadHandoffRequest> = decode_params(params)?;
+            encode_result(conversation::create_thread_handoff_impl(state, payload.input).await)
+        }
         "read_image_as_data_url" => {
             let payload: PathEnvelope = decode_params(params)?;
             encode_result(system::read_image_as_data_url_impl(&payload.path))
@@ -343,6 +347,10 @@ async fn dispatch_request(
                 workspace::get_environment_codex_rate_limits_impl(payload.environment_id, state)
                     .await,
             )
+        }
+        "get_claude_rate_limits" => {
+            let _ = params;
+            encode_result(workspace::get_claude_rate_limits_impl(state).await)
         }
         "get_environment_capabilities" => {
             let payload: EnvironmentIdEnvelope = decode_params(params)?;
