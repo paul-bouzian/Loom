@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::domain::conversation::{
     ComposerTarget, ConversationComposerDraft, ConversationComposerSettings, ConversationItem,
-    ThreadConversationSnapshot,
+    ConversationMessageItem, ThreadConversationSnapshot,
 };
 use crate::domain::settings::{GlobalSettings, GlobalSettingsPatch, OpenTarget, ProviderKind};
 use crate::domain::shortcuts::ShortcutSettings;
@@ -3325,7 +3325,7 @@ fn handoff_imported_messages(
         .iter()
         .filter_map(|item| match item {
             ConversationItem::Message(message)
-                if !message.is_streaming && !message.text.trim().is_empty() =>
+                if !message.is_streaming && handoff_message_has_visible_content(message) =>
             {
                 Some(ThreadHandoffImportedMessage {
                     id: message.id.clone(),
@@ -3338,6 +3338,14 @@ fn handoff_imported_messages(
             _ => None,
         })
         .collect()
+}
+
+fn handoff_message_has_visible_content(message: &ConversationMessageItem) -> bool {
+    !message.text.trim().is_empty()
+        || message
+            .images
+            .as_ref()
+            .is_some_and(|images| !images.is_empty())
 }
 
 fn thread_status_value(status: ThreadStatus) -> &'static str {
@@ -4183,6 +4191,74 @@ mod tests {
             .service
             .thread_needs_auto_title(&handoff.id)
             .expect("handoff title check should load"));
+    }
+
+    #[test]
+    fn create_thread_handoff_preserves_image_only_messages() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("handoff-images"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let environment_id = project
+            .environments
+            .first()
+            .expect("local environment should exist")
+            .id
+            .clone();
+        let source = harness
+            .service
+            .create_thread(CreateThreadRequest {
+                environment_id: environment_id.clone(),
+                title: Some("Thread with image".to_string()),
+                overrides: None,
+            })
+            .expect("source thread should be created");
+        let mut snapshot = ThreadConversationSnapshot::new_for_provider(
+            source.id.clone(),
+            environment_id,
+            ProviderKind::Codex,
+            None,
+            Some("codex-thread-1".to_string()),
+            default_composer_settings(),
+        );
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "user-image-only".to_string(),
+                turn_id: Some("turn-image".to_string()),
+                role: ConversationRole::User,
+                text: String::new(),
+                images: Some(vec![ConversationImageAttachment::LocalImage {
+                    path: "/tmp/skein-image.png".to_string(),
+                }]),
+                is_streaming: false,
+            }));
+
+        let handoff = harness
+            .service
+            .create_thread_handoff(
+                CreateThreadHandoffRequest {
+                    source_thread_id: source.id,
+                    target_provider: ProviderKind::Claude,
+                },
+                &snapshot,
+            )
+            .expect("image-only handoff thread should be created");
+
+        let imported = handoff.handoff.expect("handoff metadata").imported_messages;
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].id, "user-image-only");
+        assert!(imported[0]
+            .images
+            .as_ref()
+            .is_some_and(|images| !images.is_empty()));
     }
 
     #[test]

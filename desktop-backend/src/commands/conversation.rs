@@ -9,7 +9,9 @@ use crate::domain::conversation::{
     ThreadComposerCatalog, ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
 use crate::domain::settings::ProviderKind;
-use crate::domain::workspace::{ThreadHandoffBootstrapStatus, ThreadHandoffState};
+use crate::domain::workspace::{
+    ThreadHandoffBootstrapStatus, ThreadHandoffImportedMessage, ThreadHandoffState,
+};
 use crate::domain::workspace::{WorkspaceEvent, WorkspaceEventKind};
 use crate::error::{AppError, CommandError};
 use crate::events::EventSink;
@@ -409,7 +411,7 @@ fn build_handoff_bootstrap_context(handoff: &ThreadHandoffState) -> String {
             block.push_str("- ");
             block.push_str(provider_role_label(message.role));
             block.push_str(": ");
-            block.push_str(&summarize_handoff_text(&message.text));
+            block.push_str(&summarize_handoff_message(message));
             block.push('\n');
         }
     }
@@ -418,7 +420,7 @@ fn build_handoff_bootstrap_context(handoff: &ThreadHandoffState) -> String {
         for message in recent {
             block.push_str(provider_role_label(message.role));
             block.push_str(":\n");
-            block.push_str(&sanitize_handoff_text(&message.text));
+            block.push_str(&sanitize_handoff_message(message));
             block.push_str("\n\n");
         }
     }
@@ -454,6 +456,27 @@ fn summarize_handoff_text(value: &str) -> String {
     let mut summary = compact.chars().take(LIMIT).collect::<String>();
     summary.push_str("...");
     summary
+}
+
+fn sanitize_handoff_message(message: &ThreadHandoffImportedMessage) -> String {
+    if !message.text.trim().is_empty() {
+        return sanitize_handoff_text(&message.text);
+    }
+    if message
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+    {
+        return "[image attachment]".to_string();
+    }
+    String::new()
+}
+
+fn summarize_handoff_message(message: &ThreadHandoffImportedMessage) -> String {
+    if !message.text.trim().is_empty() {
+        return summarize_handoff_text(&message.text);
+    }
+    sanitize_handoff_message(message)
 }
 
 fn validate_thread_composer_draft(

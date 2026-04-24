@@ -742,7 +742,7 @@ function snapshotWithPendingOptimisticMessage(
     return snapshot;
   }
 
-  if (hasConfirmedUserMessage(snapshot, pending.item)) {
+  if (hasConfirmedUserMessage(snapshot, pending)) {
     pendingOptimisticUserMessages.delete(threadId);
     if (!snapshotContainsItem(snapshot, pending.item.id)) {
       return snapshot;
@@ -778,15 +778,21 @@ function snapshotWithPendingOptimisticMessage(
 
 function hasConfirmedUserMessage(
   snapshot: ThreadConversationSnapshot,
-  pending: ConversationMessageItem,
+  pending: PendingOptimisticUserMessage,
 ): boolean {
-  return snapshot.items.some(
+  const anchorIndex = pending.afterItemId
+    ? snapshot.items.findIndex((item) => item.id === pending.afterItemId)
+    : -1;
+  const searchStart = anchorIndex >= 0
+    ? anchorIndex + 1
+    : Math.min(pending.baseItemCount, snapshot.items.length);
+  return snapshot.items.slice(searchStart).some(
     (item) =>
       item.kind === "message" &&
-      item.id !== pending.id &&
+      item.id !== pending.item.id &&
       item.role === "user" &&
-      item.text === pending.text &&
-      sameImageAttachments(item.images ?? null, pending.images ?? null),
+      item.text === pending.item.text &&
+      sameImageAttachments(item.images ?? null, pending.item.images ?? null),
   );
 }
 

@@ -556,6 +556,79 @@ describe("conversation store", () => {
     });
   });
 
+  it("does not confirm an optimistic repeat from older matching text", async () => {
+    const initialSnapshot = makeConversationSnapshot({
+      status: "idle",
+      items: [userMessage("user-old", "Done")],
+    });
+    const staleSnapshot = makeConversationSnapshot({
+      status: "running",
+      activeTurnId: "turn-repeat",
+      items: initialSnapshot.items,
+    });
+    const confirmedSnapshot = makeConversationSnapshot({
+      status: "running",
+      activeTurnId: "turn-repeat",
+      items: [
+        ...initialSnapshot.items,
+        userMessage("user-confirmed", "Done"),
+      ],
+    });
+    const deferred = deferredPromise<ThreadConversationSnapshot>();
+    let callback: (payload: {
+      threadId: string;
+      environmentId: string;
+      snapshot: ThreadConversationSnapshot;
+    }) => void = () => undefined;
+
+    mockedBridge.listenToConversationEvents.mockImplementation(async (...args) => {
+      callback = args[0] as typeof callback;
+      return () => undefined;
+    });
+    mockedBridge.sendThreadMessage.mockReturnValue(deferred.promise);
+    useConversationStore.setState((state) => ({
+      ...state,
+      snapshotsByThreadId: { "thread-1": initialSnapshot },
+      composerByThreadId: { "thread-1": initialSnapshot.composer },
+    }));
+
+    await useConversationStore.getState().initializeListener();
+    const sendPromise = useConversationStore
+      .getState()
+      .sendMessage("thread-1", "Done");
+
+    callback({
+      threadId: "thread-1",
+      environmentId: "env-1",
+      snapshot: staleSnapshot,
+    });
+
+    expect(
+      useConversationStore
+        .getState()
+        .snapshotsByThreadId["thread-1"].items.some(
+          (item) =>
+            item.kind === "message" &&
+            item.id.startsWith("optimistic-user-") &&
+            item.text === "Done",
+        ),
+    ).toBe(true);
+
+    deferred.resolve(confirmedSnapshot);
+    await sendPromise;
+
+    const items = useConversationStore.getState().snapshotsByThreadId["thread-1"].items;
+    expect(
+      items.some(
+        (item) => item.kind === "message" && item.id.startsWith("optimistic-user-"),
+      ),
+    ).toBe(false);
+    expect(items[items.length - 1]).toMatchObject({
+      id: "user-confirmed",
+      text: "Done",
+    });
+  });
+
   it("keeps submitPlanDecision successful when the workspace refresh fails afterwards", async () => {
     vi.useFakeTimers();
     const initialSnapshot = makeConversationSnapshot({

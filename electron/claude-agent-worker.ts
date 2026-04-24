@@ -170,6 +170,11 @@ type ImageContentBlock = {
   localByteSize: number;
 };
 
+type ReadMessagesResult = {
+  messages: SimpleMessage[];
+  fallbackUsed: boolean;
+};
+
 type SupportedImageMediaType =
   | "image/jpeg"
   | "image/png"
@@ -742,17 +747,20 @@ async function readMessagesWithFallback(
   sessionId: string,
   cwd: string,
   fallback: SimpleMessage[],
-): Promise<SimpleMessage[]> {
+): Promise<ReadMessagesResult> {
   const timeoutMs = 5000;
   try {
     return await Promise.race([
-      readMessages(sessionId, cwd),
-      new Promise<SimpleMessage[]>((resolve) =>
-        setTimeout(() => resolve(fallback), timeoutMs),
+      readMessages(sessionId, cwd).then((messages) => ({
+        messages,
+        fallbackUsed: false,
+      })),
+      new Promise<ReadMessagesResult>((resolve) =>
+        setTimeout(() => resolve({ messages: fallback, fallbackUsed: true }), timeoutMs),
       ),
     ]);
   } catch {
-    return fallback;
+    return { messages: fallback, fallbackUsed: true };
   }
 }
 
@@ -986,13 +994,15 @@ async function handleSend(requestId: number, payload: SendPayload) {
     writeEvent(requestId, tokenUsage);
   }
 
+  const messageResult = await readMessagesWithFallback(
+    providerThreadId,
+    payload.cwd,
+    streamedMessages,
+  );
   return {
     providerThreadId,
-    messages: await readMessagesWithFallback(
-      providerThreadId,
-      payload.cwd,
-      streamedMessages,
-    ),
+    messages: messageResult.messages,
+    messagesAuthoritative: !messageResult.fallbackUsed,
     planMarkdown: activeQuery.planMarkdown,
   };
 }
