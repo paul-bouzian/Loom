@@ -107,7 +107,7 @@ function ProviderUsageSegment({ usage }: { usage: CompactProviderUsage }) {
   const title = usageTitle(usage);
   if (usage.status === "idle" || (usage.status === "loading" && !usage.primary)) {
     return (
-      <span className="status-usage__provider" title={title}>
+      <span className="status-usage__provider" title={title} aria-label={title}>
         <ProviderLogo provider={usage.provider} size={14} decorative />
         <span className="status-usage__loading" aria-hidden="true">
           ...
@@ -121,6 +121,7 @@ function ProviderUsageSegment({ usage }: { usage: CompactProviderUsage }) {
       <span
         className="status-usage__provider status-usage__provider--muted"
         title={title}
+        aria-label={title}
       >
         <ProviderLogo provider={usage.provider} size={14} decorative />
         <span className="status-usage__empty">--</span>
@@ -129,20 +130,16 @@ function ProviderUsageSegment({ usage }: { usage: CompactProviderUsage }) {
   }
 
   return (
-    <span className="status-usage__provider" title={title}>
+    <span className="status-usage__provider" title={title} aria-label={title}>
       <ProviderLogo provider={usage.provider} size={14} decorative />
       {usage.primary ? <MiniUsageBar window={usage.primary} /> : null}
-      {usage.primary ? (
-        <UsageWindowLabel window={usage.primary} label="5h" />
-      ) : null}
+      {usage.primary ? <UsageWindowLabel window={usage.primary} /> : null}
       {usage.primary && usage.secondary ? (
         <span className="status-usage__separator" aria-hidden="true">
           ·
         </span>
       ) : null}
-      {usage.secondary ? (
-        <UsageWindowLabel window={usage.secondary} label="wk" />
-      ) : null}
+      {usage.secondary ? <UsageWindowLabel window={usage.secondary} /> : null}
       {usage.status === "error" ? (
         <span className="status-usage__warning" aria-hidden="true">
           !
@@ -166,17 +163,25 @@ function MiniUsageBar({ window }: { window: UsageWindow }) {
 
 function UsageWindowLabel({
   window,
-  label,
 }: {
   window: UsageWindow;
-  label: "5h" | "wk";
 }) {
   const remainingPercent = usageRemainingPercent(window);
+  const label = formatUsageWindowDuration(window.windowDurationMins);
   return (
     <span className="status-usage__label">
       {remainingPercent === null ? "--" : `${remainingPercent}%`} {label}
     </span>
   );
+}
+
+function formatUsageWindowDuration(windowDurationMins?: number | null) {
+  if (!windowDurationMins) return "--";
+  if (windowDurationMins === 10_080) return "wk";
+  if (windowDurationMins % 10_080 === 0) return `${windowDurationMins / 10_080}wk`;
+  if (windowDurationMins % 1_440 === 0) return `${windowDurationMins / 1_440}d`;
+  if (windowDurationMins % 60 === 0) return `${windowDurationMins / 60}h`;
+  return `${windowDurationMins}m`;
 }
 
 function mapCodexUsage(

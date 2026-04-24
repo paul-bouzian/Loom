@@ -90,7 +90,9 @@ enum ClaudeControlMessage {
         interaction_id: String,
         approved: bool,
     },
-    Interrupt,
+    Interrupt {
+        request_id: u64,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -587,9 +589,11 @@ impl ClaudeRuntimeSession {
             reconcile_snapshot_status(snapshot);
             (sender, snapshot.clone())
         };
-        sender.send(ClaudeControlMessage::Interrupt).map_err(|_| {
-            AppError::Runtime("Claude runtime stopped before receiving interrupt.".to_string())
-        })?;
+        sender
+            .send(ClaudeControlMessage::Interrupt { request_id: 1 })
+            .map_err(|_| {
+                AppError::Runtime("Claude runtime stopped before receiving interrupt.".to_string())
+            })?;
         self.store_and_emit(snapshot.clone()).await;
         Ok(snapshot)
     }
@@ -1138,15 +1142,12 @@ fn merge_claude_messages(
         if message.text.trim().is_empty() {
             continue;
         }
-        if snapshot.items.iter().any(|item| {
-            matches!(
-                item,
-                ConversationItem::Message(existing)
-                    if existing.id == message.id
-                        || (existing.role == message.role
-                            && existing.text.trim() == message.text.trim())
-            )
-        }) {
+        if snapshot.items.iter().any(
+            |item| matches!(item, ConversationItem::Message(existing) if existing.id == message.id),
+        ) {
+            continue;
+        }
+        if replace_current_turn_provisional_message(snapshot, &message) {
             continue;
         }
         snapshot
@@ -1159,6 +1160,44 @@ fn merge_claude_messages(
                 images: None,
                 is_streaming: false,
             }));
+    }
+}
+
+fn replace_current_turn_provisional_message(
+    snapshot: &mut ThreadConversationSnapshot,
+    message: &ClaudeSimpleMessage,
+) -> bool {
+    let current_turn_id = snapshot.active_turn_id.as_deref();
+    let Some(ConversationItem::Message(existing)) = snapshot.items.iter_mut().rev().find(|item| {
+        matches!(
+            item,
+            ConversationItem::Message(existing)
+                if existing.role == message.role
+                    && existing.text.trim() == message.text.trim()
+                    && is_current_turn_provisional_message(existing, current_turn_id)
+        )
+    }) else {
+        return false;
+    };
+
+    existing.id = message.id.clone();
+    existing.is_streaming = false;
+    true
+}
+
+fn is_current_turn_provisional_message(
+    message: &ConversationMessageItem,
+    current_turn_id: Option<&str>,
+) -> bool {
+    match message.role {
+        ConversationRole::User => {
+            message.id.starts_with("local-user-") && message.turn_id.is_none()
+        }
+        ConversationRole::Assistant => {
+            message.id.starts_with("claude-turn-")
+                && message.id.contains("-assistant-")
+                && message.turn_id.as_deref() == current_turn_id
+        }
     }
 }
 
@@ -1938,6 +1977,99 @@ mod tests {
     }
 
     #[test]
+    fn merge_claude_messages_keeps_repeated_text_from_distinct_messages() {
+        let mut snapshot = snapshot();
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "assistant-old".to_string(),
+                turn_id: Some("turn-old".to_string()),
+                role: ConversationRole::Assistant,
+                text: "Done".to_string(),
+                images: None,
+                is_streaming: false,
+            }));
+
+        merge_claude_messages(
+            &mut snapshot,
+            vec![ClaudeSimpleMessage {
+                id: "assistant-new".to_string(),
+                role: ConversationRole::Assistant,
+                text: "Done".to_string(),
+            }],
+        );
+
+        let repeated = snapshot
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    ConversationItem::Message(message)
+                        if message.role == ConversationRole::Assistant && message.text == "Done"
+                )
+            })
+            .count();
+        assert_eq!(repeated, 2);
+    }
+
+    #[test]
+    fn merge_claude_messages_replaces_current_turn_provisional_messages() {
+        let mut snapshot = snapshot();
+        snapshot.active_turn_id = Some("turn-current".to_string());
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "local-user-temp".to_string(),
+                turn_id: None,
+                role: ConversationRole::User,
+                text: "Thanks".to_string(),
+                images: None,
+                is_streaming: false,
+            }));
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "claude-turn-current-assistant-0".to_string(),
+                turn_id: Some("turn-current".to_string()),
+                role: ConversationRole::Assistant,
+                text: "Done".to_string(),
+                images: None,
+                is_streaming: true,
+            }));
+
+        merge_claude_messages(
+            &mut snapshot,
+            vec![
+                ClaudeSimpleMessage {
+                    id: "provider-user".to_string(),
+                    role: ConversationRole::User,
+                    text: "Thanks".to_string(),
+                },
+                ClaudeSimpleMessage {
+                    id: "provider-assistant".to_string(),
+                    role: ConversationRole::Assistant,
+                    text: "Done".to_string(),
+                },
+            ],
+        );
+
+        assert_eq!(snapshot.items.len(), 2);
+        assert!(matches!(
+            &snapshot.items[0],
+            ConversationItem::Message(message)
+                if message.id == "provider-user" && message.text == "Thanks"
+        ));
+        assert!(matches!(
+            &snapshot.items[1],
+            ConversationItem::Message(message)
+                if message.id == "provider-assistant"
+                    && message.text == "Done"
+                    && !message.is_streaming
+        ));
+    }
+
+    #[test]
     fn claude_user_input_event_creates_actionable_interaction() {
         let mut snapshot = snapshot();
         snapshot.active_turn_id = Some("turn-1".to_string());
@@ -2095,7 +2227,7 @@ mod tests {
         assert!(interrupted.active_turn_id.is_none());
         assert!(matches!(
             receiver.recv().await,
-            Some(ClaudeControlMessage::Interrupt)
+            Some(ClaudeControlMessage::Interrupt { request_id: 1 })
         ));
     }
 
@@ -2190,10 +2322,13 @@ mod tests {
             })
         );
 
-        let interrupt = serde_json::to_value(ClaudeControlMessage::Interrupt)
+        let interrupt = serde_json::to_value(ClaudeControlMessage::Interrupt { request_id: 1 })
             .expect("interrupt message should serialize");
 
-        assert_eq!(interrupt, serde_json::json!({ "type": "interrupt" }));
+        assert_eq!(
+            interrupt,
+            serde_json::json!({ "type": "interrupt", "requestId": 1 })
+        );
     }
 
     #[test]

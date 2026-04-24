@@ -61,6 +61,8 @@ describe("StatusUsageBar", () => {
     render(<StatusUsageBar />);
 
     expect(screen.getByLabelText("Provider usage")).toBeInTheDocument();
+    expect(screen.getByLabelText("Claude usage")).toBeInTheDocument();
+    expect(screen.getByLabelText("OpenAI usage")).toBeInTheDocument();
     expect(screen.getByText("93% 5h")).toBeInTheDocument();
     expect(screen.getByText("87% wk")).toBeInTheDocument();
     expect(screen.getByText("82% 5h")).toBeInTheDocument();
@@ -86,7 +88,37 @@ describe("StatusUsageBar", () => {
 
     render(<StatusUsageBar />);
 
+    expect(screen.getByLabelText("OpenAI: Codex usage failed")).toBeInTheDocument();
+    expect(screen.getByLabelText("Claude: Claude usage failed")).toBeInTheDocument();
     expect(screen.getByTitle("OpenAI: Codex usage failed")).toHaveTextContent("!");
     expect(screen.getByTitle("Claude: Claude usage failed")).toHaveTextContent("!");
+  });
+
+  it("derives usage window labels from provider durations", () => {
+    useCodexUsageStore.setState((state) => ({
+      ...state,
+      snapshot: {
+        primary: { usedPercent: 20, windowDurationMins: 60 },
+        secondary: { usedPercent: 40, windowDurationMins: 1_440 },
+      },
+    }));
+    useClaudeUsageStore.setState((state) => ({
+      ...state,
+      snapshot: {
+        provider: "claude",
+        primary: { usedPercent: 10, windowDurationMins: 90 },
+        secondary: { usedPercent: 25, windowDurationMins: 20_160 },
+        updatedAt: Date.now(),
+        error: null,
+        status: "ok",
+      },
+    }));
+
+    render(<StatusUsageBar />);
+
+    expect(screen.getByText("90% 90m")).toBeInTheDocument();
+    expect(screen.getByText("75% 2wk")).toBeInTheDocument();
+    expect(screen.getByText("80% 1h")).toBeInTheDocument();
+    expect(screen.getByText("60% 1d")).toBeInTheDocument();
   });
 });

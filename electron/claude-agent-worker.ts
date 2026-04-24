@@ -28,6 +28,7 @@ type WorkerControl = {
   approved: boolean;
 } | {
   type: "interrupt";
+  requestId: number;
 };
 
 type OpenPayload = {
@@ -161,6 +162,12 @@ type InFlightTool = {
 type ActiveQuery = {
   abortController: AbortController;
   interrupted: boolean;
+  planMarkdown: string | null;
+};
+
+type ImageContentBlock = {
+  block: ContentBlockParam;
+  localByteSize: number;
 };
 
 type SupportedImageMediaType =
@@ -176,6 +183,7 @@ const pendingUserInputs = new Map<
 const pendingApprovals = new Map<string, (approved: boolean) => void>();
 const activeQueries = new Map<number, ActiveQuery>();
 const MAX_LOCAL_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_TOTAL_LOCAL_IMAGE_BYTES = 50 * 1024 * 1024;
 
 function write(value: unknown) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -261,11 +269,7 @@ async function approveToolUse(
   if (toolName === "ExitPlanMode") {
     const plan = extractPlanFromInput(input);
     if (plan) {
-      writeEvent(requestId, {
-        kind: "planReady",
-        itemId: options.toolUseID,
-        markdown: plan,
-      });
+      emitPlanReady(requestId, activeQueries.get(requestId), options.toolUseID, plan);
     }
     return {
       behavior: "deny",
@@ -617,6 +621,7 @@ function processUserToolResults(
 
 function processStreamEvent(
   requestId: number,
+  activeQuery: ActiveQuery,
   itemPrefix: string,
   message: { event?: unknown },
   toolsByIndex: Map<number, InFlightTool>,
@@ -654,7 +659,7 @@ function processStreamEvent(
     if (toolName === "ExitPlanMode") {
       const plan = extractPlanFromInput(input);
       if (plan) {
-        writeEvent(requestId, { kind: "planReady", itemId, markdown: plan });
+        emitPlanReady(requestId, activeQuery, itemId, plan);
       }
       return;
     }
@@ -754,13 +759,16 @@ async function readMessagesWithFallback(
 async function promptFor(payload: SendPayload): Promise<string | AsyncIterable<SDKUserMessage>> {
   const images = payload.images ?? [];
   if (images.length === 0) return payload.text;
-  const content: ContentBlockParam[] = [
-    {
-      type: "text",
-      text: payload.text,
-    },
-    ...(await Promise.all(images.map((image) => imageToContentBlock(image)))),
-  ];
+  const content: ContentBlockParam[] = [{
+    type: "text",
+    text: payload.text,
+  }];
+  let remainingLocalImageBytes = MAX_TOTAL_LOCAL_IMAGE_BYTES;
+  for (const image of images) {
+    const result = await imageToContentBlock(image, remainingLocalImageBytes);
+    remainingLocalImageBytes -= result.localByteSize;
+    content.push(result.block);
+  }
   const message: SDKUserMessage = {
     type: "user",
     parent_tool_use_id: null,
@@ -774,14 +782,20 @@ async function promptFor(payload: SendPayload): Promise<string | AsyncIterable<S
   })();
 }
 
-async function imageToContentBlock(image: ImagePayload): Promise<ContentBlockParam> {
+async function imageToContentBlock(
+  image: ImagePayload,
+  remainingLocalImageBytes: number,
+): Promise<ImageContentBlock> {
   if (image.type === "image") {
     return {
-      type: "image",
-      source: {
-        type: "url",
-        url: image.url,
+      block: {
+        type: "image",
+        source: {
+          type: "url",
+          url: image.url,
+        },
       },
+      localByteSize: 0,
     };
   }
   const file = await stat(image.path);
@@ -791,18 +805,24 @@ async function imageToContentBlock(image: ImagePayload): Promise<ContentBlockPar
   if (file.size > MAX_LOCAL_IMAGE_BYTES) {
     throw new Error("Local image attachment exceeds the 25 MiB limit.");
   }
+  if (file.size > remainingLocalImageBytes) {
+    throw new Error("Local image attachments exceed the 50 MiB total limit.");
+  }
   const bytes = await readFile(image.path);
   const mediaType = mediaTypeForBytes(bytes);
   if (!mediaType) {
     throw new Error("Local attachment is not a supported image file.");
   }
   return {
-    type: "image",
-    source: {
-      type: "base64",
-      data: bytes.toString("base64"),
-      media_type: mediaType,
+    block: {
+      type: "image",
+      source: {
+        type: "base64",
+        data: bytes.toString("base64"),
+        media_type: mediaType,
+      },
     },
+    localByteSize: file.size,
   };
 }
 
@@ -865,13 +885,13 @@ async function handleOpen(payload: OpenPayload) {
 
 async function handleSend(requestId: number, payload: SendPayload) {
   let providerThreadId = payload.providerThreadId?.trim() || null;
-  let planMarkdown: string | null = null;
   let resultError: string | null = null;
   let resultUsage: unknown = null;
   let resultModelUsage: unknown = null;
   const activeQuery: ActiveQuery = {
     abortController: new AbortController(),
     interrupted: false,
+    planMarkdown: null,
   };
   const itemPrefix = `claude-turn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const toolsByIndex = new Map<number, InFlightTool>();
@@ -899,16 +919,22 @@ async function handleSend(requestId: number, payload: SendPayload) {
         writeEvent(requestId, { kind: "session", providerThreadId });
       }
       if (message.type === "stream_event") {
-        processStreamEvent(requestId, itemPrefix, message, toolsByIndex, toolsById);
+        processStreamEvent(
+          requestId,
+          activeQuery,
+          itemPrefix,
+          message,
+          toolsByIndex,
+          toolsById,
+        );
       }
       if (message.type === "user") {
         processUserToolResults(requestId, message, toolsById);
       }
       if (message.type === "assistant") {
         const discoveredPlan = planFromContent(message.message.content);
-        if (discoveredPlan && discoveredPlan !== planMarkdown) {
-          planMarkdown = discoveredPlan;
-          writeEvent(requestId, { kind: "planReady", markdown: discoveredPlan });
+        if (discoveredPlan) {
+          emitPlanReady(requestId, activeQuery, undefined, discoveredPlan);
         }
         const simple = messageToSimple(message);
         if (simple) streamedMessages.push(simple);
@@ -967,8 +993,24 @@ async function handleSend(requestId: number, payload: SendPayload) {
       payload.cwd,
       streamedMessages,
     ),
-    planMarkdown,
+    planMarkdown: activeQuery.planMarkdown,
   };
+}
+
+function emitPlanReady(
+  requestId: number,
+  activeQuery: ActiveQuery | undefined,
+  itemId: string | undefined,
+  markdown: string,
+) {
+  const plan = markdown.trim();
+  if (!plan || activeQuery?.planMarkdown === plan) {
+    return;
+  }
+  if (activeQuery) {
+    activeQuery.planMarkdown = plan;
+  }
+  writeEvent(requestId, { kind: "planReady", itemId, markdown: plan });
 }
 
 async function tokenUsageEventFor(
@@ -1081,10 +1123,10 @@ async function handleRequest(request: WorkerRequest) {
 
 function handleControl(control: WorkerControl) {
   if (control.type === "interrupt") {
-    for (const active of activeQueries.values()) {
-      active.interrupted = true;
-      active.abortController.abort();
-    }
+    const active = activeQueries.get(control.requestId);
+    if (!active) return;
+    active.interrupted = true;
+    active.abortController.abort();
     return;
   }
   if (control.type === "userInputResponse") {
