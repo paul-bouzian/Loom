@@ -5,8 +5,9 @@ use crate::app_identity::{FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME, WORKSPACE_EVEN
 use crate::domain::conversation::{
     ComposerFileSearchResult, ComposerMentionBindingInput, ComposerTarget,
     ConversationComposerDraft, ConversationComposerSettings, ConversationImageAttachment,
-    RespondToApprovalRequestInput, RespondToUserInputRequestInput, SubmitPlanDecisionInput,
-    ThreadComposerCatalog, ThreadConversationOpenResponse, ThreadConversationSnapshot,
+    ConversationStatus, RespondToApprovalRequestInput, RespondToUserInputRequestInput,
+    SubmitPlanDecisionInput, ThreadComposerCatalog, ThreadConversationOpenResponse,
+    ThreadConversationSnapshot,
 };
 use crate::domain::settings::ProviderKind;
 use crate::domain::workspace::{
@@ -234,13 +235,24 @@ pub async fn send_thread_message_impl(
         "send",
     )?;
 
-    if had_pending_handoff {
+    if had_pending_handoff && should_complete_handoff_bootstrap(&result.snapshot) {
         state
             .workspace
             .complete_thread_handoff_bootstrap(&input.thread_id)?;
     }
 
     Ok(result.snapshot)
+}
+
+fn should_complete_handoff_bootstrap(snapshot: &ThreadConversationSnapshot) -> bool {
+    handoff_bootstrap_status_is_complete(snapshot.status)
+}
+
+fn handoff_bootstrap_status_is_complete(status: ConversationStatus) -> bool {
+    !matches!(
+        status,
+        ConversationStatus::Interrupted | ConversationStatus::Failed
+    )
 }
 
 pub async fn create_thread_handoff_impl(
@@ -589,12 +601,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_composer_target, validate_non_blank_request_key, validate_non_blank_thread_id,
+        handoff_bootstrap_status_is_complete, validate_composer_target,
+        validate_non_blank_request_key, validate_non_blank_thread_id,
         validate_thread_composer_draft,
     };
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ComposerTarget,
-        ConversationComposerDraft, ConversationImageAttachment,
+        ConversationComposerDraft, ConversationImageAttachment, ConversationStatus,
     };
 
     #[test]
@@ -646,5 +659,21 @@ mod tests {
 
         assert_eq!(error.code, "validation_error");
         assert!(error.message.contains("Request key cannot be empty"));
+    }
+
+    #[test]
+    fn interrupted_handoff_bootstrap_stays_pending_for_retry() {
+        assert!(!handoff_bootstrap_status_is_complete(
+            ConversationStatus::Interrupted
+        ));
+        assert!(!handoff_bootstrap_status_is_complete(
+            ConversationStatus::Failed
+        ));
+        assert!(handoff_bootstrap_status_is_complete(
+            ConversationStatus::Completed
+        ));
+        assert!(handoff_bootstrap_status_is_complete(
+            ConversationStatus::WaitingForExternalAction
+        ));
     }
 }
