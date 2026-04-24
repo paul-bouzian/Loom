@@ -195,9 +195,11 @@ function mapCodexUsage(
         : "ok"
       : loading
         ? "loading"
-        : hasSourceEnvironment
-          ? "idle"
-          : "unavailable",
+        : error
+          ? "error"
+          : hasSourceEnvironment
+            ? "idle"
+            : "unavailable",
     error,
   };
 }
@@ -215,7 +217,9 @@ function mapClaudeUsage(
       ? snapshot.status
       : loading
         ? "loading"
-        : "idle",
+        : error
+          ? "error"
+          : "idle",
     error: error ?? snapshot?.error ?? null,
   };
 }

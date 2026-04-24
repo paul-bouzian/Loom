@@ -90,6 +90,7 @@ enum ClaudeControlMessage {
         interaction_id: String,
         approved: bool,
     },
+    Interrupt,
 }
 
 #[derive(Debug, Deserialize)]
@@ -483,6 +484,21 @@ impl ClaudeRuntimeSession {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
+                if is_claude_interrupt_error(&error) {
+                    let snapshot = self
+                        .state
+                        .lock()
+                        .await
+                        .snapshots_by_thread
+                        .get(&context.thread_id)
+                        .cloned()
+                        .unwrap_or_else(|| rollback_snapshot.clone());
+                    return Ok(SendMessageResult {
+                        snapshot,
+                        new_provider_thread_id: None,
+                        new_codex_thread_id: None,
+                    });
+                }
                 let mut snapshot = rollback_snapshot;
                 snapshot.status = ConversationStatus::Failed;
                 snapshot.error = Some(ConversationErrorSnapshot {
@@ -539,6 +555,43 @@ impl ClaudeRuntimeSession {
         context: ThreadRuntimeContext,
     ) -> AppResult<ThreadConversationSnapshot> {
         Ok(self.open_thread(context).await?.snapshot)
+    }
+
+    pub async fn interrupt_thread(
+        &self,
+        context: ThreadRuntimeContext,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        let (sender, snapshot) = {
+            let mut state = self.state.lock().await;
+            let sender = state
+                .control_senders_by_thread
+                .get(&context.thread_id)
+                .cloned();
+            let snapshot = state
+                .snapshots_by_thread
+                .get_mut(&context.thread_id)
+                .ok_or_else(|| {
+                    AppError::NotFound("Thread conversation is not open.".to_string())
+                })?;
+            if snapshot.active_turn_id.is_none() {
+                return Ok(snapshot.clone());
+            }
+            let sender = sender.ok_or_else(|| {
+                AppError::Runtime("Claude runtime is not running a turn.".to_string())
+            })?;
+            snapshot.active_turn_id = None;
+            snapshot.status = ConversationStatus::Interrupted;
+            snapshot.pending_interactions.clear();
+            clear_streaming_flags(&mut snapshot.items);
+            complete_running_tools(&mut snapshot.items);
+            reconcile_snapshot_status(snapshot);
+            (sender, snapshot.clone())
+        };
+        sender.send(ClaudeControlMessage::Interrupt).map_err(|_| {
+            AppError::Runtime("Claude runtime stopped before receiving interrupt.".to_string())
+        })?;
+        self.store_and_emit(snapshot.clone()).await;
+        Ok(snapshot)
     }
 
     pub async fn respond_to_user_input_request(
@@ -1533,6 +1586,10 @@ fn supported_claude_service_tier(
     })
 }
 
+fn is_claude_interrupt_error(error: &AppError) -> bool {
+    error.to_string().contains("Claude turn was interrupted.")
+}
+
 async fn run_claude_worker<P, R>(
     session: Option<(&ClaudeRuntimeSession, &str)>,
     kind: &'static str,
@@ -1738,6 +1795,32 @@ mod tests {
                 service_tier: None,
             },
         )
+    }
+
+    fn context() -> crate::services::workspace::ThreadRuntimeContext {
+        crate::services::workspace::ThreadRuntimeContext {
+            thread_id: "thread-1".to_string(),
+            environment_id: "env-1".to_string(),
+            environment_path: "/tmp/skein".to_string(),
+            provider: ProviderKind::Claude,
+            provider_thread_id: Some("claude-thread-1".to_string()),
+            codex_thread_id: None,
+            composer: ConversationComposerSettings {
+                provider: ProviderKind::Claude,
+                model: "claude-sonnet-4-6".to_string(),
+                reasoning_effort: ReasoningEffort::High,
+                collaboration_mode: CollaborationMode::Build,
+                approval_policy: ApprovalPolicy::AskToEdit,
+                service_tier: None,
+            },
+            codex_binary_path: None,
+            claude_binary_path: None,
+            handoff: None,
+            handoff_bootstrap_context: None,
+            stream_assistant_responses: true,
+            multi_agent_nudge_enabled: false,
+            multi_agent_nudge_max_subagents: 0,
+        }
     }
 
     #[test]
@@ -1983,6 +2066,39 @@ mod tests {
             .contains_key("thread-1"));
     }
 
+    #[tokio::test]
+    async fn interrupt_thread_aborts_active_claude_worker() {
+        let session = ClaudeRuntimeSession::new(EventSink::noop(), "test".to_string());
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let mut snapshot = snapshot();
+        snapshot.active_turn_id = Some("turn-1".to_string());
+        snapshot.status = ConversationStatus::Running;
+        session
+            .state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .insert("thread-1".to_string(), snapshot);
+        session
+            .state
+            .lock()
+            .await
+            .control_senders_by_thread
+            .insert("thread-1".to_string(), sender);
+
+        let interrupted = session
+            .interrupt_thread(context())
+            .await
+            .expect("active Claude turn should interrupt");
+
+        assert_eq!(interrupted.status, ConversationStatus::Interrupted);
+        assert!(interrupted.active_turn_id.is_none());
+        assert!(matches!(
+            receiver.recv().await,
+            Some(ClaudeControlMessage::Interrupt)
+        ));
+    }
+
     #[test]
     fn hidden_user_message_filter_removes_internal_plan_approval_prompt() {
         let messages = vec![
@@ -2073,6 +2189,11 @@ mod tests {
                 "approved": true
             })
         );
+
+        let interrupt = serde_json::to_value(ClaudeControlMessage::Interrupt)
+            .expect("interrupt message should serialize");
+
+        assert_eq!(interrupt, serde_json::json!({ "type": "interrupt" }));
     }
 
     #[test]

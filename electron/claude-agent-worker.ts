@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import process from "node:process";
 
 import {
@@ -26,6 +26,8 @@ type WorkerControl = {
   type: "approvalResponse";
   interactionId: string;
   approved: boolean;
+} | {
+  type: "interrupt";
 };
 
 type OpenPayload = {
@@ -156,11 +158,24 @@ type InFlightTool = {
   lastInputFingerprint?: string;
 };
 
+type ActiveQuery = {
+  abortController: AbortController;
+  interrupted: boolean;
+};
+
+type SupportedImageMediaType =
+  | "image/jpeg"
+  | "image/png"
+  | "image/gif"
+  | "image/webp";
+
 const pendingUserInputs = new Map<
   string,
   (answers: Record<string, string[]>) => void
 >();
 const pendingApprovals = new Map<string, (approved: boolean) => void>();
+const activeQueries = new Map<number, ActiveQuery>();
+const MAX_LOCAL_IMAGE_BYTES = 25 * 1024 * 1024;
 
 function write(value: unknown) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -199,9 +214,14 @@ function permissionMode(payload: SendPayload): PermissionMode {
   return "default";
 }
 
-function optionsFor(payload: SendPayload, requestId: number): Options {
+function optionsFor(
+  payload: SendPayload,
+  requestId: number,
+  abortController: AbortController,
+): Options {
   const mode = permissionMode(payload);
   return {
+    abortController,
     cwd: payload.cwd,
     model: payload.model,
     resume: payload.providerThreadId?.trim() || undefined,
@@ -354,10 +374,16 @@ async function askUserQuestion(
 
 function parseAskUserQuestions(input: Record<string, unknown>): UserInputQuestion[] {
   const rawQuestions = Array.isArray(input.questions) ? input.questions : [];
+  const usedIds = new Set<string>();
   return rawQuestions.map((value, index) => {
     const question = value && typeof value === "object" ? value as Record<string, unknown> : {};
     const header = stringFromUnknown(question.header) || `Question ${index + 1}`;
     const questionText = stringFromUnknown(question.question);
+    const id = uniqueFieldKey(
+      stringFromUnknown(question.id) || questionText || header,
+      `question-${index + 1}`,
+      usedIds,
+    );
     const options = Array.isArray(question.options)
       ? question.options.map((option) => {
           const entry = option && typeof option === "object" ? option as Record<string, unknown> : {};
@@ -368,7 +394,7 @@ function parseAskUserQuestions(input: Record<string, unknown>): UserInputQuestio
         }).filter((option) => option.label)
       : [];
     return {
-      id: questionText || header,
+      id,
       header,
       question: questionText,
       options,
@@ -381,16 +407,32 @@ function flattenAnswersForClaude(
   answers: Record<string, string[]>,
 ) {
   const flattened: Record<string, string> = {};
+  const usedKeys = new Set<string>();
   for (const question of questions) {
     const selected =
       answers[question.id] ??
       answers[question.question] ??
       answers[question.header] ??
       [];
-    const key = question.question || question.header || question.id;
+    const key = uniqueFieldKey(question.id || question.question || question.header, question.id, usedKeys);
     flattened[key] = selected.filter((value) => value.trim()).join(", ");
   }
   return flattened;
+}
+
+function uniqueFieldKey(candidate: string, fallback: string, used: Set<string>) {
+  const base = (candidate || fallback).trim() || fallback;
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+  let index = 2;
+  while (used.has(`${base}-${index}`)) {
+    index += 1;
+  }
+  const unique = `${base}-${index}`;
+  used.add(unique);
+  return unique;
 }
 
 function stringFromUnknown(value: unknown) {
@@ -742,30 +784,75 @@ async function imageToContentBlock(image: ImagePayload): Promise<ContentBlockPar
       },
     };
   }
+  const file = await stat(image.path);
+  if (!file.isFile()) {
+    throw new Error("Local image attachment must be a file.");
+  }
+  if (file.size > MAX_LOCAL_IMAGE_BYTES) {
+    throw new Error("Local image attachment exceeds the 25 MiB limit.");
+  }
   const bytes = await readFile(image.path);
+  const mediaType = mediaTypeForBytes(bytes);
+  if (!mediaType) {
+    throw new Error("Local attachment is not a supported image file.");
+  }
   return {
     type: "image",
     source: {
       type: "base64",
       data: bytes.toString("base64"),
-      media_type: mediaTypeForPath(image.path),
+      media_type: mediaType,
     },
   };
 }
 
-function mediaTypeForPath(path: string) {
-  const extension = path.split(".").pop()?.toLowerCase();
-  switch (extension) {
-    case "jpg":
-    case "jpeg":
-      return "image/jpeg" as const;
-    case "gif":
-      return "image/gif" as const;
-    case "webp":
-      return "image/webp" as const;
-    default:
-      return "image/png" as const;
+function mediaTypeForBytes(bytes: Uint8Array): SupportedImageMediaType | null {
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "image/png";
   }
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return "image/jpeg";
+  }
+  if (
+    bytes.length >= 6 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38 &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61
+  ) {
+    return "image/gif";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  return null;
 }
 
 async function handleOpen(payload: OpenPayload) {
@@ -782,6 +869,10 @@ async function handleSend(requestId: number, payload: SendPayload) {
   let resultError: string | null = null;
   let resultUsage: unknown = null;
   let resultModelUsage: unknown = null;
+  const activeQuery: ActiveQuery = {
+    abortController: new AbortController(),
+    interrupted: false,
+  };
   const itemPrefix = `claude-turn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const toolsByIndex = new Map<number, InFlightTool>();
   const toolsById = new Map<string, InFlightTool>();
@@ -792,47 +883,63 @@ async function handleSend(requestId: number, payload: SendPayload) {
       text: payload.visibleText,
     },
   ];
-  const conversation = query({
-    prompt: await promptFor(payload),
-    options: optionsFor(payload, requestId),
-  });
+  activeQueries.set(requestId, activeQuery);
 
-  for await (const message of conversation) {
-    const sessionId = "session_id" in message ? message.session_id : null;
-    if (typeof sessionId === "string" && sessionId) {
-      providerThreadId = sessionId;
-      writeEvent(requestId, { kind: "session", providerThreadId });
-    }
-    if (message.type === "stream_event") {
-      processStreamEvent(requestId, itemPrefix, message, toolsByIndex, toolsById);
-    }
-    if (message.type === "user") {
-      processUserToolResults(requestId, message, toolsById);
-    }
-    if (message.type === "assistant") {
-      planMarkdown ??= planFromContent(message.message.content);
-      if (planMarkdown) {
-        writeEvent(requestId, { kind: "planReady", markdown: planMarkdown });
+  let conversation: ReturnType<typeof query> | null = null;
+  try {
+    conversation = query({
+      prompt: await promptFor(payload),
+      options: optionsFor(payload, requestId, activeQuery.abortController),
+    });
+
+    for await (const message of conversation) {
+      const sessionId = "session_id" in message ? message.session_id : null;
+      if (typeof sessionId === "string" && sessionId) {
+        providerThreadId = sessionId;
+        writeEvent(requestId, { kind: "session", providerThreadId });
       }
-      const simple = messageToSimple(message);
-      if (simple) streamedMessages.push(simple);
+      if (message.type === "stream_event") {
+        processStreamEvent(requestId, itemPrefix, message, toolsByIndex, toolsById);
+      }
+      if (message.type === "user") {
+        processUserToolResults(requestId, message, toolsById);
+      }
+      if (message.type === "assistant") {
+        const discoveredPlan = planFromContent(message.message.content);
+        if (discoveredPlan && discoveredPlan !== planMarkdown) {
+          planMarkdown = discoveredPlan;
+          writeEvent(requestId, { kind: "planReady", markdown: discoveredPlan });
+        }
+        const simple = messageToSimple(message);
+        if (simple) streamedMessages.push(simple);
+      }
+      if (message.type === "tool_use_summary") {
+        writeEvent(requestId, {
+          kind: "reasoning",
+          itemId: message.uuid ?? `summary-${Date.now()}`,
+          delta: message.summary,
+        });
+      }
+      if (message.type === "result" && message.is_error) {
+        resultError =
+          "errors" in message && Array.isArray(message.errors)
+            ? message.errors.join("\n")
+            : message.stop_reason ?? "Claude failed to complete the turn.";
+      }
+      if (message.type === "result") {
+        resultUsage = "usage" in message ? message.usage : null;
+        resultModelUsage = "modelUsage" in message ? message.modelUsage : null;
+      }
     }
-    if (message.type === "tool_use_summary") {
-      writeEvent(requestId, {
-        kind: "reasoning",
-        itemId: message.uuid ?? `summary-${Date.now()}`,
-        delta: message.summary,
-      });
+  } catch (error) {
+    if (activeQuery.interrupted) {
+      throw new Error("Claude turn was interrupted.");
     }
-    if (message.type === "result" && message.is_error) {
-      resultError =
-        "errors" in message && Array.isArray(message.errors)
-          ? message.errors.join("\n")
-          : message.stop_reason ?? "Claude failed to complete the turn.";
-    }
-    if (message.type === "result") {
-      resultUsage = "usage" in message ? message.usage : null;
-      resultModelUsage = "modelUsage" in message ? message.modelUsage : null;
+    throw error;
+  } finally {
+    activeQueries.delete(requestId);
+    if (activeQuery.interrupted) {
+      conversation?.close();
     }
   }
 
@@ -973,6 +1080,13 @@ async function handleRequest(request: WorkerRequest) {
 }
 
 function handleControl(control: WorkerControl) {
+  if (control.type === "interrupt") {
+    for (const active of activeQueries.values()) {
+      active.interrupted = true;
+      active.abortController.abort();
+    }
+    return;
+  }
   if (control.type === "userInputResponse") {
     const resolve = pendingUserInputs.get(control.interactionId);
     if (!resolve) return;
@@ -1000,7 +1114,11 @@ async function main() {
       writeError(0, error);
       continue;
     }
-    if (message.type === "userInputResponse" || message.type === "approvalResponse") {
+    if (
+      message.type === "userInputResponse" ||
+      message.type === "approvalResponse" ||
+      message.type === "interrupt"
+    ) {
       handleControl(message);
       continue;
     }

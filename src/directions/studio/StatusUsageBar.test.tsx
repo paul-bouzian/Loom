@@ -69,4 +69,24 @@ describe("StatusUsageBar", () => {
       screen.getByRole("button", { name: "Refresh provider usage" }),
     ).toBeInTheDocument();
   });
+
+  it("surfaces initial provider usage fetch failures", () => {
+    useCodexUsageStore.setState((state) => ({
+      ...state,
+      snapshot: null,
+      loading: false,
+      error: "Codex usage failed",
+    }));
+    useClaudeUsageStore.setState((state) => ({
+      ...state,
+      snapshot: null,
+      loading: false,
+      error: "Claude usage failed",
+    }));
+
+    render(<StatusUsageBar />);
+
+    expect(screen.getByTitle("OpenAI: Codex usage failed")).toHaveTextContent("!");
+    expect(screen.getByTitle("Claude: Claude usage failed")).toHaveTextContent("!");
+  });
 });

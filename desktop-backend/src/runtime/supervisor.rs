@@ -841,7 +841,7 @@ impl RuntimeSupervisor {
         context: ThreadRuntimeContext,
     ) -> AppResult<ThreadConversationSnapshot> {
         if matches!(context.provider, ProviderKind::Claude) {
-            return self.claude.refresh_thread(context).await;
+            return self.claude.interrupt_thread(context).await;
         }
         let session = self.ensure_runtime(&context).await?;
         session.interrupt_thread(context).await

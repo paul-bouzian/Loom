@@ -867,6 +867,66 @@ describe("ThreadConversation", () => {
     expect(container.querySelectorAll(".tx-markdown__list")).toHaveLength(1);
   });
 
+  it("labels imported handoff assistant history with the source provider", async () => {
+    const thread = makeThread({
+      provider: "codex",
+      handoff: {
+        sourceThreadId: "thread-claude-source",
+        sourceProvider: "claude",
+        sourceThreadTitle: "Bordeaux weather",
+        environmentName: "Local",
+        branchName: "main",
+        worktreePath: "/tmp/skein",
+        importedAt: "2026-04-24T10:00:00Z",
+        bootstrapStatus: "completed",
+        importedMessages: [
+          {
+            id: "assistant-claude-import",
+            role: "assistant",
+            text: "Bordeaux will be sunny.",
+            images: null,
+            createdAt: "2026-04-24T10:00:00Z",
+          },
+        ],
+      },
+    });
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        provider: "codex",
+        items: [
+          {
+            kind: "message",
+            id: "assistant-claude-import",
+            role: "assistant",
+            text: "Bordeaux will be sunny.",
+            images: null,
+            isStreaming: false,
+          },
+          {
+            kind: "message",
+            id: "assistant-codex-followup",
+            role: "assistant",
+            text: "Paris will be dry too.",
+            images: null,
+            isStreaming: false,
+          },
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    const { container } = render(
+      <ThreadConversation environment={makeEnvironment()} thread={thread} />,
+    );
+
+    await screen.findByText("Bordeaux will be sunny.");
+    expect(screen.getByText("Paris will be dry too.")).toBeInTheDocument();
+    expect(
+      Array.from(container.querySelectorAll(".tx-item--assistant .tx-item__header"))
+        .map((element) => element.textContent),
+    ).toEqual(["Claude", "Codex"]);
+  });
+
   it("copies the raw markdown for assistant messages", async () => {
     const markdown =
       "## Release notes\n\n**Bold guidance** with `bun`.\n\n- First step\n- Second step";

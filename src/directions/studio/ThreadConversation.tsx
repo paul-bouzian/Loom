@@ -14,8 +14,10 @@ import type {
   ComposerMentionBindingInput,
   ConversationComposerSettings,
   ConversationImageAttachment,
+  ConversationItem,
   GlobalSettings,
   EnvironmentRecord,
+  ProviderKind,
   ThreadRecord,
 } from "../../lib/types";
 import { ThreadIcon } from "../../shared/Icons";
@@ -219,6 +221,10 @@ export function ThreadConversation({
   const suppressedAssistantItemIds = useMemo(
     () => (snapshot ? collectStructuredActionAssistantMessageIds(snapshot) : new Set<string>()),
     [snapshot],
+  );
+  const handoffAssistantProviders = useMemo(
+    () => handoffAssistantProviderMap(thread),
+    [thread],
   );
   const timelineEntries = useMemo(() => {
     if (!snapshot) {
@@ -551,7 +557,11 @@ export function ThreadConversation({
             <ConversationItemRow
               key={entry.item.id}
               item={entry.item}
-              provider={snapshot?.provider ?? thread.provider}
+              provider={providerForConversationItem(
+                entry.item,
+                snapshot?.provider ?? thread.provider,
+                handoffAssistantProviders,
+              )}
             />
           ) : (
             <ConversationWorkActivityGroup
@@ -651,6 +661,29 @@ export function ThreadConversation({
       />
     </div>
   );
+}
+
+function handoffAssistantProviderMap(thread: ThreadRecord) {
+  const sourceProvider = thread.handoff?.sourceProvider ?? null;
+  if (!sourceProvider) {
+    return new Map<string, ProviderKind>();
+  }
+  return new Map(
+    thread.handoff?.importedMessages
+      .filter((message) => message.role === "assistant")
+      .map((message) => [message.id, sourceProvider] as const) ?? [],
+  );
+}
+
+function providerForConversationItem(
+  item: ConversationItem,
+  fallbackProvider: ProviderKind,
+  handoffAssistantProviders: Map<string, ProviderKind>,
+) {
+  if (item.kind !== "message" || item.role !== "assistant") {
+    return fallbackProvider;
+  }
+  return handoffAssistantProviders.get(item.id) ?? fallbackProvider;
 }
 
 function ConversationEmpty() {
