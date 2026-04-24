@@ -65,6 +65,7 @@ type SimpleMessage = {
   id: string;
   role: "user" | "assistant";
   text: string;
+  images?: ImagePayload[] | null;
 };
 
 type ClaudeEvent =
@@ -462,6 +463,40 @@ function textFromContent(content: unknown): string {
   return parts.join("\n\n");
 }
 
+function imagesFromContent(content: unknown): ImagePayload[] {
+  if (!Array.isArray(content)) return [];
+  const images: ImagePayload[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const entry = block as Record<string, unknown>;
+    if (entry.type !== "image") continue;
+    const image = imagePayloadFromSource(entry.source);
+    if (image) images.push(image);
+  }
+  return images;
+}
+
+function imagePayloadFromSource(source: unknown): ImagePayload | null {
+  if (!source || typeof source !== "object") return null;
+  const entry = source as Record<string, unknown>;
+  if (entry.type === "url" && typeof entry.url === "string" && entry.url.trim()) {
+    return { type: "image", url: entry.url };
+  }
+  if (
+    entry.type === "base64" &&
+    typeof entry.media_type === "string" &&
+    entry.media_type.startsWith("image/") &&
+    typeof entry.data === "string" &&
+    entry.data.trim()
+  ) {
+    return {
+      type: "image",
+      url: `data:${entry.media_type};base64,${entry.data}`,
+    };
+  }
+  return null;
+}
+
 function planFromContent(content: unknown): string | null {
   if (!Array.isArray(content)) return null;
   for (const block of content) {
@@ -491,12 +526,15 @@ function messageToSimple(message: {
     message.message && typeof message.message === "object"
       ? (message.message as { content?: unknown })
       : undefined;
-  const text = textFromContent(payload?.content).trim();
-  if (!text) return null;
+  const content = payload?.content;
+  const text = textFromContent(content).trim();
+  const images = imagesFromContent(content);
+  if (!text && images.length === 0) return null;
   return {
     id: message.uuid ?? `claude-message-${Date.now()}`,
     role: message.type,
     text,
+    images: images.length > 0 ? images : undefined,
   };
 }
 
@@ -767,10 +805,13 @@ async function readMessagesWithFallback(
 async function promptFor(payload: SendPayload): Promise<string | AsyncIterable<SDKUserMessage>> {
   const images = payload.images ?? [];
   if (images.length === 0) return payload.text;
-  const content: ContentBlockParam[] = [{
-    type: "text",
-    text: payload.text,
-  }];
+  const content: ContentBlockParam[] = [];
+  if (payload.text.trim()) {
+    content.push({
+      type: "text",
+      text: payload.text,
+    });
+  }
   let remainingLocalImageBytes = MAX_TOTAL_LOCAL_IMAGE_BYTES;
   for (const image of images) {
     const result = await imageToContentBlock(image, remainingLocalImageBytes);
@@ -909,6 +950,7 @@ async function handleSend(requestId: number, payload: SendPayload) {
       id: `local-user-${Date.now()}`,
       role: "user",
       text: payload.visibleText,
+      images: payload.images.length > 0 ? payload.images : undefined,
     },
   ];
   activeQueries.set(requestId, activeQuery);

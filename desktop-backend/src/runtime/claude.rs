@@ -427,20 +427,24 @@ impl ClaudeRuntimeSession {
             ));
         }
         let visible_text = text.trim();
-        if visible_text.is_empty() {
-            return Err(AppError::Validation(
-                "Message must include text.".to_string(),
-            ));
-        }
+        validate_claude_message_content(visible_text, &images)?;
 
-        let mut resolved_text = resolve_text_for_claude(&context, visible_text)?;
+        let mut resolved_text = if visible_text.is_empty() {
+            String::new()
+        } else {
+            resolve_text_for_claude(&context, visible_text)?
+        };
         if let Some(prefix) = context
             .handoff_bootstrap_context
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            resolved_text = format!("{prefix}\n\n{resolved_text}");
+            resolved_text = if resolved_text.trim().is_empty() {
+                prefix.to_string()
+            } else {
+                format!("{prefix}\n\n{resolved_text}")
+            };
         }
 
         let open = self.open_thread(context.clone()).await?;
@@ -1156,6 +1160,18 @@ fn resolve_text_for_claude(
     let prompts = load_prompt_definitions(&context.environment_path).unwrap_or_default();
     let resolved = resolve_composer_text(visible_text, &prompts, &[], &[], &[])?;
     Ok(resolved.text)
+}
+
+fn validate_claude_message_content(
+    visible_text: &str,
+    images: &[ConversationImageAttachment],
+) -> AppResult<()> {
+    if visible_text.trim().is_empty() && images.is_empty() {
+        return Err(AppError::Validation(
+            "Message must include text or an image.".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn snapshot_from_claude_messages(
@@ -2025,6 +2041,23 @@ mod tests {
             multi_agent_nudge_enabled: false,
             multi_agent_nudge_max_subagents: 0,
         }
+    }
+
+    #[test]
+    fn claude_message_validation_allows_image_only_prompts() {
+        let images = vec![ConversationImageAttachment::Image {
+            url: "https://example.com/image.png".to_string(),
+        }];
+
+        validate_claude_message_content("", &images).expect("image-only prompt should be valid");
+    }
+
+    #[test]
+    fn claude_message_validation_rejects_empty_prompts_without_images() {
+        let error = validate_claude_message_content("   ", &[])
+            .expect_err("empty prompt without images should fail");
+
+        assert!(error.to_string().contains("text or an image"));
     }
 
     #[test]

@@ -1197,6 +1197,11 @@ impl WorkspaceService {
                 ));
             }
         }
+        if pending_handoff_exists_for_source(&connection, &input.source_thread_id)? {
+            return Err(AppError::Validation(
+                "Send one message in this handoff thread before handing it off again.".to_string(),
+            ));
+        }
 
         let environment = connection
             .query_row(
@@ -2751,7 +2756,7 @@ impl WorkspaceService {
             "
             SELECT COUNT(*)
             FROM threads
-            WHERE environment_id = ?1 AND codex_thread_id IS NOT NULL
+            WHERE environment_id = ?1 AND provider_thread_id IS NOT NULL
             ",
             params![metadata.environment_id],
             |row| row.get(0),
@@ -3314,6 +3319,34 @@ fn default_effort_for_provider(
 fn handoff_from_json(value: &str) -> AppResult<ThreadHandoffState> {
     serde_json::from_str::<ThreadHandoffState>(value)
         .map_err(|error| AppError::Validation(error.to_string()))
+}
+
+fn pending_handoff_exists_for_source(
+    connection: &rusqlite::Connection,
+    source_thread_id: &str,
+) -> AppResult<bool> {
+    let mut statement = connection.prepare(
+        "
+        SELECT handoff_json
+        FROM threads
+        WHERE archived_at IS NULL
+          AND handoff_json IS NOT NULL
+        ",
+    )?;
+    let mut handoffs = statement.query([])?;
+    while let Some(row) = handoffs.next()? {
+        let raw_handoff: String = row.get(0)?;
+        let handoff = handoff_from_json(&raw_handoff)?;
+        if handoff.source_thread_id == source_thread_id
+            && matches!(
+                handoff.bootstrap_status,
+                ThreadHandoffBootstrapStatus::Pending
+            )
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn handoff_imported_messages(
@@ -4194,6 +4227,94 @@ mod tests {
     }
 
     #[test]
+    fn create_thread_handoff_blocks_second_pending_handoff_from_same_source() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(&harness.temp_root.join("repos").join("handoff-pending"))
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let environment_id = project
+            .environments
+            .first()
+            .expect("local environment should exist")
+            .id
+            .clone();
+        let source = harness
+            .service
+            .create_thread(CreateThreadRequest {
+                environment_id: environment_id.clone(),
+                title: Some("Source thread".to_string()),
+                overrides: None,
+            })
+            .expect("source thread should be created");
+        let mut snapshot = ThreadConversationSnapshot::new_for_provider(
+            source.id.clone(),
+            environment_id,
+            ProviderKind::Codex,
+            Some("codex-thread-1".to_string()),
+            Some("codex-thread-1".to_string()),
+            default_composer_settings(),
+        );
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "user-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                role: ConversationRole::User,
+                text: "salut".to_string(),
+                images: None,
+                is_streaming: false,
+            }));
+
+        let first_handoff = harness
+            .service
+            .create_thread_handoff(
+                CreateThreadHandoffRequest {
+                    source_thread_id: source.id.clone(),
+                    target_provider: ProviderKind::Claude,
+                },
+                &snapshot,
+            )
+            .expect("first handoff should be created");
+
+        let error = harness
+            .service
+            .create_thread_handoff(
+                CreateThreadHandoffRequest {
+                    source_thread_id: source.id.clone(),
+                    target_provider: ProviderKind::Claude,
+                },
+                &snapshot,
+            )
+            .expect_err("second pending handoff from the same source should fail");
+
+        assert!(error
+            .to_string()
+            .contains("Send one message in this handoff thread"));
+
+        harness
+            .service
+            .complete_thread_handoff_bootstrap(&first_handoff.id)
+            .expect("handoff bootstrap should complete");
+        harness
+            .service
+            .create_thread_handoff(
+                CreateThreadHandoffRequest {
+                    source_thread_id: source.id,
+                    target_provider: ProviderKind::Claude,
+                },
+                &snapshot,
+            )
+            .expect("completed handoffs should not block a later handoff");
+    }
+
+    #[test]
     fn create_thread_handoff_preserves_image_only_messages() {
         let harness = WorkspaceHarness::new().expect("harness");
         let repo = harness
@@ -4319,6 +4440,65 @@ mod tests {
             .expect("chat threads should skip first-prompt auto rename");
 
         assert!(rename.is_none());
+    }
+
+    #[test]
+    fn first_prompt_auto_rename_skips_started_threads_for_any_provider() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(
+                &harness
+                    .temp_root
+                    .join("repos")
+                    .join("rename-claude-started"),
+            )
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let result = harness
+            .service
+            .create_managed_worktree(CreateManagedWorktreeRequest {
+                project_id: project.id.clone(),
+                base_branch: None,
+                name: None,
+                overrides: Some(ThreadOverrides {
+                    provider: Some(ProviderKind::Claude),
+                    ..ThreadOverrides::default()
+                }),
+            })
+            .expect("worktree should be created");
+        harness
+            .service
+            .persist_provider_thread_id(&result.thread.id, ProviderKind::Claude, "claude-thread-1")
+            .expect("provider thread id should persist");
+        let fake_codex = harness.create_fake_codex(
+            r#"{"threadTitle":"Should Not Apply","worktreeLabel":"Should Not Apply","branchSlug":"should-not-apply"}"#,
+        );
+
+        let rename = harness
+            .service
+            .maybe_auto_rename_first_prompt_environment(AutoRenameFirstPromptRequest {
+                thread_id: result.thread.id.clone(),
+                message: "Ajouter un systeme de themes".to_string(),
+                codex_binary_path: Some(fake_codex.to_string_lossy().to_string()),
+            })
+            .expect("started provider threads should skip first-prompt auto rename");
+
+        assert!(rename.is_none());
+        let snapshot = harness.service.snapshot(Vec::new()).expect("snapshot");
+        let environment = snapshot
+            .projects
+            .into_iter()
+            .flat_map(|project| project.environments.into_iter())
+            .find(|environment| environment.id == result.environment.id)
+            .expect("environment should exist");
+        assert_eq!(environment.name, result.environment.name);
+        assert_eq!(environment.git_branch, result.environment.git_branch);
     }
 
     #[test]
