@@ -269,7 +269,26 @@ impl ClaudeRuntimeSession {
             });
         }
 
-        let snapshot = if let Some(provider_thread_id) = context.provider_thread_id.clone() {
+        let snapshot = self.load_open_snapshot(&context).await?;
+
+        self.state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .insert(context.thread_id.clone(), snapshot.clone());
+
+        Ok(ThreadConversationOpenResponse {
+            snapshot,
+            capabilities: claude_capabilities(&context),
+            composer_draft: None,
+        })
+    }
+
+    async fn load_open_snapshot(
+        &self,
+        context: &ThreadRuntimeContext,
+    ) -> AppResult<ThreadConversationSnapshot> {
+        if let Some(provider_thread_id) = context.provider_thread_id.clone() {
             let result = run_claude_worker::<_, ClaudeOpenResult>(
                 None,
                 "open",
@@ -279,13 +298,13 @@ impl ClaudeRuntimeSession {
                 },
             )
             .await?;
-            snapshot_from_claude_messages(
-                &context,
+            Ok(snapshot_from_claude_messages(
+                context,
                 result.provider_thread_id.or(Some(provider_thread_id)),
                 result.messages,
                 ConversationStatus::Completed,
                 None,
-            )
+            ))
         } else {
             let messages = context
                 .handoff
@@ -303,20 +322,14 @@ impl ClaudeRuntimeSession {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            snapshot_from_claude_messages(&context, None, messages, ConversationStatus::Idle, None)
-        };
-
-        self.state
-            .lock()
-            .await
-            .snapshots_by_thread
-            .insert(context.thread_id.clone(), snapshot.clone());
-
-        Ok(ThreadConversationOpenResponse {
-            snapshot,
-            capabilities: claude_capabilities(&context),
-            composer_draft: None,
-        })
+            Ok(snapshot_from_claude_messages(
+                context,
+                None,
+                messages,
+                ConversationStatus::Idle,
+                None,
+            ))
+        }
     }
 
     pub async fn send_message(
@@ -602,7 +615,21 @@ impl ClaudeRuntimeSession {
         &self,
         context: ThreadRuntimeContext,
     ) -> AppResult<ThreadConversationSnapshot> {
-        Ok(self.open_thread(context).await?.snapshot)
+        if let Some(active_snapshot) = self
+            .state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .get(&context.thread_id)
+            .filter(|snapshot| claude_snapshot_has_active_turn(snapshot))
+            .cloned()
+        {
+            return Ok(active_snapshot);
+        }
+
+        let snapshot = self.load_open_snapshot(&context).await?;
+        self.store_and_emit(snapshot.clone()).await;
+        Ok(snapshot)
     }
 
     pub async fn interrupt_thread(
@@ -2040,7 +2067,39 @@ async fn clear_claude_control_sender(session: Option<ClaudeWorkerSession<'_>>) {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::sync::OnceLock;
+
     use super::*;
+    use tokio::sync::Mutex as AsyncMutex;
+
+    struct EnvVarOverride {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarOverride {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarOverride {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn claude_worker_env_lock() -> &'static AsyncMutex<()> {
+        static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| AsyncMutex::new(()))
+    }
 
     fn snapshot() -> ThreadConversationSnapshot {
         ThreadConversationSnapshot::new_for_provider(
@@ -2117,6 +2176,62 @@ mod tests {
             None
         );
         assert_eq!(changed_provider_thread_id(Some("old"), None), None);
+    }
+
+    #[tokio::test]
+    async fn refresh_thread_bypasses_cached_claude_snapshot() {
+        let _guard = claude_worker_env_lock().lock().await;
+        let worker_path =
+            std::env::temp_dir().join(format!("skein-claude-refresh-worker-{}.sh", Uuid::now_v7()));
+        std::fs::write(
+            &worker_path,
+            r#"read line
+printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshed","messages":[{"id":"assistant-refreshed","role":"assistant","text":"fresh from worker"}]}}'
+"#,
+        )
+        .expect("fake Claude worker should be written");
+        let _worker_path = EnvVarOverride::set(CLAUDE_WORKER_PATH_ENV, &worker_path);
+        let _node_executable = EnvVarOverride::set(NODE_EXECUTABLE_ENV, "/bin/sh");
+
+        let session = ClaudeRuntimeSession::new(EventSink::noop(), "test".to_string());
+        let mut cached = snapshot();
+        cached.provider_thread_id = Some("provider-cached".to_string());
+        cached
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "cached-assistant".to_string(),
+                turn_id: None,
+                role: ConversationRole::Assistant,
+                text: "stale cached answer".to_string(),
+                images: None,
+                is_streaming: false,
+            }));
+        session
+            .state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .insert("thread-1".to_string(), cached);
+
+        let refreshed = session
+            .refresh_thread(context())
+            .await
+            .expect("refresh should re-read Claude history");
+
+        assert_eq!(
+            refreshed.provider_thread_id.as_deref(),
+            Some("provider-refreshed")
+        );
+        assert!(refreshed.items.iter().any(|item| matches!(
+            item,
+            ConversationItem::Message(message)
+                if message.role == ConversationRole::Assistant
+                    && message.text == "fresh from worker"
+        )));
+        assert!(!refreshed.items.iter().any(|item| matches!(
+            item,
+            ConversationItem::Message(message) if message.text == "stale cached answer"
+        )));
     }
 
     #[test]

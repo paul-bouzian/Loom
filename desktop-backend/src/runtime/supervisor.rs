@@ -746,7 +746,26 @@ impl RuntimeSupervisor {
         context: ThreadRuntimeContext,
     ) -> AppResult<ThreadConversationOpenResponse> {
         if matches!(context.provider, ProviderKind::Claude) {
-            return self.claude.open_thread(context).await;
+            let mut response = self.claude.open_thread(context.clone()).await?;
+            let fallback_capabilities = response.capabilities.clone();
+            response.capabilities = match self
+                .read_capabilities(
+                    &context.environment_id,
+                    &context.environment_path,
+                    context.codex_binary_path.clone(),
+                )
+                .await
+            {
+                Ok(capabilities) => capabilities,
+                Err(error) => {
+                    warn!(
+                        environment_id = %context.environment_id,
+                        "failed to enrich Claude open response with Codex capabilities: {error}"
+                    );
+                    fallback_capabilities
+                }
+            };
+            return Ok(response);
         }
         let session = self.ensure_runtime(&context).await?;
         session.open_thread(context).await
@@ -1873,8 +1892,8 @@ mod tests {
         touch_running_runtime, usage_snapshot_is_empty, usage_snapshot_patch_from_snapshot,
         validate_composer_file_search_context, AccountUsageState, AppServerAuthStatus,
         CodexRateLimitSnapshotPatch, HeadlessSession, RunningRuntime, RuntimeReadTarget,
-        RuntimeRegistry, RuntimeUsageUpdate, SharedHeadlessHandle, UsageConfirmationFallback,
-        UsageUpdateOrigin,
+        RuntimeRegistry, RuntimeSupervisor, RuntimeUsageUpdate, SharedHeadlessHandle,
+        UsageConfirmationFallback, UsageUpdateOrigin,
     };
     use crate::app_identity::CODEX_USAGE_EVENT_NAME;
     use crate::domain::conversation::{
@@ -1893,7 +1912,7 @@ mod tests {
     use crate::events::{EmittedEvent, EventSink};
     use crate::runtime::protocol::AccountReadAuthTypeWire;
     use crate::runtime::session::RuntimeSession;
-    use crate::services::workspace::ComposerTargetContext;
+    use crate::services::workspace::{ComposerTargetContext, ThreadRuntimeContext};
 
     #[tokio::test]
     async fn running_read_auth_status_uses_the_active_session() {
@@ -2050,6 +2069,46 @@ mod tests {
             requests.iter().all(|request| request.method != "app/list"),
             "app/list should be skipped when no thread id is available",
         );
+    }
+
+    #[tokio::test]
+    async fn opening_claude_thread_returns_environment_wide_capabilities() {
+        let (session, _harness) = spawn_test_session().await;
+        let supervisor = RuntimeSupervisor::new(EventSink::noop(), "0.1.0".to_string());
+        supervisor.registry.lock().await.running.insert(
+            "env-1".to_string(),
+            RunningRuntime {
+                session: Arc::new(session),
+                status: make_runtime_status("env-1"),
+                last_activity_at: Utc::now(),
+            },
+        );
+
+        let response = supervisor
+            .open_thread(claude_thread_context_without_provider_thread())
+            .await
+            .expect("Claude open should use the environment capability set when available");
+
+        assert!(response
+            .capabilities
+            .providers
+            .iter()
+            .any(|provider| matches!(provider.id, ProviderKind::Codex)));
+        assert!(response
+            .capabilities
+            .providers
+            .iter()
+            .any(|provider| matches!(provider.id, ProviderKind::Claude)));
+        assert!(response
+            .capabilities
+            .models
+            .iter()
+            .any(|model| model.id == "gpt-5.4"));
+        assert!(response
+            .capabilities
+            .models
+            .iter()
+            .any(|model| model.id == "claude-opus-4-7[1m]"));
     }
 
     #[tokio::test]
@@ -3259,6 +3318,32 @@ mod tests {
                     .expect("valid timestamp"),
             ),
             last_exit_code: None,
+        }
+    }
+
+    fn claude_thread_context_without_provider_thread() -> ThreadRuntimeContext {
+        ThreadRuntimeContext {
+            thread_id: "claude-thread-1".to_string(),
+            environment_id: "env-1".to_string(),
+            environment_path: "/tmp/skein".to_string(),
+            provider: ProviderKind::Claude,
+            provider_thread_id: None,
+            codex_thread_id: None,
+            composer: ConversationComposerSettings {
+                provider: ProviderKind::Claude,
+                model: "claude-sonnet-4-6".to_string(),
+                reasoning_effort: ReasoningEffort::High,
+                collaboration_mode: CollaborationMode::Build,
+                approval_policy: ApprovalPolicy::AskToEdit,
+                service_tier: None,
+            },
+            codex_binary_path: None,
+            claude_binary_path: None,
+            handoff: None,
+            handoff_bootstrap_context: None,
+            stream_assistant_responses: true,
+            multi_agent_nudge_enabled: false,
+            multi_agent_nudge_max_subagents: 0,
         }
     }
 
