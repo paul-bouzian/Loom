@@ -38,6 +38,14 @@
   color: var(--tx-text-muted);
 }
 
+.thread-draft__optimistic {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 0;
+}
+
 .thread-draft__empty {
   margin: auto;
   color: var(--tx-text-muted);

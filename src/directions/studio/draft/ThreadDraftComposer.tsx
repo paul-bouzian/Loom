@@ -7,13 +7,16 @@ import type {
   ComposerDraftMentionBinding,
   ComposerMentionBindingInput,
   ComposerTarget,
+  ConversationComposerDraft,
   ConversationComposerSettings,
   ConversationImageAttachment,
+  ConversationMessageItem,
   DraftProjectSelection,
   ModelOption,
   ReasoningEffort,
 } from "../../../lib/types";
 import { useConversationStore } from "../../../stores/conversation-store";
+import { EMPTY_CONVERSATION_COMPOSER_DRAFT } from "../../../stores/conversation-drafts";
 import { composerFromSettings } from "../../../stores/draft-threads";
 import {
   selectChatWorkspace,
@@ -25,6 +28,8 @@ import {
   type ThreadDraftState,
 } from "../../../stores/workspace-store";
 import { InlineComposer } from "../composer/InlineComposer";
+import { ConversationItemRow } from "../ConversationItemRow";
+import { sortModelOptionsByPreference } from "../composerOptions";
 import { sendThreadDraft } from "../studioActions";
 import {
   EnvironmentSelector,
@@ -40,6 +45,7 @@ type Props = {
 };
 
 const BOOTSTRAP_COMPOSER: ConversationComposerSettings = {
+  provider: "codex",
   model: "gpt-5.4",
   reasoningEffort: "high",
   collaborationMode: "build",
@@ -57,24 +63,222 @@ const FALLBACK_EFFORT_OPTIONS: ReasoningEffort[] = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ];
 
 const FALLBACK_MODEL_OPTIONS: ModelOption[] = [
   {
+    provider: "codex",
+    id: "gpt-5.5",
+    displayName: "GPT-5.5",
+    description: "Latest OpenAI model.",
+    defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: ["fast"],
+    isDefault: false,
+  },
+  {
+    provider: "codex",
     id: "gpt-5.4",
-    displayName: "gpt-5.4",
-    description: "Primary Codex model",
+    displayName: "GPT-5.4",
+    description: "Primary OpenAI model.",
     defaultReasoningEffort: "high",
     supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
     inputModalities: ["text", "image"],
-    supportedServiceTiers: ["flex", "fast"],
+    supportedServiceTiers: ["fast"],
     isDefault: true,
+  },
+  {
+    provider: "codex",
+    id: "gpt-5.4-mini",
+    displayName: "GPT-5.4 Mini",
+    description: "Fast OpenAI model for simpler coding tasks.",
+    defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: ["fast"],
+    isDefault: false,
+  },
+  {
+    provider: "codex",
+    id: "gpt-5.3-codex",
+    displayName: "GPT-5.3 Codex",
+    description: "Coding-optimized OpenAI model.",
+    defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: ["fast"],
+    isDefault: false,
+  },
+  {
+    provider: "codex",
+    id: "gpt-5.3-codex-spark",
+    displayName: "GPT-5.3 Codex Spark",
+    description: "Low-latency OpenAI coding model.",
+    defaultReasoningEffort: "high",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: ["fast"],
+    isDefault: false,
+  },
+  {
+    provider: "codex",
+    id: "gpt-5.2-codex",
+    displayName: "GPT-5.2 Codex",
+    description: "Previous Codex model.",
+    defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: ["fast"],
+    isDefault: false,
+  },
+  {
+    provider: "codex",
+    id: "gpt-5.2",
+    displayName: "GPT-5.2",
+    description: "Previous OpenAI model.",
+    defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: ["fast"],
+    isDefault: false,
+  },
+  {
+    provider: "claude",
+    id: "claude-opus-4-7",
+    displayName: "Claude Opus 4.7",
+    description: "Most capable Anthropic model for complex agentic coding.",
+    defaultReasoningEffort: "xhigh",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: ["fast"],
+    supportsThinking: true,
+    isDefault: false,
+  },
+  {
+    provider: "claude",
+    id: "claude-opus-4-7[1m]",
+    displayName: "Claude Opus 4.7 1M",
+    description: "Claude Opus 4.7 with the 1M-token context window enabled.",
+    defaultReasoningEffort: "xhigh",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: ["fast"],
+    supportsThinking: true,
+    isDefault: false,
+  },
+  {
+    provider: "claude",
+    id: "claude-opus-4-6",
+    displayName: "Claude Opus 4.6",
+    description: "Previous Anthropic Opus model with fast mode support.",
+    defaultReasoningEffort: "high",
+    supportedReasoningEfforts: ["low", "medium", "high", "max"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: ["fast"],
+    supportsThinking: true,
+    isDefault: false,
+  },
+  {
+    provider: "claude",
+    id: "claude-opus-4-6[1m]",
+    displayName: "Claude Opus 4.6 1M",
+    description: "Claude Opus 4.6 with the 1M-token context window enabled.",
+    defaultReasoningEffort: "high",
+    supportedReasoningEfforts: ["low", "medium", "high", "max"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: ["fast"],
+    supportsThinking: true,
+    isDefault: false,
+  },
+  {
+    provider: "claude",
+    id: "claude-opus-4-5",
+    displayName: "Claude Opus 4.5",
+    description: "Anthropic Opus model.",
+    defaultReasoningEffort: "high",
+    supportedReasoningEfforts: ["low", "medium", "high"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: [],
+    supportsThinking: true,
+    isDefault: false,
+  },
+  {
+    provider: "claude",
+    id: "claude-opus-4-5[1m]",
+    displayName: "Claude Opus 4.5 1M",
+    description: "Claude Opus 4.5 with the 1M-token context window enabled.",
+    defaultReasoningEffort: "high",
+    supportedReasoningEfforts: ["low", "medium", "high"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: [],
+    supportsThinking: true,
+    isDefault: false,
+  },
+  {
+    provider: "claude",
+    id: "claude-sonnet-4-6",
+    displayName: "Claude Sonnet 4.6",
+    description: "Balanced Anthropic model.",
+    defaultReasoningEffort: "high",
+    supportedReasoningEfforts: ["low", "medium", "high", "max"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: [],
+    supportsThinking: true,
+    isDefault: true,
+  },
+  {
+    provider: "claude",
+    id: "claude-sonnet-4-6[1m]",
+    displayName: "Claude Sonnet 4.6 1M",
+    description: "Claude Sonnet 4.6 with the 1M-token context window enabled.",
+    defaultReasoningEffort: "high",
+    supportedReasoningEfforts: ["low", "medium", "high", "max"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: [],
+    supportsThinking: true,
+    isDefault: false,
+  },
+  {
+    provider: "claude",
+    id: "claude-haiku-4-5",
+    displayName: "Claude Haiku 4.5",
+    description: "Fast Anthropic model for simple scoped coding tasks.",
+    defaultReasoningEffort: "low",
+    supportedReasoningEfforts: ["low"],
+    inputModalities: ["text", "image"],
+    supportedServiceTiers: [],
+    supportsThinking: false,
+    isDefault: false,
   },
 ];
 
 const PRIORITY_BRANCHES = ["main", "master"] as const;
 const PRIORITY_SET: ReadonlySet<string> = new Set(PRIORITY_BRANCHES);
 const CHAT_WORKSPACE_CATALOG_TARGET: ComposerTarget = { kind: "chatWorkspace" };
+
+function draftModelOptionsWithFallbacks(models: ModelOption[]): ModelOption[] {
+  if (models.length === 0) {
+    return FALLBACK_MODEL_OPTIONS;
+  }
+
+  const merged = new Map<string, ModelOption>();
+  for (const model of models) {
+    merged.set(modelOptionKey(model), model);
+  }
+  for (const fallback of FALLBACK_MODEL_OPTIONS) {
+    if (!merged.has(modelOptionKey(fallback))) {
+      merged.set(modelOptionKey(fallback), fallback);
+    }
+  }
+
+  return sortModelOptionsByPreference([...merged.values()]);
+}
+
+function modelOptionKey(model: Pick<ModelOption, "id" | "provider">) {
+  return `${model.provider ?? "codex"}:${model.id}`;
+}
 
 function orderBranchesWithDefaults(branches: string[]): string[] {
   const priority = PRIORITY_BRANCHES.filter((name) => branches.includes(name));
@@ -105,6 +309,8 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
   const [branchesLoaded, setBranchesLoaded] = useState(draft.kind === "chat");
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [optimisticMessage, setOptimisticMessage] =
+    useState<ConversationMessageItem | null>(null);
 
   useEffect(() => {
     void hydrateDraftThreadState(draft);
@@ -247,8 +453,9 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
         : {
             kind: "environment" as const,
             environmentId: resolvedComposerEnvId,
+            provider: composer.provider,
           },
-    [resolvedComposerEnvId],
+    [composer.provider, resolvedComposerEnvId],
   );
   const catalogTarget =
     draft.kind === "chat"
@@ -272,12 +479,15 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
   }, [composerCapabilityEnvironmentId, tryLoadEnvironmentCapabilities]);
 
   const cachedModels = capabilities?.models ?? [];
-  const modelOptions: ModelOption[] =
-    cachedModels.length > 0 ? cachedModels : FALLBACK_MODEL_OPTIONS;
+  const modelOptions: ModelOption[] = draftModelOptionsWithFallbacks(cachedModels);
   const collaborationModes: CollaborationModeOption[] =
     capabilities?.collaborationModes ?? FALLBACK_COLLABORATION_MODES;
   const selectedModel =
-    modelOptions.find((candidate) => candidate.id === composer.model) ?? null;
+    modelOptions.find(
+      (candidate) =>
+        candidate.id === composer.model &&
+        (candidate.provider ?? "codex") === composer.provider,
+    ) ?? null;
   const effortOptions: ReasoningEffort[] =
     selectedModel?.supportedReasoningEfforts ?? FALLBACK_EFFORT_OPTIONS;
 
@@ -312,14 +522,23 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
     draftMentionBindings: ComposerDraftMentionBinding[],
   ) {
     if (isSending) return;
+    const previousComposerDraft = cloneComposerDraft(composerDraft);
+    const optimisticUserMessage = buildOptimisticUserMessage(sendText, sendImages);
     setIsSending(true);
     setError(null);
+    if (optimisticUserMessage) {
+      setOptimisticMessage(optimisticUserMessage);
+      updateDraftThreadState(draft, (current) => ({
+        ...current,
+        composerDraft: cloneComposerDraft(EMPTY_CONVERSATION_COMPOSER_DRAFT),
+      }));
+    }
     try {
       const result = await sendThreadDraft({
         paneId,
         draft,
         persistedState: {
-          composerDraft,
+          composerDraft: previousComposerDraft,
           composer,
           projectSelection: draft.kind === "project" ? selection : null,
         },
@@ -331,12 +550,22 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
       });
       if (!result.ok) {
         setError(result.error);
+        setOptimisticMessage(null);
+        updateDraftThreadState(draft, (current) => ({
+          ...current,
+          composerDraft: previousComposerDraft,
+        }));
         setIsSending(false);
       }
     } catch (cause: unknown) {
       setError(
         cause instanceof Error ? cause.message : "Failed to send message",
       );
+      setOptimisticMessage(null);
+      updateDraftThreadState(draft, (current) => ({
+        ...current,
+        composerDraft: previousComposerDraft,
+      }));
       setIsSending(false);
     }
   }
@@ -352,21 +581,30 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
   return (
     <div className="tx-conversation thread-draft">
       <div className="tx-conversation__timeline">
-        <div className="thread-draft__welcome">
-          <img
-            src={skeinAppIcon}
-            alt=""
-            className="thread-draft__welcome-logo"
-          />
-          <h2 className="thread-draft__welcome-heading">
-            {draft.kind === "chat" ? "Ask Codex anything" : "Let's build"}
-          </h2>
-          <p className="thread-draft__welcome-project">
-            {draft.kind === "chat"
-              ? chatWorkspace?.title ?? "Chats"
-              : project?.name ?? "Project"}
-          </p>
-        </div>
+        {optimisticMessage ? (
+          <div className="thread-draft__optimistic">
+            <ConversationItemRow
+              item={optimisticMessage}
+              provider={composer.provider}
+            />
+          </div>
+        ) : (
+          <div className="thread-draft__welcome">
+            <img
+              src={skeinAppIcon}
+              alt=""
+              className="thread-draft__welcome-logo"
+            />
+            <h2 className="thread-draft__welcome-heading">
+              {draft.kind === "chat" ? "Ask Codex anything" : "Let's build"}
+            </h2>
+            <p className="thread-draft__welcome-project">
+              {draft.kind === "chat"
+                ? chatWorkspace?.title ?? "Chats"
+                : project?.name ?? "Project"}
+            </p>
+          </div>
+        )}
       </div>
       <InlineComposer
         environmentId={resolvedComposerEnvId}
@@ -388,6 +626,7 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
         imageSupportNoticeEnabled
         transportEnabled={transportEnabled}
         voiceEnabled={draft.kind === "project" && resolvedComposerEnvId !== "draft"}
+        providerLocked={false}
         onChangeImages={(nextImages) =>
           updateDraftThreadState(draft, (current) => ({
             ...current,
@@ -462,4 +701,34 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
       {error ? <p className="thread-draft__error">{error}</p> : null}
     </div>
   );
+}
+
+function cloneComposerDraft(
+  draft: ConversationComposerDraft,
+): ConversationComposerDraft {
+  return {
+    text: draft.text,
+    images: [...draft.images],
+    mentionBindings: [...draft.mentionBindings],
+    isRefiningPlan: draft.isRefiningPlan,
+  };
+}
+
+function buildOptimisticUserMessage(
+  text: string,
+  images: ConversationImageAttachment[],
+): ConversationMessageItem | null {
+  const trimmedText = text.trim();
+  if (trimmedText.length === 0 && images.length === 0) {
+    return null;
+  }
+  return {
+    kind: "message",
+    id: `draft-optimistic-user-${Date.now()}`,
+    turnId: null,
+    role: "user",
+    text: trimmedText,
+    images: images.length > 0 ? [...images] : null,
+    isStreaming: false,
+  };
 }

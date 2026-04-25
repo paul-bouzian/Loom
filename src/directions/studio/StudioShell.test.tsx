@@ -86,10 +86,6 @@ vi.mock("./StudioStatusBar", () => ({
   ),
 }));
 
-vi.mock("./SidebarUsagePanel", () => ({
-  SidebarUsagePanel: () => <div data-testid="sidebar-usage-panel" />,
-}));
-
 vi.mock("./useProjectImport", () => ({
   useProjectImport: () => ({
     error: null,
@@ -712,7 +708,7 @@ describe("StudioShell", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
-    const input = screen.getByPlaceholderText("auto-detect");
+    const input = screen.getByLabelText("Codex binary");
     await userEvent.clear(input);
     await userEvent.type(input, "/usr/local/bin/codex");
 

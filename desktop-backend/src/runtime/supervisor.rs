@@ -15,16 +15,19 @@ use crate::domain::conversation::{
     EnvironmentCapabilitiesSnapshot, RespondToUserInputRequestInput, SubmitPlanDecisionInput,
     ThreadComposerCatalog, ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
+use crate::domain::settings::ProviderKind;
 use crate::domain::workspace::{
     CodexCreditsSnapshot, CodexPlanType, CodexRateLimitSnapshot, CodexRateLimitWindow,
     RuntimeState, RuntimeStatusSnapshot, WorkspaceEvent, WorkspaceEventKind,
 };
 use crate::error::{AppError, AppResult};
 use crate::events::EventSink;
+use crate::runtime::claude::{append_claude_provider, ClaudeRuntimeSession};
 use crate::runtime::codex_paths::resolve_codex_binary_path;
 use crate::runtime::protocol::AccountReadResponse;
 use crate::runtime::session::{AppServerAuthStatus, RuntimeSession, SendMessageResult};
 use crate::serde_helpers::deserialize_explicit_optional;
+use crate::services::composer::{build_thread_catalog, load_prompt_definitions};
 use crate::services::workspace::{
     ComposerTargetContext, EnvironmentRuntimeTarget, ThreadRuntimeContext,
 };
@@ -102,6 +105,7 @@ pub struct RuntimeSupervisor {
     events: EventSink,
     app_version: String,
     registry: Arc<Mutex<RuntimeRegistry>>,
+    claude: Arc<ClaudeRuntimeSession>,
     environment_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     headless_sessions: Arc<Mutex<HashMap<String, HeadlessSession>>>,
     account_usage: Arc<Mutex<AccountUsageState>>,
@@ -256,11 +260,16 @@ impl RuntimeSupervisor {
             account_usage.clone(),
             usage_update_rx,
         );
+        let claude = Arc::new(ClaudeRuntimeSession::new(
+            events.clone(),
+            app_version.clone(),
+        ));
 
         Self {
             events,
             app_version,
             registry,
+            claude,
             environment_locks,
             headless_sessions,
             account_usage,
@@ -340,6 +349,16 @@ impl RuntimeSupervisor {
         environment_id: &str,
         runtime_target: &EnvironmentRuntimeTarget,
     ) -> AppResult<RuntimeStatusSnapshot> {
+        if matches!(runtime_target.provider, ProviderKind::Claude) {
+            return Ok(RuntimeStatusSnapshot {
+                environment_id: environment_id.to_string(),
+                state: RuntimeState::Stopped,
+                pid: None,
+                binary_path: runtime_target.claude_binary_path.clone(),
+                started_at: None,
+                last_exit_code: None,
+            });
+        }
         Ok(self
             .ensure_running_runtime(environment_id, runtime_target)
             .await?
@@ -399,7 +418,9 @@ impl RuntimeSupervisor {
             .resolve_read_target(environment_id, environment_path, codex_binary_path)
             .await?;
 
-        read_capabilities_from_target(read_target).await
+        let mut capabilities = read_capabilities_from_target(read_target).await?;
+        append_claude_provider(&mut capabilities);
+        Ok(capabilities)
     }
 
     pub async fn read_auth_status(
@@ -724,6 +745,28 @@ impl RuntimeSupervisor {
         &self,
         context: ThreadRuntimeContext,
     ) -> AppResult<ThreadConversationOpenResponse> {
+        if matches!(context.provider, ProviderKind::Claude) {
+            let mut response = self.claude.open_thread(context.clone()).await?;
+            let fallback_capabilities = response.capabilities.clone();
+            response.capabilities = match self
+                .read_capabilities(
+                    &context.environment_id,
+                    &context.environment_path,
+                    context.codex_binary_path.clone(),
+                )
+                .await
+            {
+                Ok(capabilities) => capabilities,
+                Err(error) => {
+                    warn!(
+                        environment_id = %context.environment_id,
+                        "failed to enrich Claude open response with Codex capabilities: {error}"
+                    );
+                    fallback_capabilities
+                }
+            };
+            return Ok(response);
+        }
         let session = self.ensure_runtime(&context).await?;
         session.open_thread(context).await
     }
@@ -732,6 +775,10 @@ impl RuntimeSupervisor {
         &self,
         context: ComposerTargetContext,
     ) -> AppResult<ThreadComposerCatalog> {
+        if matches!(context.provider, ProviderKind::Claude) {
+            let prompts = load_prompt_definitions(&context.environment_path).unwrap_or_default();
+            return Ok(build_thread_catalog(&prompts, &[], &[]));
+        }
         let read_target = self
             .resolve_read_target(
                 &context.environment_id,
@@ -755,6 +802,11 @@ impl RuntimeSupervisor {
         limit: usize,
     ) -> AppResult<Vec<crate::domain::conversation::ComposerFileSearchResult>> {
         validate_composer_file_search_context(&context)?;
+        if matches!(context.provider, ProviderKind::Claude) {
+            return Err(AppError::Validation(
+                "File search is not available in Claude composer yet.".to_string(),
+            ));
+        }
 
         let read_target = self
             .resolve_file_search_target(
@@ -780,6 +832,12 @@ impl RuntimeSupervisor {
         images: Vec<ConversationImageAttachment>,
         mention_bindings: Vec<ComposerMentionBindingInput>,
     ) -> AppResult<SendMessageResult> {
+        if matches!(context.provider, ProviderKind::Claude) {
+            return self
+                .claude
+                .send_message(context, text, images, mention_bindings)
+                .await;
+        }
         let session = self.ensure_runtime(&context).await?;
         session
             .send_message_with_bindings(context, text, images, mention_bindings)
@@ -790,6 +848,9 @@ impl RuntimeSupervisor {
         &self,
         context: ThreadRuntimeContext,
     ) -> AppResult<ThreadConversationSnapshot> {
+        if matches!(context.provider, ProviderKind::Claude) {
+            return self.claude.refresh_thread(context).await;
+        }
         let session = self.ensure_runtime(&context).await?;
         session.refresh_thread(context).await
     }
@@ -798,6 +859,9 @@ impl RuntimeSupervisor {
         &self,
         context: ThreadRuntimeContext,
     ) -> AppResult<ThreadConversationSnapshot> {
+        if matches!(context.provider, ProviderKind::Claude) {
+            return self.claude.interrupt_thread(context).await;
+        }
         let session = self.ensure_runtime(&context).await?;
         session.interrupt_thread(context).await
     }
@@ -808,6 +872,12 @@ impl RuntimeSupervisor {
         interaction_id: &str,
         response: ApprovalResponseInput,
     ) -> AppResult<ThreadConversationSnapshot> {
+        if matches!(context.provider, ProviderKind::Claude) {
+            return self
+                .claude
+                .respond_to_approval_request(&context.thread_id, interaction_id, response)
+                .await;
+        }
         let session = self.ensure_runtime(&context).await?;
         session
             .respond_to_approval_request(&context.thread_id, interaction_id, response)
@@ -819,6 +889,14 @@ impl RuntimeSupervisor {
         context: ThreadRuntimeContext,
         input: RespondToUserInputRequestInput,
     ) -> AppResult<ThreadConversationSnapshot> {
+        if matches!(context.provider, ProviderKind::Claude) {
+            if input.thread_id != context.thread_id {
+                return Err(AppError::Validation(
+                    "User input response thread id does not match the active context.".to_string(),
+                ));
+            }
+            return self.claude.respond_to_user_input_request(input).await;
+        }
         let session = self.ensure_runtime(&context).await?;
         if input.thread_id != context.thread_id {
             return Err(AppError::Validation(
@@ -833,6 +911,14 @@ impl RuntimeSupervisor {
         context: ThreadRuntimeContext,
         input: SubmitPlanDecisionInput,
     ) -> AppResult<SendMessageResult> {
+        if matches!(context.provider, ProviderKind::Claude) {
+            if input.thread_id != context.thread_id {
+                return Err(AppError::Validation(
+                    "Plan decision thread id does not match the active context.".to_string(),
+                ));
+            }
+            return self.claude.submit_plan_decision(context, input).await;
+        }
         let session = self.ensure_runtime(&context).await?;
         if input.thread_id != context.thread_id {
             return Err(AppError::Validation(
@@ -1806,15 +1892,17 @@ mod tests {
         touch_running_runtime, usage_snapshot_is_empty, usage_snapshot_patch_from_snapshot,
         validate_composer_file_search_context, AccountUsageState, AppServerAuthStatus,
         CodexRateLimitSnapshotPatch, HeadlessSession, RunningRuntime, RuntimeReadTarget,
-        RuntimeRegistry, RuntimeUsageUpdate, SharedHeadlessHandle, UsageConfirmationFallback,
-        UsageUpdateOrigin,
+        RuntimeRegistry, RuntimeSupervisor, RuntimeUsageUpdate, SharedHeadlessHandle,
+        UsageConfirmationFallback, UsageUpdateOrigin,
     };
     use crate::app_identity::CODEX_USAGE_EVENT_NAME;
     use crate::domain::conversation::{
         ConversationComposerSettings, ConversationMessageItem, ConversationRole,
         ConversationStatus, SubagentThreadSnapshot, ThreadConversationSnapshot,
     };
-    use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort};
+    use crate::domain::settings::{
+        ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort,
+    };
     use crate::domain::voice::VoiceAuthMode;
     use crate::domain::workspace::{
         CodexPlanType, CodexRateLimitSnapshot, CodexRateLimitWindow, RuntimeState,
@@ -1824,7 +1912,7 @@ mod tests {
     use crate::events::{EmittedEvent, EventSink};
     use crate::runtime::protocol::AccountReadAuthTypeWire;
     use crate::runtime::session::RuntimeSession;
-    use crate::services::workspace::ComposerTargetContext;
+    use crate::services::workspace::{ComposerTargetContext, ThreadRuntimeContext};
 
     #[tokio::test]
     async fn running_read_auth_status_uses_the_active_session() {
@@ -1880,8 +1968,11 @@ mod tests {
                 .expect("running capabilities read should load");
 
         assert_eq!(capabilities.environment_id, "env-1");
-        assert_eq!(capabilities.models.len(), 1);
         assert_eq!(capabilities.models[0].display_name, "GPT-5.4");
+        assert!(capabilities
+            .models
+            .iter()
+            .any(|model| model.id == "claude-opus-4-7[1m]"));
         assert_eq!(capabilities.collaboration_modes.len(), 1);
 
         let requests = harness.requests().await;
@@ -1978,6 +2069,46 @@ mod tests {
             requests.iter().all(|request| request.method != "app/list"),
             "app/list should be skipped when no thread id is available",
         );
+    }
+
+    #[tokio::test]
+    async fn opening_claude_thread_returns_environment_wide_capabilities() {
+        let (session, _harness) = spawn_test_session().await;
+        let supervisor = RuntimeSupervisor::new(EventSink::noop(), "0.1.0".to_string());
+        supervisor.registry.lock().await.running.insert(
+            "env-1".to_string(),
+            RunningRuntime {
+                session: Arc::new(session),
+                status: make_runtime_status("env-1"),
+                last_activity_at: Utc::now(),
+            },
+        );
+
+        let response = supervisor
+            .open_thread(claude_thread_context_without_provider_thread())
+            .await
+            .expect("Claude open should use the environment capability set when available");
+
+        assert!(response
+            .capabilities
+            .providers
+            .iter()
+            .any(|provider| matches!(provider.id, ProviderKind::Codex)));
+        assert!(response
+            .capabilities
+            .providers
+            .iter()
+            .any(|provider| matches!(provider.id, ProviderKind::Claude)));
+        assert!(response
+            .capabilities
+            .models
+            .iter()
+            .any(|model| model.id == "gpt-5.4"));
+        assert!(response
+            .capabilities
+            .models
+            .iter()
+            .any(|model| model.id == "claude-opus-4-7[1m]"));
     }
 
     #[tokio::test]
@@ -2139,6 +2270,7 @@ mod tests {
         let error = validate_composer_file_search_context(&ComposerTargetContext {
             environment_id: "skein-chat-workspace".to_string(),
             environment_path: "/tmp/chats".to_string(),
+            provider: ProviderKind::Codex,
             codex_thread_id: None,
             codex_binary_path: Some(String::new()),
             file_search_enabled: false,
@@ -3189,6 +3321,32 @@ mod tests {
         }
     }
 
+    fn claude_thread_context_without_provider_thread() -> ThreadRuntimeContext {
+        ThreadRuntimeContext {
+            thread_id: "claude-thread-1".to_string(),
+            environment_id: "env-1".to_string(),
+            environment_path: "/tmp/skein".to_string(),
+            provider: ProviderKind::Claude,
+            provider_thread_id: None,
+            codex_thread_id: None,
+            composer: ConversationComposerSettings {
+                provider: ProviderKind::Claude,
+                model: "claude-sonnet-4-6".to_string(),
+                reasoning_effort: ReasoningEffort::High,
+                collaboration_mode: CollaborationMode::Build,
+                approval_policy: ApprovalPolicy::AskToEdit,
+                service_tier: None,
+            },
+            codex_binary_path: None,
+            claude_binary_path: None,
+            handoff: None,
+            handoff_bootstrap_context: None,
+            stream_assistant_responses: true,
+            multi_agent_nudge_enabled: false,
+            multi_agent_nudge_max_subagents: 0,
+        }
+    }
+
     fn make_rate_limit_snapshot(
         plan_type: Option<CodexPlanType>,
         primary: Option<CodexRateLimitWindow>,
@@ -3222,6 +3380,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Build,

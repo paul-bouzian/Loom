@@ -1,0 +1,15 @@
+.tx-reasoning-context-picker__menu {
+  min-width: 180px;
+}
+
+.tx-reasoning-context-picker__section {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--tx-border-subtle);
+}
+
+.tx-reasoning-context-picker__label {
+  padding: 0 11px;
+}

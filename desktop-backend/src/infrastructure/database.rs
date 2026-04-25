@@ -11,7 +11,7 @@ use crate::domain::conversation::{
 use crate::domain::workspace::SavedDraftThreadState;
 use crate::error::{AppError, AppResult};
 
-const CURRENT_SCHEMA_VERSION: i32 = 7;
+const CURRENT_SCHEMA_VERSION: i32 = 8;
 
 #[derive(Debug, Clone)]
 pub struct AppDatabase {
@@ -352,12 +352,17 @@ impl AppDatabase {
                     ",
                 )?;
             }
+            7 => {}
             CURRENT_SCHEMA_VERSION => {}
             other => {
                 return Err(AppError::Runtime(format!(
                     "Unsupported database schema version {other}.",
                 )));
             }
+        }
+
+        if version < CURRENT_SCHEMA_VERSION {
+            migrate_to_v8(&connection)?;
         }
 
         Ok(())
@@ -471,6 +476,25 @@ impl AppDatabase {
         }
         Ok(())
     }
+}
+
+fn migrate_to_v8(connection: &Connection) -> AppResult<()> {
+    connection.execute_batch(
+        "
+        BEGIN;
+        ALTER TABLE threads ADD COLUMN provider TEXT NOT NULL DEFAULT 'codex';
+        ALTER TABLE threads ADD COLUMN provider_thread_id TEXT;
+        ALTER TABLE threads ADD COLUMN handoff_json TEXT;
+        UPDATE threads
+        SET provider = 'codex',
+            provider_thread_id = codex_thread_id
+        WHERE provider_thread_id IS NULL
+          AND codex_thread_id IS NOT NULL;
+        PRAGMA user_version = 8;
+        COMMIT;
+        ",
+    )?;
+    Ok(())
 }
 
 fn normalize_composer_draft_paths(
@@ -589,7 +613,7 @@ fn legacy_database_backup_path(legacy_db_path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{migrate_legacy_database_file, AppDatabase};
+    use super::{migrate_legacy_database_file, AppDatabase, CURRENT_SCHEMA_VERSION};
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
         ConversationImageAttachment,
@@ -704,7 +728,7 @@ mod tests {
             )
             .expect("environment sort_order column should exist");
 
-        assert_eq!(version, 7);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
         assert_eq!(default_settings, "'{}'");
         assert_eq!(managed_worktree_dir_default, None);
         assert_eq!(project_sort_order_default, "0");
@@ -807,7 +831,7 @@ mod tests {
             )
             .expect("environment sort_order column should exist");
 
-        assert_eq!(version, 7);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
         assert_eq!(project_sort_order_default, "0");
         assert_eq!(environment_sort_order_default, "0");
         assert_eq!(
@@ -917,7 +941,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("environment order should collect");
 
-        assert_eq!(version, 7);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
         assert_eq!(project_order, vec!["project-first", "project-second"]);
         assert_eq!(
             environment_order,
@@ -1004,7 +1028,7 @@ mod tests {
             )
             .expect("composer_draft_json column should exist");
 
-        assert_eq!(version, 7);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
         assert_eq!(composer_draft_default, None);
 
         drop(connection);
@@ -1093,7 +1117,7 @@ mod tests {
             )
             .expect("draft_thread_states table should exist");
 
-        assert_eq!(version, 7);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
         assert_eq!(draft_thread_states_exists, "draft_thread_states");
 
         drop(connection);

@@ -19,15 +19,16 @@ use crate::domain::conversation::{
     ConversationItem, ConversationMessageItem, ConversationRole, ConversationStatus,
     ConversationTaskStatus, EnvironmentCapabilitiesSnapshot, FileChangeApprovalDecisionInput,
     InputModality, PermissionGrantScope, PermissionsApprovalDecisionInput, PlanDecisionAction,
-    ProposedPlanSnapshot, ProposedPlanStatus, RespondToUserInputRequestInput, SubagentStatus,
-    SubmitPlanDecisionInput, ThreadComposerCatalog, ThreadConversationOpenResponse,
+    ProposedPlanSnapshot, ProposedPlanStatus, ProviderOption, RespondToUserInputRequestInput,
+    SubagentStatus, SubmitPlanDecisionInput, ThreadComposerCatalog, ThreadConversationOpenResponse,
     ThreadConversationSnapshot,
 };
-use crate::domain::settings::{CollaborationMode, ServiceTier};
+use crate::domain::settings::{CollaborationMode, ProviderKind, ServiceTier};
 use crate::domain::voice::VoiceAuthMode;
 use crate::domain::workspace::CodexRateLimitSnapshot;
 use crate::error::{AppError, AppResult};
 use crate::events::EventSink;
+use crate::runtime::claude::append_claude_provider;
 use crate::runtime::codex_paths::build_codex_process_path;
 use crate::runtime::proposed_plan_markup::{
     extract_proposed_plan_text, strip_proposed_plan_blocks,
@@ -192,6 +193,7 @@ impl SnapshotEmitSignature {
 #[derive(Debug, Clone)]
 pub struct SendMessageResult {
     pub snapshot: ThreadConversationSnapshot,
+    pub new_provider_thread_id: Option<String>,
     pub new_codex_thread_id: Option<String>,
 }
 
@@ -272,8 +274,8 @@ impl RuntimeSession {
         usage_updates: Option<mpsc::UnboundedSender<RuntimeUsageUpdate>>,
     ) -> AppResult<Self> {
         let mut command = Command::new(&binary_path);
+        command.arg("app-server");
         command
-            .arg("app-server")
             .current_dir(&environment_path)
             .env("PATH", build_codex_process_path(&binary_path))
             .stdin(std::process::Stdio::piped())
@@ -525,12 +527,13 @@ impl RuntimeSession {
                 snapshot
             }
             None => {
-                let snapshot = ThreadConversationSnapshot::new(
+                let mut snapshot = ThreadConversationSnapshot::new(
                     context.thread_id.clone(),
                     context.environment_id.clone(),
                     None,
                     context.composer.clone(),
                 );
+                snapshot.items = imported_handoff_items(&context);
                 self.state
                     .lock()
                     .await
@@ -937,17 +940,42 @@ impl RuntimeSession {
             )
             .await?;
 
-        let capabilities = EnvironmentCapabilitiesSnapshot {
+        let models = model_options_from_response(models);
+        let mut capabilities = EnvironmentCapabilitiesSnapshot {
             environment_id: self.environment_id.clone(),
-            models: model_options_from_response(models),
+            providers: vec![ProviderOption {
+                id: ProviderKind::Codex,
+                display_name: "OpenAI".to_string(),
+                icon: "codex".to_string(),
+                is_default: true,
+                models: models.clone(),
+            }],
+            models,
             collaboration_modes: collaboration_mode_options_from_response(collaboration_modes),
         };
+        append_claude_provider(&mut capabilities);
         self.state.lock().await.capabilities = Some(capabilities.clone());
         Ok(capabilities)
     }
 
+    async fn validate_model_selection(
+        &self,
+        provider: ProviderKind,
+        model_id: &str,
+    ) -> AppResult<()> {
+        let capabilities = self.ensure_capabilities().await?;
+        if model_is_available(&capabilities, provider, model_id) {
+            return Ok(());
+        }
+
+        Err(AppError::Validation(format!(
+            "Model `{model_id}` is unavailable for the selected provider."
+        )))
+    }
+
     async fn validate_image_input_support(
         &self,
+        provider: ProviderKind,
         model_id: &str,
         images: &[ConversationImageAttachment],
     ) -> AppResult<()> {
@@ -956,7 +984,7 @@ impl RuntimeSession {
         }
 
         let capabilities = self.ensure_capabilities().await?;
-        if model_supports_image_input(&capabilities, model_id) {
+        if model_supports_image_input(&capabilities, provider, model_id) {
             return Ok(());
         }
 
@@ -967,6 +995,7 @@ impl RuntimeSession {
 
     async fn resolve_service_tier(
         &self,
+        provider: ProviderKind,
         model_id: &str,
         requested_service_tier: Option<ServiceTier>,
     ) -> AppResult<Option<ServiceTier>> {
@@ -975,7 +1004,7 @@ impl RuntimeSession {
         };
 
         let capabilities = self.ensure_capabilities().await?;
-        if model_supports_service_tier(&capabilities, model_id, service_tier) {
+        if model_supports_service_tier(&capabilities, provider, model_id, service_tier) {
             return Ok(Some(service_tier));
         }
 
@@ -1074,6 +1103,35 @@ impl RuntimeSession {
         });
     }
 
+    fn prepend_hidden_handoff_context(
+        input: &mut OutgoingUserInputPayload,
+        context: &ThreadRuntimeContext,
+    ) {
+        let Some(prefix) = context
+            .handoff_bootstrap_context
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+        let separator = if input.text.is_empty() { "" } else { "\n\n" };
+        let offset = prefix.len() + separator.len();
+        for element in &mut input.text_elements {
+            element.start += offset;
+            element.end += offset;
+        }
+        input.text_elements.insert(
+            0,
+            OutgoingTextElement {
+                start: 0,
+                end: offset,
+                placeholder: Some(String::new()),
+            },
+        );
+        input.text = format!("{prefix}{separator}{}", input.text);
+    }
+
     async fn send_message_with_visibility(
         &self,
         context: ThreadRuntimeContext,
@@ -1088,14 +1146,25 @@ impl RuntimeSession {
                 "Message must include text or at least one image.".to_string(),
             ));
         }
-        self.validate_image_input_support(&context.composer.model, &images)
+        self.validate_model_selection(context.composer.provider, &context.composer.model)
             .await?;
+        self.validate_image_input_support(
+            context.composer.provider,
+            &context.composer.model,
+            &images,
+        )
+        .await?;
         let requested_service_tier = self
-            .resolve_service_tier(&context.composer.model, context.composer.service_tier)
+            .resolve_service_tier(
+                context.composer.provider,
+                &context.composer.model,
+                context.composer.service_tier,
+            )
             .await?;
         let mut outgoing_input = self
             .resolve_outgoing_user_input(&context, trimmed, &images, &mention_bindings)
             .await?;
+        Self::prepend_hidden_handoff_context(&mut outgoing_input, &context);
         Self::maybe_append_multi_agent_nudge(&mut outgoing_input, &context, visible_to_user);
 
         let mut open = self.open_thread(context.clone()).await?;
@@ -1237,6 +1306,7 @@ impl RuntimeSession {
 
         Ok(SendMessageResult {
             snapshot,
+            new_provider_thread_id: new_codex_thread_id.clone(),
             new_codex_thread_id,
         })
     }
@@ -1672,6 +1742,29 @@ impl RuntimeSession {
     fn emit_snapshot(&self, snapshot: &ThreadConversationSnapshot) {
         queue_snapshot_emit(self.events.clone(), snapshot.clone());
     }
+}
+
+fn imported_handoff_items(context: &ThreadRuntimeContext) -> Vec<ConversationItem> {
+    context
+        .handoff
+        .as_ref()
+        .map(|handoff| {
+            handoff
+                .imported_messages
+                .iter()
+                .map(|message| {
+                    ConversationItem::Message(ConversationMessageItem {
+                        id: message.id.clone(),
+                        turn_id: None,
+                        role: message.role,
+                        text: message.text.clone(),
+                        images: message.images.clone(),
+                        is_streaming: false,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn request_timeout_for(method: &str) -> Duration {
@@ -3015,27 +3108,40 @@ fn usage_update_payload(
     })
 }
 
-fn model_supports_image_input(
+fn model_is_available(
     capabilities: &EnvironmentCapabilitiesSnapshot,
+    provider: ProviderKind,
     model_id: &str,
 ) -> bool {
     capabilities
         .models
         .iter()
-        .find(|model| model.id == model_id)
+        .any(|model| model.id == model_id && model.provider == provider)
+}
+
+fn model_supports_image_input(
+    capabilities: &EnvironmentCapabilitiesSnapshot,
+    provider: ProviderKind,
+    model_id: &str,
+) -> bool {
+    capabilities
+        .models
+        .iter()
+        .find(|model| model.id == model_id && model.provider == provider)
         .map(|model| model.input_modalities.contains(&InputModality::Image))
         .unwrap_or(false)
 }
 
 fn model_supports_service_tier(
     capabilities: &EnvironmentCapabilitiesSnapshot,
+    provider: ProviderKind,
     model_id: &str,
     service_tier: ServiceTier,
 ) -> bool {
     capabilities
         .models
         .iter()
-        .find(|model| model.id == model_id)
+        .find(|model| model.id == model_id && model.provider == provider)
         .map(|model| model.supported_service_tiers.contains(&service_tier))
         .unwrap_or(false)
 }
@@ -3079,6 +3185,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Build,
@@ -3111,6 +3218,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Build,
@@ -3156,8 +3264,10 @@ mod tests {
     fn model_supports_image_input_requires_explicit_image_modality() {
         let capabilities = EnvironmentCapabilitiesSnapshot {
             environment_id: "env-1".to_string(),
+            providers: Vec::new(),
             models: vec![
                 ModelOption {
+                    provider: ProviderKind::Codex,
                     id: "gpt-5.4".to_string(),
                     display_name: "GPT-5.4".to_string(),
                     description: "Primary".to_string(),
@@ -3165,9 +3275,11 @@ mod tests {
                     supported_reasoning_efforts: vec![ReasoningEffort::High],
                     input_modalities: vec![InputModality::Text],
                     supported_service_tiers: vec![],
+                    supports_thinking: false,
                     is_default: true,
                 },
                 ModelOption {
+                    provider: ProviderKind::Codex,
                     id: "gpt-5.4-vision".to_string(),
                     display_name: "GPT-5.4 Vision".to_string(),
                     description: "Vision".to_string(),
@@ -3175,6 +3287,7 @@ mod tests {
                     supported_reasoning_efforts: vec![ReasoningEffort::High],
                     input_modalities: vec![InputModality::Text, InputModality::Image],
                     supported_service_tiers: vec![ServiceTier::Fast],
+                    supports_thinking: false,
                     is_default: false,
                 },
             ],
@@ -3187,17 +3300,36 @@ mod tests {
             }],
         };
 
-        assert!(!model_supports_image_input(&capabilities, "gpt-5.4"));
-        assert!(model_supports_image_input(&capabilities, "gpt-5.4-vision"));
-        assert!(!model_supports_image_input(&capabilities, "unknown-model"));
+        assert!(!model_supports_image_input(
+            &capabilities,
+            ProviderKind::Codex,
+            "gpt-5.4"
+        ));
+        assert!(model_supports_image_input(
+            &capabilities,
+            ProviderKind::Codex,
+            "gpt-5.4-vision"
+        ));
+        assert!(!model_supports_image_input(
+            &capabilities,
+            ProviderKind::Claude,
+            "gpt-5.4-vision"
+        ));
+        assert!(!model_supports_image_input(
+            &capabilities,
+            ProviderKind::Codex,
+            "unknown-model"
+        ));
     }
 
     #[test]
     fn model_supports_service_tier_requires_explicit_support() {
         let capabilities = EnvironmentCapabilitiesSnapshot {
             environment_id: "env-1".to_string(),
+            providers: Vec::new(),
             models: vec![
                 ModelOption {
+                    provider: ProviderKind::Codex,
                     id: "gpt-5.4".to_string(),
                     display_name: "GPT-5.4".to_string(),
                     description: "Primary".to_string(),
@@ -3205,9 +3337,11 @@ mod tests {
                     supported_reasoning_efforts: vec![ReasoningEffort::High],
                     input_modalities: vec![InputModality::Text],
                     supported_service_tiers: vec![ServiceTier::Fast],
+                    supports_thinking: false,
                     is_default: true,
                 },
                 ModelOption {
+                    provider: ProviderKind::Codex,
                     id: "gpt-5.3-codex".to_string(),
                     display_name: "GPT-5.3-Codex".to_string(),
                     description: "Fallback".to_string(),
@@ -3215,6 +3349,7 @@ mod tests {
                     supported_reasoning_efforts: vec![ReasoningEffort::Medium],
                     input_modalities: vec![InputModality::Text],
                     supported_service_tiers: vec![],
+                    supports_thinking: false,
                     is_default: false,
                 },
             ],
@@ -3223,16 +3358,25 @@ mod tests {
 
         assert!(model_supports_service_tier(
             &capabilities,
+            ProviderKind::Codex,
             "gpt-5.4",
             ServiceTier::Fast
         ));
         assert!(!model_supports_service_tier(
             &capabilities,
+            ProviderKind::Codex,
             "gpt-5.3-codex",
             ServiceTier::Fast
         ));
         assert!(!model_supports_service_tier(
             &capabilities,
+            ProviderKind::Claude,
+            "gpt-5.4",
+            ServiceTier::Fast
+        ));
+        assert!(!model_supports_service_tier(
+            &capabilities,
+            ProviderKind::Codex,
             "unknown-model",
             ServiceTier::Fast
         ));
@@ -3365,6 +3509,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Build,
@@ -3412,6 +3557,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Build,
@@ -3455,6 +3601,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Plan,
@@ -3524,6 +3671,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Plan,
@@ -3569,6 +3717,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Plan,
@@ -3611,6 +3760,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Build,
@@ -3704,6 +3854,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Plan,
@@ -3752,6 +3903,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Plan,
@@ -3789,6 +3941,7 @@ mod tests {
             "env-1".to_string(),
             Some("thr_codex".to_string()),
             ConversationComposerSettings {
+                provider: ProviderKind::Codex,
                 model: "gpt-5.4".to_string(),
                 reasoning_effort: ReasoningEffort::High,
                 collaboration_mode: CollaborationMode::Build,

@@ -16,7 +16,9 @@ use crate::domain::conversation::{
     ProposedPlanStepStatus, SubagentStatus, SubagentThreadSnapshot, ThreadConversationSnapshot,
     ThreadTokenUsageSnapshot, TokenUsageBreakdown, UnsupportedInteractionRequest,
 };
-use crate::domain::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort, ServiceTier};
+use crate::domain::settings::{
+    ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort, ServiceTier,
+};
 use crate::domain::workspace::CodexRateLimitSnapshot;
 use crate::error::{AppError, AppResult};
 use crate::runtime::collaboration_mode_templates::developer_instructions_for_mode;
@@ -740,9 +742,11 @@ pub fn build_history_snapshot(
     thread: ThreadWire,
 ) -> ThreadConversationSnapshot {
     let fallback_mode = composer.collaboration_mode;
-    let mut snapshot = ThreadConversationSnapshot::new(
+    let mut snapshot = ThreadConversationSnapshot::new_for_provider(
         thread_id,
         environment_id,
+        ProviderKind::Codex,
+        codex_thread_id.clone().or(Some(thread.id.clone())),
         codex_thread_id.or(Some(thread.id)),
         composer,
     );
@@ -837,11 +841,12 @@ fn leading_plan_heading(value: &Value) -> Option<&'static str> {
 }
 
 pub fn model_options_from_response(response: ModelListResponse) -> Vec<ModelOption> {
-    response
+    let mut options: Vec<ModelOption> = response
         .data
         .into_iter()
         .filter(|model| !model.hidden)
         .map(|model| ModelOption {
+            provider: ProviderKind::Codex,
             id: model.id,
             display_name: model.display_name,
             description: model.description,
@@ -853,9 +858,22 @@ pub fn model_options_from_response(response: ModelListResponse) -> Vec<ModelOpti
                 .collect(),
             input_modalities: model.input_modalities,
             supported_service_tiers: model.additional_speed_tiers,
+            supports_thinking: false,
             is_default: model.is_default,
         })
-        .collect()
+        .collect();
+    ensure_default_codex_model(&mut options);
+    options
+}
+
+fn ensure_default_codex_model(options: &mut [ModelOption]) {
+    if !options.iter().any(|model| model.is_default) {
+        if let Some(default_model) = options.iter_mut().find(|model| model.id == "gpt-5.4") {
+            default_model.is_default = true;
+        } else if let Some(first) = options.first_mut() {
+            first.is_default = true;
+        }
+    }
 }
 
 pub fn collaboration_mode_options_from_response(
@@ -2453,6 +2471,7 @@ mod tests {
     #[test]
     fn collaboration_mode_payload_maps_build_to_default_mode() {
         let payload = collaboration_mode_payload(&ConversationComposerSettings {
+            provider: ProviderKind::Codex,
             model: "gpt-5.4".to_string(),
             reasoning_effort: ReasoningEffort::High,
             collaboration_mode: CollaborationMode::Build,
@@ -2468,6 +2487,7 @@ mod tests {
     #[test]
     fn collaboration_mode_payload_includes_plan_instructions() {
         let payload = collaboration_mode_payload(&ConversationComposerSettings {
+            provider: ProviderKind::Codex,
             model: "gpt-5.4".to_string(),
             reasoning_effort: ReasoningEffort::High,
             collaboration_mode: CollaborationMode::Plan,
@@ -2622,6 +2642,50 @@ mod tests {
                     "text": combined,
                     "text_elements": [{
                         "byteRange": { "start": visible_text.len(), "end": visible_text.len() + hidden_text.len() },
+                        "placeholder": ""
+                    }]
+                }]
+            }),
+        )
+        .expect("item should normalize");
+
+        upsert_item(&mut items, canonical);
+
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            ConversationItem::Message(message) => {
+                assert_eq!(message.id, "user-1");
+                assert_eq!(message.text, visible_text);
+            }
+            _ => panic!("expected a message item"),
+        }
+    }
+
+    #[test]
+    fn canonical_user_message_with_hidden_handoff_prefix_replaces_matching_optimistic_entry() {
+        let hidden_prefix = "<handoff_context>\nsource_provider: Anthropic\nrecent:\nassistant: Météo à Bordeaux\n</handoff_context>";
+        let visible_text = "Merci, et pour Paris ?";
+        let combined = format!("{hidden_prefix}\n\n{visible_text}");
+        let hidden_end = hidden_prefix.len() + 2;
+        let mut items = vec![ConversationItem::Message(ConversationMessageItem {
+            id: "local-user-1".to_string(),
+            turn_id: None,
+            role: ConversationRole::User,
+            text: visible_text.to_string(),
+            images: None,
+            is_streaming: false,
+        })];
+
+        let canonical = normalize_item(
+            Some("turn-1"),
+            &json!({
+                "id": "user-1",
+                "type": "userMessage",
+                "content": [{
+                    "type": "text",
+                    "text": combined,
+                    "text_elements": [{
+                        "byteRange": { "start": 0, "end": hidden_end },
                         "placeholder": ""
                     }]
                 }]

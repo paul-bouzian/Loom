@@ -30,7 +30,7 @@ afterEach(() => {
 describe("ConversationWorkActivityGroup", () => {
   it("keeps the body inert until the toggle is pressed", () => {
     const { container } = render(
-      <ConversationWorkActivityGroup group={makeGroup({ itemCount: 3 })} />,
+      <ConversationWorkActivityGroup group={makeGroup({ itemCount: 3 })} provider="codex" />,
     );
 
     const wrap = container.querySelector(".tx-work-activity__body-wrap");
@@ -41,7 +41,7 @@ describe("ConversationWorkActivityGroup", () => {
 
   it("reveals the body and scrolls the section into view on expand", async () => {
     const { container } = render(
-      <ConversationWorkActivityGroup group={makeGroup({ itemCount: 3 })} />,
+      <ConversationWorkActivityGroup group={makeGroup({ itemCount: 3 })} provider="codex" />,
     );
 
     await userEvent.click(
@@ -58,7 +58,7 @@ describe("ConversationWorkActivityGroup", () => {
 
   it("collapses the body when toggled again", async () => {
     const { container } = render(
-      <ConversationWorkActivityGroup group={makeGroup({ itemCount: 3 })} />,
+      <ConversationWorkActivityGroup group={makeGroup({ itemCount: 3 })} provider="codex" />,
     );
 
     const toggle = screen.getByRole("button", { name: "Show work activity details" });

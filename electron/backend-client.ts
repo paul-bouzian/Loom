@@ -50,6 +50,10 @@ function resolveBackendBinaryPath() {
   return join(projectRoot, "desktop-backend", "target", "debug", "skein-backend");
 }
 
+function resolveClaudeWorkerPath() {
+  return join(__dirname, "claude-agent-worker.mjs");
+}
+
 function describeBackendExit(code: number | null, signal: NodeJS.Signals | null) {
   if (signal) {
     return `Backend sidecar exited with signal ${signal}.`;
@@ -86,6 +90,11 @@ export class BackendClient {
       ],
       {
         stdio: "pipe",
+        env: {
+          ...process.env,
+          SKEIN_NODE_EXECUTABLE: process.execPath,
+          SKEIN_CLAUDE_WORKER_PATH: resolveClaudeWorkerPath(),
+        },
       },
     );
     this.process = child;

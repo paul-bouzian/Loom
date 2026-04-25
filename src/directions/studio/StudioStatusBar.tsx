@@ -14,6 +14,7 @@ import {
 } from "../../stores/voice-session-store";
 import { MicIcon } from "../../shared/Icons";
 import { formatVoiceDuration } from "./composer/voice-duration";
+import { StatusUsageBar } from "./StatusUsageBar";
 import "./StudioStatusBar.css";
 
 export function StudioStatusBar() {
@@ -67,7 +68,9 @@ export function StudioStatusBar() {
 
   return (
     <div className="studio-statusbar">
-      <div className="studio-statusbar__left" />
+      <div className="studio-statusbar__left">
+        <StatusUsageBar />
+      </div>
       <div className="studio-statusbar__center">
         {bootstrapStatus && (
           <span className="studio-statusbar__version">

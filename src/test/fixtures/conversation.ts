@@ -18,6 +18,7 @@ import type {
 } from "../../lib/types";
 
 export const baseComposer: ConversationComposerSettings = {
+  provider: "codex",
   model: "gpt-5.4",
   reasoningEffort: "high",
   collaborationMode: "build",
@@ -49,6 +50,7 @@ export function makeGlobalSettings(
   overrides: Partial<GlobalSettings> = {},
 ): GlobalSettings {
   return {
+    defaultProvider: "codex",
     defaultModel: "gpt-5.4",
     defaultReasoningEffort: "high",
     defaultCollaborationMode: "build",
@@ -111,6 +113,7 @@ export function makeGlobalSettings(
     ],
     defaultOpenTargetId: "file-manager",
     codexBinaryPath: undefined,
+    claudeBinaryPath: undefined,
     ...overrides,
   };
 }
@@ -123,8 +126,11 @@ export function makeThread(
     environmentId: "env-1",
     title: "Thread 1",
     status: "active",
+    provider: "codex",
+    providerThreadId: undefined,
     codexThreadId: undefined,
     overrides: {},
+    handoff: null,
     createdAt: "2026-04-03T08:00:00Z",
     updatedAt: "2026-04-03T08:00:00Z",
     archivedAt: undefined,
@@ -202,6 +208,8 @@ export function makeConversationSnapshot(
   return {
     threadId: "thread-1",
     environmentId: "env-1",
+    provider: "codex",
+    providerThreadId: "thr_codex_1",
     codexThreadId: "thr_codex_1",
     status: "completed",
     activeTurnId: null,

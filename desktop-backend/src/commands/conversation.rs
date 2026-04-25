@@ -5,13 +5,20 @@ use crate::app_identity::{FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME, WORKSPACE_EVEN
 use crate::domain::conversation::{
     ComposerFileSearchResult, ComposerMentionBindingInput, ComposerTarget,
     ConversationComposerDraft, ConversationComposerSettings, ConversationImageAttachment,
-    RespondToApprovalRequestInput, RespondToUserInputRequestInput, SubmitPlanDecisionInput,
-    ThreadComposerCatalog, ThreadConversationOpenResponse, ThreadConversationSnapshot,
+    ConversationStatus, RespondToApprovalRequestInput, RespondToUserInputRequestInput,
+    SubmitPlanDecisionInput, ThreadComposerCatalog, ThreadConversationOpenResponse,
+    ThreadConversationSnapshot,
+};
+use crate::domain::settings::ProviderKind;
+use crate::domain::workspace::{
+    ThreadHandoffBootstrapStatus, ThreadHandoffImportedMessage, ThreadHandoffState,
 };
 use crate::domain::workspace::{WorkspaceEvent, WorkspaceEventKind};
 use crate::error::{AppError, CommandError};
 use crate::events::EventSink;
-use crate::services::workspace::{AutoRenameFirstPromptRequest, WorkspaceService};
+use crate::services::workspace::{
+    AutoRenameFirstPromptRequest, CreateThreadHandoffRequest, WorkspaceService,
+};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +110,7 @@ pub async fn send_thread_message_impl(
     let requested_composer = input.composer.clone();
     let message_text = input.text;
     if let Some(composer) = requested_composer.clone() {
+        validate_thread_provider_lock(context.provider, composer.provider)?;
         context.composer = composer;
     }
     let rename_result = if !message_text.trim().is_empty() {
@@ -159,6 +167,7 @@ pub async fn send_thread_message_impl(
             }
             context = state.workspace.thread_runtime_context(&input.thread_id)?;
             if let Some(composer) = requested_composer.clone() {
+                validate_thread_provider_lock(context.provider, composer.provider)?;
                 context.composer = composer;
             }
         }
@@ -173,6 +182,19 @@ pub async fn send_thread_message_impl(
                 },
             );
         }
+    }
+
+    let had_pending_handoff = context.handoff.as_ref().is_some_and(|handoff| {
+        matches!(
+            handoff.bootstrap_status,
+            ThreadHandoffBootstrapStatus::Pending
+        )
+    });
+    if had_pending_handoff {
+        context.handoff_bootstrap_context = context
+            .handoff
+            .as_ref()
+            .map(build_handoff_bootstrap_context);
     }
 
     let result = state
@@ -208,11 +230,42 @@ pub async fn send_thread_message_impl(
         state,
         &input.thread_id,
         &result.snapshot,
+        result.new_provider_thread_id.as_deref(),
         result.new_codex_thread_id.as_deref(),
         "send",
     )?;
 
+    if had_pending_handoff && should_complete_handoff_bootstrap(&result.snapshot) {
+        state
+            .workspace
+            .complete_thread_handoff_bootstrap(&input.thread_id)?;
+    }
+
     Ok(result.snapshot)
+}
+
+fn should_complete_handoff_bootstrap(snapshot: &ThreadConversationSnapshot) -> bool {
+    handoff_bootstrap_status_is_complete(snapshot.status)
+}
+
+fn handoff_bootstrap_status_is_complete(status: ConversationStatus) -> bool {
+    !matches!(
+        status,
+        ConversationStatus::Interrupted | ConversationStatus::Failed
+    )
+}
+
+pub async fn create_thread_handoff_impl(
+    state: &AppState,
+    input: CreateThreadHandoffRequest,
+) -> Result<crate::domain::workspace::ThreadRecord, CommandError> {
+    let source_context = state
+        .workspace
+        .thread_runtime_context(&input.source_thread_id)?;
+    let source = state.runtime.open_thread(source_context).await?;
+    Ok(state
+        .workspace
+        .create_thread_handoff(input, &source.snapshot)?)
 }
 
 pub async fn interrupt_thread_turn_impl(
@@ -251,6 +304,7 @@ pub async fn submit_plan_decision_impl(
 ) -> Result<ThreadConversationSnapshot, CommandError> {
     let mut context = state.workspace.thread_runtime_context(&input.thread_id)?;
     if let Some(composer) = input.composer.clone() {
+        validate_thread_provider_lock(context.provider, composer.provider)?;
         context.composer = composer;
     }
 
@@ -260,6 +314,7 @@ pub async fn submit_plan_decision_impl(
         state,
         &result.snapshot.thread_id,
         &result.snapshot,
+        result.new_provider_thread_id.as_deref(),
         result.new_codex_thread_id.as_deref(),
         "plan decision",
     )?;
@@ -267,17 +322,41 @@ pub async fn submit_plan_decision_impl(
     Ok(result.snapshot)
 }
 
+fn validate_thread_provider_lock(
+    thread_provider: ProviderKind,
+    requested_provider: ProviderKind,
+) -> Result<(), CommandError> {
+    if thread_provider == requested_provider {
+        return Ok(());
+    }
+
+    Err(CommandError::from(AppError::Validation(
+        "Cannot change provider for an existing thread. Use handoff instead.".to_string(),
+    )))
+}
+
 fn persist_successful_thread_update(
     state: &AppState,
     thread_id_for_codex_persist: &str,
     snapshot: &ThreadConversationSnapshot,
+    new_provider_thread_id: Option<&str>,
     new_codex_thread_id: Option<&str>,
     action_label: &str,
 ) -> Result<(), CommandError> {
-    if let Some(codex_thread_id) = new_codex_thread_id {
-        state
-            .workspace
-            .persist_codex_thread_id(thread_id_for_codex_persist, codex_thread_id)?;
+    if let Some(provider_thread_id) = new_provider_thread_id {
+        state.workspace.persist_provider_thread_id(
+            thread_id_for_codex_persist,
+            snapshot.provider,
+            provider_thread_id,
+        )?;
+    } else if matches!(snapshot.provider, ProviderKind::Codex) {
+        // Older Codex-only call paths still return the explicit Codex id. Keep the
+        // persistence fallback during the provider migration.
+        if let Some(codex_thread_id) = new_codex_thread_id {
+            state
+                .workspace
+                .persist_codex_thread_id(thread_id_for_codex_persist, codex_thread_id)?;
+        }
     }
     state
         .workspace
@@ -301,6 +380,115 @@ fn validate_non_blank_thread_id(thread_id: &str) -> Result<(), CommandError> {
     }
 
     Ok(())
+}
+
+fn build_handoff_bootstrap_context(handoff: &ThreadHandoffState) -> String {
+    let mut block = String::from("<handoff_context>\n");
+    block.push_str(&format!(
+        "source_provider: {}\n",
+        provider_label(handoff.source_provider)
+    ));
+    block.push_str(&format!("source_thread_id: {}\n", handoff.source_thread_id));
+    if let Some(title) = handoff.source_thread_title.as_deref() {
+        block.push_str(&format!(
+            "source_thread_title: {}\n",
+            sanitize_handoff_text(title)
+        ));
+    }
+    if let Some(environment_name) = handoff.environment_name.as_deref() {
+        block.push_str(&format!(
+            "environment: {}\n",
+            sanitize_handoff_text(environment_name)
+        ));
+    }
+    if let Some(branch_name) = handoff.branch_name.as_deref() {
+        block.push_str(&format!("branch: {}\n", sanitize_handoff_text(branch_name)));
+    }
+    if let Some(worktree_path) = handoff.worktree_path.as_deref() {
+        block.push_str(&format!(
+            "worktree_path: {}\n",
+            sanitize_handoff_text(worktree_path)
+        ));
+    }
+
+    let detailed_count = 6usize;
+    let split_at = handoff
+        .imported_messages
+        .len()
+        .saturating_sub(detailed_count);
+    let (older, recent) = handoff.imported_messages.split_at(split_at);
+    if !older.is_empty() {
+        block.push_str("\nolder_messages_summary:\n");
+        for message in older {
+            block.push_str("- ");
+            block.push_str(provider_role_label(message.role));
+            block.push_str(": ");
+            block.push_str(&summarize_handoff_message(message));
+            block.push('\n');
+        }
+    }
+    if !recent.is_empty() {
+        block.push_str("\nrecent_messages:\n");
+        for message in recent {
+            block.push_str(provider_role_label(message.role));
+            block.push_str(":\n");
+            block.push_str(&sanitize_handoff_message(message));
+            block.push_str("\n\n");
+        }
+    }
+    block.push_str("</handoff_context>");
+    block
+}
+
+fn provider_label(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Codex => "OpenAI",
+        ProviderKind::Claude => "Anthropic",
+    }
+}
+
+fn provider_role_label(role: crate::domain::conversation::ConversationRole) -> &'static str {
+    match role {
+        crate::domain::conversation::ConversationRole::User => "user",
+        crate::domain::conversation::ConversationRole::Assistant => "assistant",
+    }
+}
+
+fn sanitize_handoff_text(value: &str) -> String {
+    value.replace("</handoff_context>", "<\\/handoff_context>")
+}
+
+fn summarize_handoff_text(value: &str) -> String {
+    let sanitized = sanitize_handoff_text(value);
+    let compact = sanitized.split_whitespace().collect::<Vec<_>>().join(" ");
+    const LIMIT: usize = 180;
+    if compact.chars().count() <= LIMIT {
+        return compact;
+    }
+    let mut summary = compact.chars().take(LIMIT).collect::<String>();
+    summary.push_str("...");
+    summary
+}
+
+fn sanitize_handoff_message(message: &ThreadHandoffImportedMessage) -> String {
+    if !message.text.trim().is_empty() {
+        return sanitize_handoff_text(&message.text);
+    }
+    if message
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+    {
+        return "[image attachment]".to_string();
+    }
+    String::new()
+}
+
+fn summarize_handoff_message(message: &ThreadHandoffImportedMessage) -> String {
+    if !message.text.trim().is_empty() {
+        return summarize_handoff_text(&message.text);
+    }
+    sanitize_handoff_message(message)
 }
 
 fn validate_thread_composer_draft(
@@ -355,7 +543,7 @@ fn validate_composer_target(target: &ComposerTarget) -> Result<(), CommandError>
                 return Err(AppError::Validation("Thread id cannot be empty.".to_string()).into());
             }
         }
-        ComposerTarget::Environment { environment_id } => {
+        ComposerTarget::Environment { environment_id, .. } => {
             if environment_id.trim().is_empty() {
                 return Err(
                     AppError::Validation("Environment id cannot be empty.".to_string()).into(),
@@ -413,12 +601,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_composer_target, validate_non_blank_request_key, validate_non_blank_thread_id,
+        handoff_bootstrap_status_is_complete, validate_composer_target,
+        validate_non_blank_request_key, validate_non_blank_thread_id,
         validate_thread_composer_draft,
     };
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ComposerTarget,
-        ConversationComposerDraft, ConversationImageAttachment,
+        ConversationComposerDraft, ConversationImageAttachment, ConversationStatus,
     };
 
     #[test]
@@ -455,6 +644,7 @@ mod tests {
     fn composer_target_rejects_blank_environment_ids() {
         let error = validate_composer_target(&ComposerTarget::Environment {
             environment_id: "   ".to_string(),
+            provider: None,
         })
         .expect_err("blank environment id should fail");
 
@@ -469,5 +659,21 @@ mod tests {
 
         assert_eq!(error.code, "validation_error");
         assert!(error.message.contains("Request key cannot be empty"));
+    }
+
+    #[test]
+    fn interrupted_handoff_bootstrap_stays_pending_for_retry() {
+        assert!(!handoff_bootstrap_status_is_complete(
+            ConversationStatus::Interrupted
+        ));
+        assert!(!handoff_bootstrap_status_is_complete(
+            ConversationStatus::Failed
+        ));
+        assert!(handoff_bootstrap_status_is_complete(
+            ConversationStatus::Completed
+        ));
+        assert!(handoff_bootstrap_status_is_complete(
+            ConversationStatus::WaitingForExternalAction
+        ));
     }
 }

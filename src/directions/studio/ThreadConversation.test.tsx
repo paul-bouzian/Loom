@@ -867,6 +867,66 @@ describe("ThreadConversation", () => {
     expect(container.querySelectorAll(".tx-markdown__list")).toHaveLength(1);
   });
 
+  it("labels imported handoff assistant history with the source provider", async () => {
+    const thread = makeThread({
+      provider: "codex",
+      handoff: {
+        sourceThreadId: "thread-claude-source",
+        sourceProvider: "claude",
+        sourceThreadTitle: "Bordeaux weather",
+        environmentName: "Local",
+        branchName: "main",
+        worktreePath: "/tmp/skein",
+        importedAt: "2026-04-24T10:00:00Z",
+        bootstrapStatus: "completed",
+        importedMessages: [
+          {
+            id: "assistant-claude-import",
+            role: "assistant",
+            text: "Bordeaux will be sunny.",
+            images: null,
+            createdAt: "2026-04-24T10:00:00Z",
+          },
+        ],
+      },
+    });
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        provider: "codex",
+        items: [
+          {
+            kind: "message",
+            id: "assistant-claude-import",
+            role: "assistant",
+            text: "Bordeaux will be sunny.",
+            images: null,
+            isStreaming: false,
+          },
+          {
+            kind: "message",
+            id: "assistant-codex-followup",
+            role: "assistant",
+            text: "Paris will be dry too.",
+            images: null,
+            isStreaming: false,
+          },
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    const { container } = render(
+      <ThreadConversation environment={makeEnvironment()} thread={thread} />,
+    );
+
+    await screen.findByText("Bordeaux will be sunny.");
+    expect(screen.getByText("Paris will be dry too.")).toBeInTheDocument();
+    expect(
+      Array.from(container.querySelectorAll(".tx-item--assistant .tx-item__header"))
+        .map((element) => element.textContent),
+    ).toEqual(["Claude", "Codex"]);
+  });
+
   it("copies the raw markdown for assistant messages", async () => {
     const markdown =
       "## Release notes\n\n**Bold guidance** with `bun`.\n\n- First step\n- Second step";
@@ -1705,6 +1765,29 @@ describe("ThreadConversation", () => {
         },
       });
     });
+  });
+
+  it("keeps pending input inside the scrollable timeline and uses the provider label", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        provider: "claude",
+        providerThreadId: "claude-session-1",
+        codexThreadId: null,
+        status: "waitingForExternalAction",
+        pendingInteractions: [makeUserInputRequest({ turnId: "turn-weather-1" })],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread({ provider: "claude", providerThreadId: "claude-session-1" })}
+      />,
+    );
+
+    const heading = await screen.findByText("Claude needs input");
+    expect(heading.closest(".tx-conversation__timeline")).not.toBeNull();
   });
 
   it("keeps approvals, user input, and proposed plans visible outside compact work activity", async () => {

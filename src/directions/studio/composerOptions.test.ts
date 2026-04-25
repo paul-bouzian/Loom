@@ -30,15 +30,105 @@ describe("composerOptions", () => {
   });
 
   it("formats fallback and selected model ids consistently", () => {
+    expect(MODEL_FALLBACK_OPTIONS[0]).toEqual({
+      value: "gpt-5.5",
+      label: "GPT-5.5",
+    });
     expect(MODEL_FALLBACK_OPTIONS.find((option) => option.value === "gpt-5.3-codex"))
       .toEqual({
         value: "gpt-5.3-codex",
         label: "GPT-5.3 Codex",
       });
-    expect(settingsModelOptions([], "gpt-5.4-mini")[0]).toEqual({
+    expect(settingsModelOptions([], "gpt-5.4-mini")).toContainEqual({
       value: "gpt-5.4-mini",
       label: "GPT-5.4 Mini",
     });
+    expect(settingsModelOptions([], "claude-opus-4-7[1m]", "claude")).toContainEqual({
+      value: "claude-opus-4-7[1m]",
+      label: "Opus 4.7 1M",
+    });
+  });
+
+  it("orders runtime models by the canonical newest-first list", () => {
+    const olderModel: ModelOption = {
+      ...MODEL_OPTION,
+      id: "gpt-5.2",
+      displayName: "GPT-5.2",
+    };
+    const newestModel: ModelOption = {
+      ...MODEL_OPTION,
+      id: "gpt-5.5",
+      displayName: "GPT-5.5",
+    };
+
+    expect(composerModelOptions([olderModel, MODEL_OPTION, newestModel]))
+      .toEqual([
+        { value: "gpt-5.5", label: "GPT-5.5" },
+        { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+        { value: "gpt-5.2", label: "GPT-5.2" },
+      ]);
+  });
+
+  it("shows Claude 1M context as the selected model state, not a duplicate row", () => {
+    const claudeBase: ModelOption = {
+      ...MODEL_OPTION,
+      provider: "claude",
+      id: "claude-opus-4-7",
+      displayName: "Claude Opus 4.7",
+      defaultReasoningEffort: "xhigh",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    };
+    const claudeLargeContext: ModelOption = {
+      ...claudeBase,
+      id: "claude-opus-4-7[1m]",
+      displayName: "Claude Opus 4.7 1M",
+    };
+
+    expect(
+      composerModelOptions(
+        [claudeLargeContext, claudeBase],
+        "claude-opus-4-7[1m]",
+        "claude",
+      ),
+    ).toEqual([
+      {
+        value: "claude-opus-4-7[1m]",
+        label: "Opus 4.7",
+      },
+    ]);
+  });
+
+  it("keeps Claude 1M models available in settings", () => {
+    const claudeBase: ModelOption = {
+      ...MODEL_OPTION,
+      provider: "claude",
+      id: "claude-opus-4-7",
+      displayName: "Claude Opus 4.7",
+      defaultReasoningEffort: "xhigh",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    };
+    const claudeLargeContext: ModelOption = {
+      ...claudeBase,
+      id: "claude-opus-4-7[1m]",
+      displayName: "Claude Opus 4.7 1M",
+    };
+
+    expect(
+      settingsModelOptions(
+        [claudeLargeContext, claudeBase],
+        "claude-opus-4-7",
+        "claude",
+      ),
+    ).toEqual([
+      {
+        value: "claude-opus-4-7",
+        label: "Opus 4.7",
+      },
+      {
+        value: "claude-opus-4-7[1m]",
+        label: "Opus 4.7 1M",
+      },
+    ]);
   });
 });
 

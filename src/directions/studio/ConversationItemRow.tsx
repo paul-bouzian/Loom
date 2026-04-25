@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import type { ConversationItem, ConversationMessageItem } from "../../lib/types";
+import type {
+  ConversationItem,
+  ConversationMessageItem,
+  ProviderKind,
+} from "../../lib/types";
 import { CheckIcon, ChevronRightIcon, CopyIcon } from "../../shared/Icons";
 import { ConversationLinkedText } from "./ConversationLinkedText";
 import { ConversationMessageImages } from "./ConversationMessageImages";
@@ -10,13 +14,18 @@ import { shouldRenderConversationItem } from "./conversation-item-visibility";
 type Props = {
   item: ConversationItem;
   compact?: boolean;
+  provider?: ProviderKind;
 };
 
-export function ConversationItemRow({ item, compact = false }: Props) {
+export function ConversationItemRow({
+  item,
+  compact = false,
+  provider = "codex",
+}: Props) {
   const [expanded, setExpanded] = useState(false);
 
   if (item.kind === "message") {
-    return <ConversationMessageRow item={item} compact={compact} />;
+    return <ConversationMessageRow item={item} compact={compact} provider={provider} />;
   }
 
   if (item.kind === "reasoning") {
@@ -113,9 +122,11 @@ const USER_MESSAGE_COLLAPSE_MAX_HEIGHT = 280;
 function ConversationMessageRow({
   item,
   compact,
+  provider,
 }: {
   item: ConversationMessageItem;
   compact: boolean;
+  provider: ProviderKind;
 }) {
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -232,7 +243,9 @@ function ConversationMessageRow({
 
   return (
     <div className={className}>
-      <div className="tx-item__header">{item.role === "user" ? "You" : "Codex"}</div>
+      <div className="tx-item__header">
+        {item.role === "user" ? "You" : assistantLabelForProvider(provider)}
+      </div>
       {hasImages ? <ConversationMessageImages images={item.images ?? []} /> : null}
       {shouldRenderMarkdown && hasText ? (
         <ConversationMarkdown markdown={item.text} className={bodyClassName} />
@@ -278,6 +291,10 @@ function ConversationMessageRow({
       ) : null}
     </div>
   );
+}
+
+function assistantLabelForProvider(provider: ProviderKind) {
+  return provider === "claude" ? "Claude" : "Codex";
 }
 
 export function ConversationBanner({

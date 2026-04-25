@@ -28,6 +28,7 @@ vi.mock("../../shared/RuntimeIndicator", () => ({
 }));
 
 vi.mock("../../shared/Icons", () => ({
+  ArrowRightIcon: () => <span data-testid="icon-arrow-right" />,
   PanelLeftIcon: () => <span data-testid="icon-panel-left" />,
   PanelRightIcon: () => <span data-testid="icon-panel-right" />,
   TerminalIcon: () => <span data-testid="icon-terminal" />,
@@ -331,6 +332,85 @@ describe("StudioMain", () => {
     expect(classLists[0]).toContain("studio-main__toggle-terminal");
     expect(classLists[1]).toContain("studio-main__toggle-browser");
     expect(classLists[2]).toContain("studio-main__toggle-inspector");
+  });
+
+  it("hides handoff when no eligible thread is selected", () => {
+    renderStudioMain();
+
+    expect(screen.queryByRole("button", { name: /Handoff to/i })).toBeNull();
+  });
+
+  it("shows handoff only once an eligible thread is selected", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                id: "env-1",
+                path: "/tmp/env-1",
+                threads: [
+                  makeThread({
+                    id: "thread-1",
+                    environmentId: "env-1",
+                    provider: "codex",
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+      selectedThreadId: "thread-1",
+    }));
+
+    renderStudioMain();
+
+    expect(
+      screen.getByRole("button", { name: "Handoff to Anthropic" }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides handoff while a handoff thread still needs a native exchange", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                id: "env-1",
+                path: "/tmp/env-1",
+                threads: [
+                  makeThread({
+                    id: "thread-1",
+                    environmentId: "env-1",
+                    provider: "claude",
+                    handoff: {
+                      sourceThreadId: "source-thread",
+                      sourceProvider: "codex",
+                      importedAt: "2026-04-24T15:00:00Z",
+                      bootstrapStatus: "pending",
+                      importedMessages: [],
+                    },
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+      selectedThreadId: "thread-1",
+    }));
+
+    renderStudioMain();
+
+    expect(screen.queryByRole("button", { name: /Handoff to/i })).toBeNull();
   });
 
   it("shows project onboarding when the chats workspace is selected without imported projects", () => {

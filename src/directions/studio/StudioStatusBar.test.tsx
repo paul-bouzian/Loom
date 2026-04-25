@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   makeEnvironment,
@@ -11,6 +11,10 @@ import {
 import { resetVoiceSessionStore, useVoiceSessionStore } from "../../stores/voice-session-store";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import { StudioStatusBar } from "./StudioStatusBar";
+
+vi.mock("./StatusUsageBar", () => ({
+  StatusUsageBar: () => <div data-testid="status-usage" />,
+}));
 
 beforeEach(async () => {
   await resetVoiceSessionStore();

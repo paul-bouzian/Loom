@@ -21,6 +21,7 @@ import {
 import { useConversationStore } from "../../stores/conversation-store";
 
 const draftComposer = {
+  provider: "codex" as const,
   model: "gpt-5.4",
   reasoningEffort: "high" as const,
   collaborationMode: "build" as const,
@@ -564,6 +565,7 @@ describe("studioActions", () => {
       expect(mockedBridge.createThread).toHaveBeenCalledWith({
         environmentId: "env-1",
         overrides: {
+          provider: "codex",
           model: "gpt-5.4",
           reasoningEffort: "high",
           collaborationMode: "build",
@@ -724,6 +726,7 @@ describe("studioActions", () => {
           baseBranch: "main",
           name: "fix/crash",
           overrides: {
+            provider: "codex",
             model: "gpt-5.4",
             reasoningEffort: "high",
             collaborationMode: "build",
@@ -770,6 +773,7 @@ describe("studioActions", () => {
       expect(mockedBridge.createThread).toHaveBeenCalledWith({
         environmentId: "env-1",
         overrides: {
+          provider: "codex",
           model: "gpt-5.4",
           reasoningEffort: "high",
           collaborationMode: "build",
@@ -851,6 +855,7 @@ describe("studioActions", () => {
       expect(result.ok).toBe(true);
       expect(mockedBridge.createChatThread).toHaveBeenCalledWith({
         overrides: {
+          provider: "codex",
           model: "gpt-5.4",
           reasoningEffort: "high",
           collaborationMode: "build",

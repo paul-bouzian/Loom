@@ -1,0 +1,22 @@
+.provider-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--tx-text-primary);
+  line-height: 1;
+}
+
+.provider-logo svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.provider-logo--codex {
+  color: color-mix(in srgb, var(--tx-text-primary) 82%, var(--tx-muted));
+}
+
+.provider-logo--claude {
+  color: var(--tx-text-primary);
+}

@@ -24,7 +24,6 @@ import {
   useWorkspaceStore,
 } from "../../stores/workspace-store";
 import { ArrowLeftIcon } from "../../shared/Icons";
-import { settingsModelOptions } from "./composerOptions";
 import "./SettingsView.css";
 
 type Props = {
@@ -141,14 +140,6 @@ export function SettingsView({ open, onClose }: Props) {
   const savingGlobalSettingsRef = useRef(false);
   const pendingGlobalSettingsPatchRef = useRef<GlobalSettingsPatch | null>(null);
   const desktopNotificationsBusyRef = useRef(false);
-  const modelOptions = useMemo(
-    () =>
-      settings
-        ? settingsModelOptions(capabilities?.models ?? [], settings.defaultModel)
-        : [],
-    [capabilities?.models, settings],
-  );
-
   useEffect(() => {
     if (!open) return;
 
@@ -306,7 +297,7 @@ export function SettingsView({ open, onClose }: Props) {
           <GeneralSettingsTab
             disabled={savingGlobalSettings}
             menuZIndex={SETTINGS_PICKER_Z_INDEX}
-            modelOptions={modelOptions}
+            models={capabilities?.models ?? []}
             settings={settings}
             onChange={handleGlobalChange}
           />

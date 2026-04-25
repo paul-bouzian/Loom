@@ -30,6 +30,21 @@ export function AdvancedSettingsTab({ disabled, settings, onChange }: Props) {
             }
           />
         </SettingsRow>
+        <SettingsRow
+          title="Claude binary"
+          description="Path to the Claude Code executable. Leave blank for SDK auto-detect."
+          layout="stacked"
+        >
+          <SettingsInput
+            label="Claude binary"
+            value={settings.claudeBinaryPath ?? ""}
+            placeholder="auto-detect"
+            disabled={disabled}
+            onChange={(value) =>
+              onChange({ claudeBinaryPath: value.trim() === "" ? null : value })
+            }
+          />
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection title="Updates">

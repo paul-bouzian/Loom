@@ -55,6 +55,14 @@ fn default_completion_notification_sound_settings() -> NotificationSoundChannelS
 fn default_notification_sounds() -> NotificationSoundSettings {
     NotificationSoundSettings::default()
 }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderKind {
+    #[default]
+    Codex,
+    Claude,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
@@ -63,6 +71,7 @@ pub enum ReasoningEffort {
     High,
     #[serde(rename = "xhigh")]
     XHigh,
+    Max,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -138,6 +147,8 @@ pub struct NotificationSoundSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalSettings {
+    #[serde(default)]
+    pub default_provider: ProviderKind,
     pub default_model: String,
     pub default_reasoning_effort: ReasoningEffort,
     pub default_collaboration_mode: CollaborationMode,
@@ -162,11 +173,14 @@ pub struct GlobalSettings {
     #[serde(default = "default_open_target_id")]
     pub default_open_target_id: String,
     pub codex_binary_path: Option<String>,
+    #[serde(default)]
+    pub claude_binary_path: Option<String>,
 }
 
 impl Default for GlobalSettings {
     fn default() -> Self {
         Self {
+            default_provider: ProviderKind::Codex,
             default_model: "gpt-5.4".to_string(),
             default_reasoning_effort: ReasoningEffort::High,
             default_collaboration_mode: CollaborationMode::Build,
@@ -182,6 +196,7 @@ impl Default for GlobalSettings {
             open_targets: default_open_targets(),
             default_open_target_id: default_open_target_id(),
             codex_binary_path: None,
+            claude_binary_path: None,
         }
     }
 }
@@ -189,6 +204,7 @@ impl Default for GlobalSettings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalSettingsPatch {
+    pub default_provider: Option<ProviderKind>,
     pub default_model: Option<String>,
     pub default_reasoning_effort: Option<ReasoningEffort>,
     pub default_collaboration_mode: Option<CollaborationMode>,
@@ -206,6 +222,8 @@ pub struct GlobalSettingsPatch {
     pub default_open_target_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_explicit_optional")]
     pub codex_binary_path: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_explicit_optional")]
+    pub claude_binary_path: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -224,6 +242,9 @@ pub struct NotificationSoundSettingsPatch {
 
 impl GlobalSettings {
     pub fn apply_patch(&mut self, patch: GlobalSettingsPatch) {
+        if let Some(default_provider) = patch.default_provider {
+            self.default_provider = default_provider;
+        }
         if let Some(default_model) = patch.default_model {
             self.default_model = default_model;
         }
@@ -268,6 +289,9 @@ impl GlobalSettings {
         }
         if let Some(codex_binary_path) = patch.codex_binary_path {
             self.codex_binary_path = codex_binary_path;
+        }
+        if let Some(claude_binary_path) = patch.claude_binary_path {
+            self.claude_binary_path = claude_binary_path;
         }
     }
 
@@ -324,8 +348,27 @@ impl GlobalSettings {
 
     pub fn validate(&self) -> Result<(), String> {
         validate_multi_agent_nudge_max_subagents(self.multi_agent_nudge_max_subagents)?;
+        validate_provider_model_defaults(
+            self.default_provider,
+            &self.default_model,
+            self.default_reasoning_effort,
+        )?;
         self.shortcuts.validate().map_err(|error| error.to_string())
     }
+}
+
+fn validate_provider_model_defaults(
+    provider: ProviderKind,
+    model: &str,
+    reasoning_effort: ReasoningEffort,
+) -> Result<(), String> {
+    if model.trim().is_empty() {
+        return Err("Default model cannot be empty.".to_string());
+    }
+    if matches!(provider, ProviderKind::Codex) && matches!(reasoning_effort, ReasoningEffort::Max) {
+        return Err("Codex default reasoning does not support max.".to_string());
+    }
+    Ok(())
 }
 
 fn multi_agent_nudge_max_subagents_is_valid(value: u8) -> bool {
@@ -682,6 +725,7 @@ mod tests {
         let mut settings = GlobalSettings::default();
 
         settings.apply_patch(GlobalSettingsPatch {
+            default_provider: None,
             default_model: Some("gpt-5.3-codex".to_string()),
             default_reasoning_effort: Some(ReasoningEffort::Medium),
             default_collaboration_mode: None,
@@ -715,6 +759,7 @@ mod tests {
             }]),
             default_open_target_id: Some("zed".to_string()),
             codex_binary_path: Some(Some("/opt/homebrew/bin/codex".to_string())),
+            claude_binary_path: None,
         });
 
         assert_eq!(settings.default_model, "gpt-5.3-codex");

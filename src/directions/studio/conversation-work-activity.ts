@@ -275,7 +275,12 @@ function inferEffectiveTurnIds(snapshot: ThreadConversationSnapshot) {
   let previousTurnId: string | null = null;
 
   snapshot.items.forEach((item, index) => {
-    if (item.turnId) {
+    if (item.kind === "message" && item.role === "user") {
+      previousTurnId = item.turnId ?? null;
+      if (item.turnId) {
+        turnIds.set(item.id, item.turnId);
+      }
+    } else if (item.turnId) {
       previousTurnId = item.turnId;
       turnIds.set(item.id, item.turnId);
     }
@@ -285,6 +290,11 @@ function inferEffectiveTurnIds(snapshot: ThreadConversationSnapshot) {
   let nextTurnId: string | null = null;
   for (let index = snapshot.items.length - 1; index >= 0; index -= 1) {
     const item = snapshot.items[index];
+    if (item.kind === "message" && item.role === "user") {
+      nextTurnIds[index] = item.turnId ?? nextTurnId;
+      nextTurnId = null;
+      continue;
+    }
     if (item.turnId) {
       nextTurnId = item.turnId;
     }
@@ -302,12 +312,14 @@ function inferEffectiveTurnIds(snapshot: ThreadConversationSnapshot) {
       return;
     }
 
+    const isBeforeActiveTurn =
+      activeTurnAnchorIndex !== null && index <= activeTurnAnchorIndex;
     const inferredTurnId =
-      nextTurnIds[index] ??
+      (isBeforeActiveTurn ? null : nextTurnIds[index]) ??
       inferActiveTurnId(snapshot, index, activeTurnAnchorIndex) ??
       previousTurnIds[index] ??
-      snapshot.activeTurnId ??
-      snapshot.taskPlan?.turnId ??
+      (isBeforeActiveTurn ? null : snapshot.activeTurnId) ??
+      (isBeforeActiveTurn ? null : snapshot.taskPlan?.turnId) ??
       null;
 
     if (inferredTurnId) {
@@ -323,8 +335,14 @@ function findActiveTurnAnchorIndex(snapshot: ThreadConversationSnapshot) {
     return null;
   }
 
-  for (let index = snapshot.items.length - 1; index >= 0; index -= 1) {
+  for (let index = 0; index < snapshot.items.length; index += 1) {
     if (snapshot.items[index]?.turnId === snapshot.activeTurnId) {
+      for (let userIndex = index; userIndex >= 0; userIndex -= 1) {
+        const item = snapshot.items[userIndex];
+        if (item?.kind === "message" && item.role === "user") {
+          return userIndex;
+        }
+      }
       return index;
     }
   }

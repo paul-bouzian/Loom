@@ -34,7 +34,8 @@ export type GitChangeKind =
   | "unknown";
 export type GitDiffLineKind = "hunk" | "context" | "added" | "removed";
 export type SubagentStatus = "running" | "completed" | "failed";
-export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+export type ProviderKind = "codex" | "claude";
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CollaborationMode = "build" | "plan";
 export type ApprovalPolicy = "askToEdit" | "fullAccess";
 export type OpenTargetKind = "app" | "fileManager";
@@ -84,6 +85,7 @@ export type NetworkPolicyRuleAction = "allow" | "deny";
 /* ── Domain records ── */
 
 export type ThreadOverrides = {
+  provider?: ProviderKind;
   model?: string;
   reasoningEffort?: ReasoningEffort;
   collaborationMode?: CollaborationMode;
@@ -101,13 +103,38 @@ export type RuntimeStatusSnapshot = {
   lastExitCode?: number;
 };
 
+export type ThreadHandoffBootstrapStatus = "pending" | "completed";
+
+export type ThreadHandoffImportedMessage = {
+  id: string;
+  role: ConversationRole;
+  text: string;
+  images?: ConversationImageAttachment[] | null;
+  createdAt: string;
+};
+
+export type ThreadHandoffState = {
+  sourceThreadId: string;
+  sourceProvider: ProviderKind;
+  sourceThreadTitle?: string | null;
+  environmentName?: string | null;
+  branchName?: string | null;
+  worktreePath?: string | null;
+  importedAt: string;
+  bootstrapStatus: ThreadHandoffBootstrapStatus;
+  importedMessages: ThreadHandoffImportedMessage[];
+};
+
 export type ThreadRecord = {
   id: string;
   environmentId: string;
   title: string;
   status: ThreadStatus;
-  codexThreadId?: string;
+  provider: ProviderKind;
+  providerThreadId?: string | null;
+  codexThreadId?: string | null;
   overrides: ThreadOverrides;
+  handoff?: ThreadHandoffState | null;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
@@ -251,6 +278,7 @@ export type NotificationSoundSettingsPatch = {
 };
 
 export type GlobalSettings = {
+  defaultProvider: ProviderKind;
   defaultModel: string;
   defaultReasoningEffort: ReasoningEffort;
   defaultCollaborationMode: CollaborationMode;
@@ -266,6 +294,7 @@ export type GlobalSettings = {
   openTargets: OpenTarget[];
   defaultOpenTargetId: string;
   codexBinaryPath?: string;
+  claudeBinaryPath?: string;
 };
 
 export type OpenTarget = {
@@ -332,6 +361,23 @@ export type CodexRateLimitSnapshot = {
   planType?: CodexPlanType | null;
   primary?: CodexRateLimitWindow | null;
   secondary?: CodexRateLimitWindow | null;
+};
+
+export type ProviderRateLimitStatus = "ok" | "error" | "unavailable";
+
+export type ProviderRateLimitWindow = {
+  resetsAt?: number | null;
+  usedPercent: number;
+  windowDurationMins?: number | null;
+};
+
+export type ProviderRateLimitSnapshot = {
+  provider: ProviderKind;
+  primary?: ProviderRateLimitWindow | null;
+  secondary?: ProviderRateLimitWindow | null;
+  updatedAt: number;
+  error?: string | null;
+  status: ProviderRateLimitStatus;
 };
 
 export type CodexUsageEventPayload = {
@@ -497,6 +543,7 @@ export type AppUpdateSnapshot = {
 /* ── Conversation ── */
 
 export type ConversationComposerSettings = {
+  provider: ProviderKind;
   model: string;
   reasoningEffort: ReasoningEffort;
   collaborationMode: CollaborationMode;
@@ -531,7 +578,7 @@ export type ComposerAppOption = {
 
 export type ComposerTarget =
   | { kind: "thread"; threadId: string }
-  | { kind: "environment"; environmentId: string }
+  | { kind: "environment"; environmentId: string; provider?: ProviderKind }
   | { kind: "chatWorkspace" };
 
 export type ThreadComposerCatalog = {
@@ -545,6 +592,7 @@ export type ComposerFileSearchResult = {
 };
 
 export type ModelOption = {
+  provider?: ProviderKind;
   id: string;
   displayName: string;
   description: string;
@@ -552,7 +600,16 @@ export type ModelOption = {
   supportedReasoningEfforts: ReasoningEffort[];
   inputModalities: InputModality[];
   supportedServiceTiers?: ServiceTier[];
+  supportsThinking?: boolean;
   isDefault: boolean;
+};
+
+export type ProviderOption = {
+  id: ProviderKind;
+  displayName: string;
+  icon: string;
+  isDefault: boolean;
+  models: ModelOption[];
 };
 
 export type CollaborationModeOption = {
@@ -565,6 +622,7 @@ export type CollaborationModeOption = {
 
 export type EnvironmentCapabilitiesSnapshot = {
   environmentId: string;
+  providers?: ProviderOption[];
   models: ModelOption[];
   collaborationModes: CollaborationModeOption[];
 };
@@ -787,6 +845,8 @@ export type ConversationItem =
 export type ThreadConversationSnapshot = {
   threadId: string;
   environmentId: string;
+  provider: ProviderKind;
+  providerThreadId?: string | null;
   codexThreadId?: string | null;
   status: ConversationStatus;
   activeTurnId?: string | null;
@@ -859,6 +919,11 @@ export type CreateThreadRequest = {
   environmentId: string;
   title?: string;
   overrides?: ThreadOverrides;
+};
+
+export type CreateThreadHandoffRequest = {
+  sourceThreadId: string;
+  targetProvider: ProviderKind;
 };
 
 export type RenameThreadRequest = {
@@ -968,6 +1033,7 @@ export type SubmitPlanDecisionInput = {
 };
 
 export type GlobalSettingsPatch = {
+  defaultProvider?: ProviderKind;
   defaultModel?: string;
   defaultReasoningEffort?: ReasoningEffort;
   defaultCollaborationMode?: CollaborationMode;
@@ -983,6 +1049,7 @@ export type GlobalSettingsPatch = {
   openTargets?: OpenTarget[];
   defaultOpenTargetId?: string;
   codexBinaryPath?: string | null;
+  claudeBinaryPath?: string | null;
 };
 
 export type OpenEnvironmentInput = {

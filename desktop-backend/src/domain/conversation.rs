@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::settings::{ApprovalPolicy, CollaborationMode, ReasoningEffort, ServiceTier};
+use super::settings::{
+    ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort, ServiceTier,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -24,7 +26,7 @@ pub enum ConversationItemStatus {
     Declined,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ConversationRole {
     User,
@@ -43,6 +45,8 @@ pub enum ConversationTone {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationComposerSettings {
+    #[serde(default)]
+    pub provider: ProviderKind,
     pub model: String,
     pub reasoning_effort: ReasoningEffort,
     pub collaboration_mode: CollaborationMode,
@@ -68,6 +72,8 @@ pub enum ComposerTarget {
     Environment {
         #[serde(rename = "environmentId")]
         environment_id: String,
+        #[serde(default)]
+        provider: Option<ProviderKind>,
     },
     ChatWorkspace {},
 }
@@ -118,6 +124,8 @@ pub struct ComposerFileSearchResult {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelOption {
+    #[serde(default)]
+    pub provider: ProviderKind,
     pub id: String,
     pub display_name: String,
     pub description: String,
@@ -126,7 +134,19 @@ pub struct ModelOption {
     pub input_modalities: Vec<InputModality>,
     #[serde(default)]
     pub supported_service_tiers: Vec<ServiceTier>,
+    #[serde(default)]
+    pub supports_thinking: bool,
     pub is_default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderOption {
+    pub id: ProviderKind,
+    pub display_name: String,
+    pub icon: String,
+    pub is_default: bool,
+    pub models: Vec<ModelOption>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -150,6 +170,8 @@ pub struct CollaborationModeOption {
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentCapabilitiesSnapshot {
     pub environment_id: String,
+    #[serde(default)]
+    pub providers: Vec<ProviderOption>,
     pub models: Vec<ModelOption>,
     pub collaboration_modes: Vec<CollaborationModeOption>,
 }
@@ -566,6 +588,8 @@ pub struct ConversationSystemItem {
 pub struct ThreadConversationSnapshot {
     pub thread_id: String,
     pub environment_id: String,
+    pub provider: ProviderKind,
+    pub provider_thread_id: Option<String>,
     pub codex_thread_id: Option<String>,
     pub status: ConversationStatus,
     pub active_turn_id: Option<String>,
@@ -586,9 +610,29 @@ impl ThreadConversationSnapshot {
         codex_thread_id: Option<String>,
         composer: ConversationComposerSettings,
     ) -> Self {
+        Self::new_for_provider(
+            thread_id,
+            environment_id,
+            composer.provider,
+            codex_thread_id.clone(),
+            codex_thread_id,
+            composer,
+        )
+    }
+
+    pub fn new_for_provider(
+        thread_id: String,
+        environment_id: String,
+        provider: ProviderKind,
+        provider_thread_id: Option<String>,
+        codex_thread_id: Option<String>,
+        composer: ConversationComposerSettings,
+    ) -> Self {
         Self {
             thread_id,
             environment_id,
+            provider,
+            provider_thread_id,
             codex_thread_id,
             status: ConversationStatus::Idle,
             active_turn_id: None,
@@ -623,7 +667,7 @@ pub struct ConversationEventPayload {
 
 #[cfg(test)]
 mod tests {
-    use super::ComposerTarget;
+    use super::{ComposerTarget, ProviderKind};
 
     #[test]
     fn composer_target_deserializes_camel_case_variant_fields() {
@@ -648,6 +692,22 @@ mod tests {
             environment_target,
             ComposerTarget::Environment {
                 environment_id: "env-123".to_string(),
+                provider: None,
+            }
+        );
+
+        let provider_environment_target =
+            serde_json::from_value::<ComposerTarget>(serde_json::json!({
+                "kind": "environment",
+                "environmentId": "env-123",
+                "provider": "claude",
+            }))
+            .expect("environment target with provider should deserialize");
+        assert_eq!(
+            provider_environment_target,
+            ComposerTarget::Environment {
+                environment_id: "env-123".to_string(),
+                provider: Some(ProviderKind::Claude),
             }
         );
 

@@ -21,6 +21,7 @@ import type {
   ConversationComposerSettings,
   ConversationImageAttachment,
   ModelOption,
+  ReasoningEffort,
   ThreadComposerCatalog,
   ThreadTokenUsageSnapshot,
 } from "../../../lib/types";
@@ -35,13 +36,14 @@ import {
 } from "../conversation-images";
 import {
   APPROVAL_OPTIONS,
-  composerModelOptions,
   labelForCollaborationMode,
   reasoningOptionsFor,
 } from "../composerOptions";
-import { labelForModelOption } from "../modelLabels";
+import { formatModelLabel, labelForModelOption } from "../modelLabels";
 import { ComposerAutocompleteMenu } from "./ComposerAutocompleteMenu";
 import { ComposerImageStrip } from "./ComposerImageStrip";
+import { ProviderModelPicker } from "./ProviderModelPicker";
+import { ReasoningContextPicker } from "./ReasoningContextPicker";
 import {
   addComposerMentionBinding,
   prepareComposerMentionBindingsForSend,
@@ -67,7 +69,7 @@ type Props = {
   collaborationModes: Array<{ id: string; label: string }>;
   disabled: boolean;
   draft: string;
-  effortOptions: Array<"low" | "medium" | "high" | "xhigh">;
+  effortOptions: ReasoningEffort[];
   focusKey: string;
   images: ConversationImageAttachment[];
   isBusy: boolean;
@@ -97,6 +99,7 @@ type Props = {
   imageSupportNoticeEnabled?: boolean;
   transportEnabled?: boolean;
   voiceEnabled?: boolean;
+  providerLocked?: boolean;
 };
 
 export function InlineComposer({
@@ -128,6 +131,7 @@ export function InlineComposer({
   imageSupportNoticeEnabled,
   transportEnabled = true,
   voiceEnabled = transportEnabled,
+  providerLocked = true,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -163,12 +167,22 @@ export function InlineComposer({
     : `Message ${APP_NAME}...`;
   const selectedModel = useMemo(
     () =>
-      modelOptions.find((candidate) => candidate.id === composer.model) ?? null,
-    [composer.model, modelOptions],
+      modelOptions.find(
+        (candidate) =>
+          candidate.id === composer.model &&
+          (candidate.provider ?? "codex") === composer.provider,
+      ) ?? null,
+    [composer.model, composer.provider, modelOptions],
   );
+  const effectiveEffortOptions =
+    selectedModel?.supportedReasoningEfforts ?? effortOptions;
   const fastModeSupported = modelSupportsFastMode(selectedModel);
   const fastModeEnabled = fastModeSupported && composer.serviceTier === "fast";
-  const selectedModelLabel = labelForModelOption(selectedModel, composer.model);
+  const selectedModelLabel = selectedModel
+    ? labelForModelOption(selectedModel, composer.model)
+    : formatModelLabel(composer.model);
+  const selectedModelUnavailable =
+    modelOptions.length > 0 && selectedModel === null;
   let fastModeLabel: string;
   if (!fastModeSupported) {
     fastModeLabel = `Fast mode is unavailable for ${selectedModelLabel}.`;
@@ -182,7 +196,9 @@ export function InlineComposer({
   const hasDraftContent = draft.trim().length > 0;
   const showImageSupportNotice = imageSupportNoticeEnabled ?? transportEnabled;
   let imageSupportNotice: string | null = null;
-  if (!imagesEnabled && showImageSupportNotice) {
+  if (selectedModelUnavailable) {
+    imageSupportNotice = `${selectedModelLabel} is unavailable for the active runtime. Switch to an available model.`;
+  } else if (!imagesEnabled && showImageSupportNotice) {
     const base = modelImageSupportMessage(selectedModel);
     imageSupportNotice = hasAttachedImages
       ? `${base} Remove the current images or switch to a model with image input.`
@@ -232,6 +248,7 @@ export function InlineComposer({
     : !hasDraftContent && !hasAttachedImages;
   const sendDisabled =
     inputDisabled ||
+    selectedModelUnavailable ||
     missingRequiredContent ||
     (hasAttachedImages && !imagesEnabled);
   const {
@@ -632,26 +649,19 @@ export function InlineComposer({
               <ImageIcon size={14} />
             </button>
           </Tooltip>
-          <ComposerPicker
-            label="Model"
-            value={composer.model}
-            options={composerModelOptions(modelOptions, composer.model)}
-            compact
+          <ProviderModelPicker
+            composer={composer}
             disabled={controlsDisabled}
-            onChange={(value) => onUpdateComposer({ model: value })}
+            modelOptions={modelOptions}
+            providerLocked={providerLocked}
+            onUpdateComposer={onUpdateComposer}
           />
-          <ComposerPicker
-            label="Thinking"
-            value={composer.reasoningEffort}
-            options={reasoningOptionsFor(effortOptions)}
-            compact
+          <ReasoningContextPicker
+            composer={composer}
             disabled={controlsDisabled}
-            onChange={(value) =>
-              onUpdateComposer({
-                reasoningEffort:
-                  value as ConversationComposerSettings["reasoningEffort"],
-              })
-            }
+            modelOptions={modelOptions}
+            options={reasoningOptionsFor(effectiveEffortOptions)}
+            onUpdateComposer={onUpdateComposer}
           />
           <ComposerPicker
             label="Access"

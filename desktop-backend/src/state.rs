@@ -5,6 +5,7 @@ use crate::error::AppResult;
 use crate::events::EventSink;
 use crate::infrastructure::database::AppDatabase;
 use crate::runtime::supervisor::RuntimeSupervisor;
+use crate::services::provider_usage::ProviderUsageService;
 use crate::services::pull_requests::PullRequestMonitorService;
 use crate::services::terminal::TerminalService;
 use crate::services::voice::VoiceService;
@@ -16,6 +17,7 @@ pub struct AppState {
     pub workspace: WorkspaceService,
     pub pull_requests: PullRequestMonitorService,
     pub runtime: RuntimeSupervisor,
+    pub provider_usage: ProviderUsageService,
     pub voice: VoiceService,
     pub terminal: TerminalService,
     pub app_data_dir: PathBuf,
@@ -41,6 +43,7 @@ impl AppState {
             pull_requests: PullRequestMonitorService::new(events.clone(), workspace.clone()),
             workspace,
             runtime: RuntimeSupervisor::new(events, env!("CARGO_PKG_VERSION").to_string()),
+            provider_usage: ProviderUsageService::new(),
             voice: VoiceService::new(),
             terminal: TerminalService::default(),
             app_data_dir,

@@ -5,15 +5,18 @@ import {
   type ConversationIndicatorTone,
 } from "../../lib/conversation-status";
 import type {
+  ProviderKind,
   PullRequestChecksSnapshot,
   ThreadRecord,
 } from "../../lib/types";
 import {
   AlertIcon,
+  ArrowRightIcon,
   GitBranchIcon,
   PanelRightIcon,
   SpinnerIcon,
 } from "../../shared/Icons";
+import { ProviderLogo } from "../../shared/ProviderLogo";
 import { Tooltip } from "../../shared/Tooltip";
 import { useConversationStore } from "../../stores/conversation-store";
 import {
@@ -108,65 +111,69 @@ function SidebarThreadRowImpl(props: Props) {
 
   return (
     <div className="tree-sidebar__thread-row">
-      <button
-        type="button"
-        className={classes}
-        title={paneHint ?? thread.title}
-        data-thread-id={thread.id}
-        onContextMenu={onContextMenu}
-        {...dragHandlers}
-      >
-        <span
-          className="tree-sidebar__thread-indicator"
-          aria-hidden="true"
+      <div className="tree-sidebar__thread-content">
+        <button
+          type="button"
+          className={classes}
+          title={paneHint ?? thread.title}
+          data-thread-id={thread.id}
+          onContextMenu={onContextMenu}
+          {...dragHandlers}
         >
-          {renderThreadIndicator(tone, unread)}
-        </span>
-        {indicatorAccessibleLabel(tone, unread) ? (
-          <span className="tree-sidebar__sr-only">
-            {indicatorAccessibleLabel(tone, unread)}
-          </span>
-        ) : null}
-        <span className="tree-sidebar__thread-title">{thread.title}</span>
-      </button>
-      {worktree && onBranchChipContextMenu && onBranchChipOpenPullRequest ? (
-        <Tooltip
-          content={tooltipContent}
-          side="bottom"
-          repositionKey={tooltipRepositionKey}
-        >
-          <button
-            type="button"
-            className="tree-sidebar__thread-branch"
-            data-pr-state={worktree.pullRequest?.state ?? "none"}
-            aria-label={chipLabel}
-            data-no-reorder-drag="true"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              const pr = worktree.pullRequest;
-              if (pr) {
-                onBranchChipOpenPullRequest(pr.url);
-              }
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onBranchChipContextMenu(event);
-            }}
+          <span
+            className="tree-sidebar__thread-indicator"
+            aria-hidden="true"
           >
-            {checks ? (
-              <span
-                className="tree-sidebar__thread-checks-dot"
-                data-checks-state={checks.rollup}
-                aria-hidden="true"
-              />
-            ) : null}
-            <GitBranchIcon size={14} className="tree-sidebar__thread-branch-icon" />
-          </button>
-        </Tooltip>
-      ) : null}
+            {renderThreadIndicator(tone, unread)}
+          </span>
+          {indicatorAccessibleLabel(tone, unread) ? (
+            <span className="tree-sidebar__sr-only">
+              {indicatorAccessibleLabel(tone, unread)}
+            </span>
+          ) : null}
+          <span className="tree-sidebar__thread-title">{thread.title}</span>
+          <ThreadProviderMark thread={thread} />
+        </button>
+        {worktree && onBranchChipContextMenu && onBranchChipOpenPullRequest ? (
+          <Tooltip
+            content={tooltipContent}
+            side="bottom"
+            repositionKey={tooltipRepositionKey}
+          >
+            <button
+              type="button"
+              className="tree-sidebar__thread-branch"
+              data-pr-state={worktree.pullRequest?.state ?? "none"}
+              aria-label={chipLabel}
+              data-no-reorder-drag="true"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const pr = worktree.pullRequest;
+                if (pr) {
+                  onBranchChipOpenPullRequest(pr.url);
+                }
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onBranchChipContextMenu(event);
+              }}
+            >
+              {checks ? (
+                <span
+                  className="tree-sidebar__thread-checks-dot"
+                  data-checks-state={checks.rollup}
+                  aria-hidden="true"
+                />
+              ) : null}
+              <GitBranchIcon size={12} className="tree-sidebar__thread-branch-icon" />
+              <span className="tree-sidebar__thread-branch-label">{chipLabel}</span>
+            </button>
+          </Tooltip>
+        ) : null}
+      </div>
       <Tooltip content="Open in other pane" side="bottom">
         <button
           type="button"
@@ -225,6 +232,37 @@ function resolvePaneHint(
   return "Open in another pane";
 }
 
+function ThreadProviderMark({ thread }: { thread: ThreadRecord }) {
+  const provider = thread.provider ?? "codex";
+  const sourceProvider = thread.handoff?.sourceProvider ?? null;
+  if (sourceProvider && sourceProvider !== provider) {
+    return (
+      <span
+        className="tree-sidebar__thread-provider tree-sidebar__thread-provider-handoff"
+        aria-label={`${providerLabel(sourceProvider)} handoff to ${providerLabel(provider)}`}
+        title={`${providerLabel(sourceProvider)} handoff to ${providerLabel(provider)}`}
+      >
+        <ProviderLogo provider={sourceProvider} size={13} decorative />
+        <ArrowRightIcon size={9} className="tree-sidebar__thread-provider-arrow" />
+        <ProviderLogo provider={provider} size={13} decorative />
+      </span>
+    );
+  }
+
+  return (
+    <ProviderLogo
+      provider={provider}
+      size={13}
+      className="tree-sidebar__thread-provider"
+      decorative
+    />
+  );
+}
+
+function providerLabel(provider: ProviderKind): string {
+  return provider === "claude" ? "Anthropic" : "OpenAI";
+}
+
 const CHECK_ITEMS_IN_TOOLTIP = 8;
 
 function buildChecksRepositionKey(checks: PullRequestChecksSnapshot): string {
@@ -266,4 +304,3 @@ function renderBranchChipTooltip(
     </span>
   );
 }
-

@@ -14,6 +14,7 @@ import {
   makeProject,
   makeWorkspaceSnapshot,
 } from "../../../test/fixtures/conversation";
+import { sendThreadDraft } from "../studioActions";
 import { ThreadDraftComposer } from "./ThreadDraftComposer";
 
 let latestEnvironmentSelectorProps: {
@@ -23,11 +24,22 @@ let latestEnvironmentSelectorProps: {
 let latestInlineComposerProps: {
   draft: string;
   images: Array<{ type: string }>;
-  composer: { model: string };
-  modelOptions: Array<{ id: string; displayName: string }>;
+  composer: { model: string; provider?: string };
+  modelOptions: Array<{
+    id: string;
+    displayName: string;
+    inputModalities?: string[];
+    provider?: string;
+  }>;
   catalogTarget?: unknown;
   fileSearchTarget?: unknown;
   transportEnabled?: boolean;
+  onSend: (
+    text: string,
+    images: Array<{ type: string }>,
+    mentionBindings: [],
+    draftMentionBindings: [],
+  ) => void;
 } | null = null;
 
 vi.mock("../../../lib/bridge", () => ({
@@ -46,14 +58,26 @@ vi.mock("../composer/InlineComposer", () => ({
     modelOptions,
     fileSearchTarget,
     transportEnabled,
+    onSend,
   }: {
-    composer: { model: string };
+    composer: { model: string; provider?: string };
     draft: string;
     images: Array<{ type: string }>;
     catalogTarget?: unknown;
-    modelOptions: Array<{ id: string; displayName: string }>;
+    modelOptions: Array<{
+      id: string;
+      displayName: string;
+      inputModalities?: string[];
+      provider?: string;
+    }>;
     fileSearchTarget?: unknown;
     transportEnabled?: boolean;
+    onSend: (
+      text: string,
+      images: Array<{ type: string }>,
+      mentionBindings: [],
+      draftMentionBindings: [],
+    ) => void;
   }) => {
     latestInlineComposerProps = {
       composer,
@@ -63,6 +87,7 @@ vi.mock("../composer/InlineComposer", () => ({
       catalogTarget,
       fileSearchTarget,
       transportEnabled,
+      onSend,
     };
     return (
       <div data-testid="inline-composer">
@@ -87,6 +112,7 @@ vi.mock("../studioActions", () => ({
 }));
 
 const mockedBridge = vi.mocked(bridge);
+const mockedSendThreadDraft = vi.mocked(sendThreadDraft);
 
 function resetConversationState() {
   teardownConversationListener();
@@ -125,6 +151,18 @@ describe("ThreadDraftComposer", () => {
           supportedReasoningEfforts: ["low", "medium", "high"],
           isDefault: false,
         },
+        {
+          ...capabilitiesFixture.models[0]!,
+          provider: "claude",
+          id: "claude-sonnet-4-6",
+          displayName: "Claude Sonnet 4.6",
+          defaultReasoningEffort: "high",
+          supportedReasoningEfforts: ["low", "medium", "high", "max"],
+          inputModalities: ["text", "image"],
+          supportedServiceTiers: ["fast"],
+          supportsThinking: true,
+          isDefault: false,
+        },
       ],
     });
     useWorkspaceStore.setState((state) => ({
@@ -161,9 +199,112 @@ describe("ThreadDraftComposer", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId("inline-composer")).toHaveTextContent(
-        "gpt-5.4,gpt-5.4-mini",
+      expect(latestInlineComposerProps?.modelOptions.map((model) => model.id)).toEqual(
+        expect.arrayContaining([
+          "gpt-5.4",
+          "gpt-5.4-mini",
+          "claude-sonnet-4-6",
+        ]),
       );
+      expect(
+        latestInlineComposerProps?.modelOptions.find((model) => model.id === "gpt-5.4")
+          ?.inputModalities,
+      ).toContain("image");
+    });
+  });
+
+  it("keeps canonical OpenAI fallback models when runtime capabilities are partial", async () => {
+    mockedBridge.getEnvironmentCapabilities.mockResolvedValueOnce({
+      ...capabilitiesFixture,
+      environmentId: "env-local",
+      models: [
+        {
+          ...capabilitiesFixture.models[0]!,
+          provider: "claude",
+          id: "claude-sonnet-4-6",
+          displayName: "Claude Sonnet 4.6",
+          defaultReasoningEffort: "high",
+          supportedReasoningEfforts: ["low", "medium", "high", "max"],
+          inputModalities: ["text", "image"],
+          supportedServiceTiers: ["fast"],
+          supportsThinking: true,
+          isDefault: false,
+        },
+      ],
+    });
+
+    render(
+      <ThreadDraftComposer
+        draft={{ kind: "project", projectId: "project-1" }}
+        paneId="topLeft"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(latestInlineComposerProps?.modelOptions.map((model) => model.id)).toEqual(
+        expect.arrayContaining([
+          "gpt-5.5",
+          "gpt-5.4",
+          "gpt-5.4-mini",
+          "gpt-5.3-codex",
+          "claude-sonnet-4-6",
+        ]),
+      );
+    });
+  });
+
+  it("shows the first draft message optimistically while creating the thread", async () => {
+    let resolveSend!: (value: { ok: false; error: string }) => void;
+    const sendPromise = new Promise<{ ok: false; error: string }>((resolve) => {
+      resolveSend = resolve;
+    });
+    mockedSendThreadDraft.mockReturnValueOnce(sendPromise);
+    mockedBridge.getDraftThreadState.mockResolvedValueOnce({
+      composerDraft: {
+        text: "Bonjour instant",
+        images: [],
+        mentionBindings: [],
+        isRefiningPlan: false,
+      },
+      composer: {
+        provider: "codex",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+        collaborationMode: "build",
+        approvalPolicy: "askToEdit",
+        serviceTier: null,
+      },
+      projectSelection: { kind: "local" },
+    });
+
+    render(
+      <ThreadDraftComposer
+        draft={{ kind: "project", projectId: "project-1" }}
+        paneId="topLeft"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(latestInlineComposerProps?.draft).toBe("Bonjour instant");
+    });
+
+    act(() => {
+      latestInlineComposerProps?.onSend("Bonjour instant", [], [], []);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Bonjour instant")).toBeInTheDocument();
+      expect(latestInlineComposerProps?.draft).toBe("");
+    });
+
+    await act(async () => {
+      resolveSend({ ok: false, error: "Thread creation failed" });
+      await sendPromise;
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Bonjour instant")).toBeNull();
+      expect(latestInlineComposerProps?.draft).toBe("Bonjour instant");
     });
   });
 
@@ -223,6 +364,7 @@ describe("ThreadDraftComposer", () => {
           isRefiningPlan: false,
         },
         composer: {
+          provider: "codex",
           model: "gpt-5.4-mini",
           reasoningEffort: "medium",
           collaborationMode: "plan",
@@ -282,6 +424,7 @@ describe("ThreadDraftComposer", () => {
         isRefiningPlan: false,
       },
       composer: {
+        provider: "codex",
         model: "gpt-5.4-mini",
         reasoningEffort: "medium",
         collaborationMode: "plan",
@@ -350,12 +493,54 @@ describe("ThreadDraftComposer", () => {
       expect(latestInlineComposerProps?.catalogTarget).toEqual({
         kind: "environment",
         environmentId: "env-local",
+        provider: "codex",
       });
     });
     expect(latestInlineComposerProps?.fileSearchTarget).toEqual({
       kind: "environment",
       environmentId: "env-local",
+      provider: "codex",
     });
     expect(latestInlineComposerProps?.transportEnabled).toBe(false);
+  });
+
+  it("passes the selected draft provider to environment-backed composer targets", async () => {
+    mockedBridge.getDraftThreadState.mockResolvedValueOnce({
+      composerDraft: {
+        text: "",
+        images: [],
+        mentionBindings: [],
+        isRefiningPlan: false,
+      },
+      composer: {
+        provider: "claude",
+        model: "claude-sonnet-4-6",
+        reasoningEffort: "high",
+        collaborationMode: "build",
+        approvalPolicy: "askToEdit",
+        serviceTier: null,
+      },
+      projectSelection: null,
+    });
+
+    render(
+      <ThreadDraftComposer
+        draft={{ kind: "project", projectId: "project-1" }}
+        paneId="topLeft"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(latestInlineComposerProps?.catalogTarget).toEqual({
+        kind: "environment",
+        environmentId: "env-local",
+        provider: "claude",
+      });
+    });
+    expect(latestInlineComposerProps?.fileSearchTarget).toEqual({
+      kind: "environment",
+      environmentId: "env-local",
+      provider: "claude",
+    });
   });
 });

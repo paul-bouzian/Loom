@@ -12,6 +12,7 @@ import {
   selectHasAnyPane,
   selectLayout,
   selectSelectedProject,
+  selectSelectedThread,
   selectSettings,
   useWorkspaceStore,
   type SlotKey,
@@ -23,18 +24,23 @@ import {
   useTerminalStore,
 } from "../../stores/terminal-store";
 import {
+  ArrowRightIcon,
   GlobeIcon,
   PanelLeftIcon,
   PanelRightIcon,
   TerminalIcon,
 } from "../../shared/Icons";
+import { ProviderLogo } from "../../shared/ProviderLogo";
 import { Tooltip } from "../../shared/Tooltip";
+import { dialog } from "../../lib/shell";
+import type { ProviderKind, ThreadRecord } from "../../lib/types";
 import { EnvironmentActionControl } from "./EnvironmentActionControl";
 import { OpenEnvironmentControl } from "./OpenEnvironmentControl";
 import { PaneDropOverlay, ThreadDragGhost } from "./PaneDropOverlay";
 import { PaneSplitter } from "./PaneSplitter";
 import { DefaultStudioView, StudioPane } from "./StudioPane";
 import { TerminalPanel } from "./TerminalPanel";
+import { createThreadHandoff } from "./studioActions";
 import type { Theme } from "./StudioShell";
 import "./StudioMain.css";
 
@@ -66,6 +72,7 @@ export function StudioMain({
   onToggleBrowser,
 }: Props) {
   const selectedProject = useWorkspaceStore(selectSelectedProject);
+  const selectedThread = useWorkspaceStore(selectSelectedThread);
   const effectiveEnvironment = useWorkspaceStore(selectEffectiveEnvironment);
   const actionableEnvironment = useWorkspaceStore(selectEffectiveNonChatEnvironment);
   const settings = useWorkspaceStore(selectSettings);
@@ -143,6 +150,7 @@ export function StudioMain({
             }
             settings={settings}
           />
+          <HandoffControl thread={selectedThread} />
           <Tooltip
             content={
               !selectedEnvironmentId
@@ -258,6 +266,58 @@ export function StudioMain({
         </div>
       )}
     </main>
+  );
+}
+
+function HandoffControl({ thread }: { thread: ThreadRecord | null }) {
+  const [busy, setBusy] = useState(false);
+  const sourceProvider = thread?.provider ?? null;
+  const targetProvider: ProviderKind | null =
+    sourceProvider === "claude" ? "codex" : sourceProvider === "codex" ? "claude" : null;
+  const pendingBootstrap = thread?.handoff?.bootstrapStatus === "pending";
+  if (!thread || !targetProvider || pendingBootstrap) {
+    return null;
+  }
+
+  const handoffThreadId = thread.id;
+  const handoffTargetProvider = targetProvider;
+  const targetLabel = targetProvider === "claude" ? "Anthropic" : "OpenAI";
+  const tooltip = busy ? `Creating ${targetLabel} handoff` : `Handoff to ${targetLabel}`;
+
+  async function handleClick() {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await createThreadHandoff(
+        handoffThreadId,
+        handoffTargetProvider,
+      );
+      if (!result.ok) {
+        await dialog.message(result.error, {
+          title: `Handoff to ${targetLabel}`,
+          kind: "error",
+        });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Tooltip content={tooltip} side="bottom">
+      <button
+        type="button"
+        aria-label={tooltip}
+        className="studio-main__handoff"
+        disabled={busy}
+        onClick={() => void handleClick()}
+      >
+        <ArrowRightIcon size={12} />
+        <ProviderLogo provider={targetProvider} size={16} decorative />
+      </button>
+    </Tooltip>
   );
 }
 
