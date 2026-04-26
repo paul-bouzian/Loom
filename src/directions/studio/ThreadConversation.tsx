@@ -32,17 +32,14 @@ import {
   useConversationStore,
   type PendingFirstMessage,
 } from "../../stores/conversation-store";
+import { ContextWindowMeter } from "./ContextWindowMeter";
 import { ConversationInteractionPanel } from "./ConversationInteractionPanel";
 import { ConversationBanner, ConversationItemRow } from "./ConversationItemRow";
-import { ConversationMeta } from "./ConversationMeta";
 import { ConversationPlanCard } from "./ConversationPlanCard";
-import { ConversationTaskCard } from "./ConversationTaskCard";
 import { ConversationWorkActivityGroup } from "./ConversationWorkActivityGroup";
-import { SubagentStrip } from "./SubagentStrip";
 import { InlineComposer } from "./composer/InlineComposer";
 import {
   buildConversationTimeline,
-  collectStructuredActionAssistantMessageIds,
   hasRenderableTaskPlan,
   shouldRenderProposedPlan,
 } from "./conversation-work-activity";
@@ -55,7 +52,6 @@ type Props = {
   thread: ThreadRecord;
   composerFocusKey?: number;
   approveOrSubmitKey?: number;
-  onClosePane?: (() => void) | null;
 };
 
 export function ThreadConversation({
@@ -63,7 +59,6 @@ export function ThreadConversation({
   thread,
   composerFocusKey = 0,
   approveOrSubmitKey = 0,
-  onClosePane = null,
 }: Props) {
   const snapshot = useConversationStore(selectConversationSnapshot(thread.id));
   const composer = useConversationStore(selectConversationComposer(thread.id));
@@ -213,30 +208,18 @@ export function ThreadConversation({
     thread.id,
   ]);
 
-  const compactWorkActivity = settings?.collapseWorkActivity ?? true;
   const activePlan = snapshot?.proposedPlan ?? null;
   const activeTaskPlan = snapshot?.taskPlan ?? null;
   const shouldRenderPlanCard = shouldRenderProposedPlan(activePlan);
   const hasTaskPlanContent = hasRenderableTaskPlan(activeTaskPlan);
-  const suppressedAssistantItemIds = useMemo(
-    () => (snapshot ? collectStructuredActionAssistantMessageIds(snapshot) : new Set<string>()),
-    [snapshot],
-  );
   const handoffAssistantProviders = useMemo(
     () => handoffAssistantProviderMap(thread),
     [thread],
   );
-  const timelineEntries = useMemo(() => {
-    if (!snapshot) {
-      return [];
-    }
-
-    return compactWorkActivity
-      ? buildConversationTimeline(snapshot)
-      : snapshot.items
-          .filter((item) => !suppressedAssistantItemIds.has(item.id))
-          .map((item) => ({ kind: "item" as const, item }));
-  }, [compactWorkActivity, snapshot, suppressedAssistantItemIds]);
+  const timelineEntries = useMemo(
+    () => (snapshot ? buildConversationTimeline(snapshot) : []),
+    [snapshot],
+  );
   const interaction = snapshot?.pendingInteractions[0] ?? null;
   const fallbackComposer = useMemo(
     () => resolveFallbackComposer(thread, settings),
@@ -251,15 +234,6 @@ export function ThreadConversation({
   const isConnecting = hydration === "cold" || hydration === "loading";
   const isConnectionError = hydration === "error";
   const transportReady = hydration === "ready";
-
-  let connectionState: "connecting" | "error" | "idle";
-  if (isConnecting) {
-    connectionState = "connecting";
-  } else if (isConnectionError) {
-    connectionState = "error";
-  } else {
-    connectionState = "idle";
-  }
 
   useEffect(() => {
     if (!transportReady) {
@@ -527,16 +501,6 @@ export function ThreadConversation({
 
   return (
     <div className="tx-conversation">
-      <ConversationMeta
-        environment={environment}
-        thread={thread}
-        snapshot={snapshot}
-        connectionState={connectionState}
-        onRetryConnection={
-          isConnectionError ? () => void openThread(thread.id) : null
-        }
-        onClose={onClosePane}
-      />
       <div
         ref={timelineRef}
         className="tx-conversation__timeline"
@@ -551,6 +515,26 @@ export function ThreadConversation({
         !hasTaskPlanContent &&
         transportReady ? (
           <ConversationEmpty />
+        ) : null}
+        {isConnectionError ? (
+          <div className="tx-conversation__reconnect" role="alert">
+            {storeError ? (
+              <p className="tx-conversation__reconnect-message">{storeError}</p>
+            ) : null}
+            <button
+              type="button"
+              className="tx-conversation__reconnect-button"
+              onClick={() => {
+                if (snapshot) {
+                  void refreshThread(thread.id);
+                } else {
+                  void openThread(thread.id);
+                }
+              }}
+            >
+              Reconnect
+            </button>
+          </div>
         ) : null}
         {timelineEntries.map((entry) =>
           entry.kind === "item" ? (
@@ -580,9 +564,6 @@ export function ThreadConversation({
             onRefine={() => updateDraft(thread.id, { isRefiningPlan: true })}
           />
         ) : null}
-        {!compactWorkActivity && hasTaskPlanContent && activeTaskPlan ? (
-          <ConversationTaskCard taskPlan={activeTaskPlan} />
-        ) : null}
         {snapshot?.error ? (
           <ConversationBanner
             tone="error"
@@ -590,7 +571,7 @@ export function ThreadConversation({
             body={snapshot.error.message}
           />
         ) : null}
-        {storeError ? (
+        {storeError && !isConnectionError ? (
           <ConversationBanner tone="error" title="Action failed" body={storeError} />
         ) : null}
         <ConversationInteractionPanel
@@ -606,9 +587,6 @@ export function ThreadConversation({
           }
         />
       </div>
-      {!compactWorkActivity && snapshot ? (
-        <SubagentStrip subagents={snapshot.subagents} />
-      ) : null}
       <InlineComposer
         environmentId={environment.id}
         threadId={thread.id}
@@ -637,7 +615,6 @@ export function ThreadConversation({
                 : nextImages,
           }))
         }
-        tokenUsage={snapshot?.tokenUsage}
         onCancelRefine={() => updateDraft(thread.id, { isRefiningPlan: false })}
         onChangeDraft={(value, bindings) =>
           updateDraft(thread.id, {
@@ -659,6 +636,9 @@ export function ThreadConversation({
           updateComposer(thread.id, patch);
         }}
       />
+      <div className="tx-conversation__context-meter">
+        <ContextWindowMeter usage={snapshot?.tokenUsage} />
+      </div>
     </div>
   );
 }

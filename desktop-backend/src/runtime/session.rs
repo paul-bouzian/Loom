@@ -30,6 +30,7 @@ use crate::error::{AppError, AppResult};
 use crate::events::EventSink;
 use crate::runtime::claude::append_claude_provider;
 use crate::runtime::codex_paths::build_codex_process_path;
+use crate::runtime::item_store;
 use crate::runtime::proposed_plan_markup::{
     extract_proposed_plan_text, strip_proposed_plan_blocks,
 };
@@ -42,8 +43,9 @@ use crate::runtime::protocol::{
     initialized_notification, is_hidden_assistant_control_item,
     is_hidden_assistant_control_message, is_hidden_assistant_control_message_prefix,
     loaded_subagents_for_primary, mark_plan_approved, mark_plan_superseded,
-    model_options_from_response, normalize_item, normalize_server_interaction,
-    parse_incoming_message, plan_approval_message, proposed_plan_from_item,
+    merge_persisted_items, model_options_from_response, normalize_item,
+    normalize_server_interaction, parse_incoming_message, plan_approval_message,
+    proposed_plan_from_item,
     proposed_plan_from_turn_update, reconcile_snapshot_status, sandbox_policy_value,
     subagents_from_collab_item, task_plan_from_item, task_plan_from_turn_update,
     task_status_from_turn_status, token_usage_snapshot, upsert_item, user_input_payload,
@@ -491,13 +493,15 @@ impl RuntimeSession {
                         }),
                     )
                     .await?;
-                let snapshot = build_history_snapshot(
+                let mut snapshot = build_history_snapshot(
                     context.thread_id.clone(),
                     context.environment_id.clone(),
                     Some(codex_thread_id.clone()),
                     context.composer.clone(),
                     read_response.thread,
                 );
+                let persisted = item_store::load(&context.thread_id);
+                merge_persisted_items(&mut snapshot.items, persisted);
                 self.send_request(
                     "thread/resume",
                     serde_json::json!({
@@ -1453,20 +1457,23 @@ impl RuntimeSession {
         title: &str,
         body: &str,
     ) -> AppResult<ThreadConversationSnapshot> {
-        self.mutate_snapshot(thread_id, |snapshot| {
-            upsert_item(
-                &mut snapshot.items,
-                ConversationItem::System(crate::domain::conversation::ConversationSystemItem {
-                    id: format!("system-{}", Uuid::now_v7()),
-                    turn_id: None,
-                    tone: crate::domain::conversation::ConversationTone::Info,
-                    title: title.to_string(),
-                    body: body.to_string(),
-                }),
-            );
-            Ok(())
-        })
-        .await
+        let item =
+            ConversationItem::System(crate::domain::conversation::ConversationSystemItem {
+                id: format!("system-{}", Uuid::now_v7()),
+                turn_id: None,
+                tone: crate::domain::conversation::ConversationTone::Info,
+                title: title.to_string(),
+                body: body.to_string(),
+            });
+        let item_for_persist = item.clone();
+        let snapshot = self
+            .mutate_snapshot(thread_id, move |snapshot| {
+                upsert_item(&mut snapshot.items, item);
+                Ok(())
+            })
+            .await?;
+        item_store::save(thread_id, &item_for_persist);
+        Ok(snapshot)
     }
 
     async fn mutate_snapshot<F>(
@@ -2053,6 +2060,7 @@ async fn handle_notification(
                     }
                     _ => None,
                 };
+                let mut item_to_persist: Option<(String, ConversationItem)> = None;
                 let maybe_snapshot = {
                     let mut state = state.lock().await;
                     let stream_assistant_responses = state.stream_assistant_responses;
@@ -2189,13 +2197,35 @@ async fn handle_notification(
                                     }
                                 })
                             {
+                                let normalized_item_id =
+                                    conversation_item_id(&item).to_string();
                                 upsert_item(&mut snapshot.items, item);
+                                // Persist the merged result so prior `summary`/`output`
+                                // preserved by `upsert_item` is not truncated to the
+                                // partial completion payload on disk.
+                                if !is_started {
+                                    if let Some(merged) = snapshot
+                                        .items
+                                        .iter()
+                                        .find(|candidate| {
+                                            conversation_item_id(candidate) == normalized_item_id
+                                        })
+                                        .cloned()
+                                    {
+                                        item_to_persist =
+                                            Some((local_thread_id.clone(), merged));
+                                    }
+                                }
                             }
                             reconcile_snapshot_status(snapshot);
                             Some(snapshot.clone())
                         }
                     }
                 };
+
+                if let Some((thread_id, item)) = item_to_persist {
+                    item_store::save(&thread_id, &item);
+                }
 
                 if !is_started && item_type == Some("agentMessage") {
                     let mut state = state.lock().await;
@@ -2548,6 +2578,15 @@ fn task_status_from_snapshot(snapshot: &ThreadConversationSnapshot) -> Conversat
 
 fn assistant_control_delta_key(thread_id: &str, item_id: &str) -> String {
     format!("{thread_id}:{item_id}")
+}
+
+fn conversation_item_id(item: &ConversationItem) -> &str {
+    match item {
+        ConversationItem::Message(message) => message.id.as_str(),
+        ConversationItem::Reasoning(reasoning) => reasoning.id.as_str(),
+        ConversationItem::Tool(tool) => tool.id.as_str(),
+        ConversationItem::System(system) => system.id.as_str(),
+    }
 }
 
 fn agent_message_text_key(thread_id: &str, item_id: &str) -> String {

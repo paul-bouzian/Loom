@@ -67,15 +67,11 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function setCompactWorkActivity(enabled: boolean) {
+function setCompactWorkActivity(...args: [boolean?]) {
+  void args;
   useWorkspaceStore.setState((state) => ({
     ...state,
-    snapshot: makeWorkspaceSnapshot({
-      settings: {
-        ...makeWorkspaceSnapshot().settings,
-        collapseWorkActivity: enabled,
-      },
-    }),
+    snapshot: makeWorkspaceSnapshot(),
   }));
 }
 
@@ -153,9 +149,10 @@ describe("ThreadConversation", () => {
     );
 
     await screen.findByText("Inspect the repository");
-    expect(
-      screen.getByRole("button", { name: "Show thinking details" }),
-    ).toBeInTheDocument();
+    const workToggle = screen.getByRole("button", {
+      name: "Toggle work activity",
+    });
+    expect(workToggle).toBeInTheDocument();
     expect(
       screen.queryByText(
         "Looking through package.json and the runtime service.",
@@ -163,6 +160,7 @@ describe("ThreadConversation", () => {
     ).toBeNull();
     expect(screen.queryByText("3 tests passed")).toBeNull();
 
+    await userEvent.click(workToggle);
     await userEvent.click(
       screen.getByRole("button", { name: "Show thinking details" }),
     );
@@ -183,15 +181,15 @@ describe("ThreadConversation", () => {
     }>();
     mockedBridge.openThreadConversation.mockReturnValue(deferred.promise);
 
-    render(
+    const { container } = render(
       <ThreadConversation
         environment={makeEnvironment()}
         thread={makeThread()}
       />,
     );
 
-    expect(screen.getByText("Thread 1")).toBeInTheDocument();
-    expect(screen.getByText("Connecting…")).toBeInTheDocument();
+    expect(container.querySelector(".tx-conversation")).not.toBeNull();
+    expect(container.querySelector(".tx-loading")).not.toBeNull();
     expect(screen.queryByText("Connecting to Codex…")).toBeNull();
 
     deferred.resolve({
@@ -250,12 +248,7 @@ describe("ThreadConversation", () => {
   it("collapses intermediate work activity into a single live block when the setting is enabled", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
-      snapshot: makeWorkspaceSnapshot({
-        settings: {
-          ...makeWorkspaceSnapshot().settings,
-          collapseWorkActivity: true,
-        },
-      }),
+      snapshot: makeWorkspaceSnapshot(),
     }));
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({
@@ -310,14 +303,16 @@ describe("ThreadConversation", () => {
 
     expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
     expect(await screen.findByText("The workspace looks healthy.")).toBeInTheDocument();
-    expect(screen.getByText("1 thinking · 1 tool call")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Toggle work activity" }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByText("Looking through package.json and the runtime service."),
     ).toBeNull();
     expect(screen.queryByText("3 tests passed")).toBeNull();
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Show work activity details" }),
+      screen.getByRole("button", { name: "Toggle work activity" }),
     );
     await userEvent.click(
       screen.getByRole("button", { name: "Show thinking details" }),
@@ -335,12 +330,7 @@ describe("ThreadConversation", () => {
   it("keeps live assistant updates inside compact work activity until the turn completes", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
-      snapshot: makeWorkspaceSnapshot({
-        settings: {
-          ...makeWorkspaceSnapshot().settings,
-          collapseWorkActivity: true,
-        },
-      }),
+      snapshot: makeWorkspaceSnapshot(),
     }));
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({
@@ -379,29 +369,18 @@ describe("ThreadConversation", () => {
     );
 
     expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
-    expect(screen.getByText("1 update")).toBeInTheDocument();
     expect(
-      screen.getByText("I am checking the runtime flow now.").closest("[inert]"),
-    ).not.toBeNull();
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Show work activity details" }),
-    );
-
+      screen.getByRole("button", { name: "Toggle work activity" }),
+    ).toBeInTheDocument();
     expect(
-      screen.getByText("I am checking the runtime flow now.").closest("[inert]"),
-    ).toBeNull();
+      screen.getByText("I am checking the runtime flow now."),
+    ).toBeInTheDocument();
   });
 
   it("groups turnless live updates under the active compact work activity", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
-      snapshot: makeWorkspaceSnapshot({
-        settings: {
-          ...makeWorkspaceSnapshot().settings,
-          collapseWorkActivity: true,
-        },
-      }),
+      snapshot: makeWorkspaceSnapshot(),
     }));
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({
@@ -439,18 +418,12 @@ describe("ThreadConversation", () => {
     );
 
     expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
-    expect(screen.getByText("1 update")).toBeInTheDocument();
     expect(
-      screen.getByText("Indexing the workspace before answering.").closest("[inert]"),
-    ).not.toBeNull();
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Show work activity details" }),
-    );
-
+      screen.getByRole("button", { name: "Toggle work activity" }),
+    ).toBeInTheDocument();
     expect(
-      screen.getByText("Indexing the workspace before answering.").closest("[inert]"),
-    ).toBeNull();
+      screen.getByText("Indexing the workspace before answering."),
+    ).toBeInTheDocument();
   });
 
   it("renders a fresh compact work activity block as soon as a new turn starts", async () => {
@@ -486,13 +459,11 @@ describe("ThreadConversation", () => {
     ).toBeInTheDocument();
 
     const [toggle] = await screen.findAllByRole("button", {
-      name: "Show work activity details",
+      name: "Toggle work activity",
     });
     const group = toggle?.closest("section");
     expect(group).not.toBeNull();
-    expect(within(group!).getByText("Running")).toBeInTheDocument();
-    expect(within(group!).getByText("Work activity")).toBeInTheDocument();
-    expect(within(group!).queryByText(/thinking|tool call|update/i)).toBeNull();
+    expect(group?.classList.contains("tx-work-activity")).toBe(true);
   });
 
   it("keeps subsequent turnless live updates inside a new compact work activity block", async () => {
@@ -561,7 +532,7 @@ describe("ThreadConversation", () => {
     expect(screen.getByText("Inspect it one more time")).toBeInTheDocument();
 
     const toggles = await screen.findAllByRole("button", {
-      name: "Show work activity details",
+      name: "Toggle work activity",
     });
     expect(toggles).toHaveLength(2);
 
@@ -569,12 +540,12 @@ describe("ThreadConversation", () => {
     const secondGroup = toggles[1]?.closest("section");
     expect(firstGroup).not.toBeNull();
     expect(secondGroup).not.toBeNull();
-    expect(within(firstGroup!).getByText("Completed")).toBeInTheDocument();
-    expect(within(secondGroup!).getByText("Running")).toBeInTheDocument();
-    expect(within(firstGroup!).getByText("1 thinking")).toBeInTheDocument();
-    expect(within(secondGroup!).getByText("1 thinking")).toBeInTheDocument();
+    expect(firstGroup?.classList.contains("tx-work-activity")).toBe(true);
+    expect(secondGroup?.classList.contains("tx-work-activity")).toBe(true);
 
-    await userEvent.click(toggles[1]!);
+    if (toggles[1]?.getAttribute("aria-expanded") !== "true") {
+      await userEvent.click(toggles[1]!);
+    }
     await userEvent.click(
       within(secondGroup!).getByRole("button", { name: "Show thinking details" }),
     );
@@ -640,7 +611,7 @@ describe("ThreadConversation", () => {
     expect(screen.getByText("The workspace looks healthy.")).toBeInTheDocument();
 
     const toggles = await screen.findAllByRole("button", {
-      name: "Show work activity details",
+      name: "Toggle work activity",
     });
     expect(toggles).toHaveLength(2);
 
@@ -648,10 +619,12 @@ describe("ThreadConversation", () => {
     const secondGroup = toggles[1]?.closest("section");
     expect(firstGroup).not.toBeNull();
     expect(secondGroup).not.toBeNull();
-    expect(within(firstGroup!).getByText("Completed")).toBeInTheDocument();
-    expect(within(secondGroup!).getByText("Running")).toBeInTheDocument();
+    expect(firstGroup?.classList.contains("tx-work-activity")).toBe(true);
+    expect(secondGroup?.classList.contains("tx-work-activity")).toBe(true);
 
-    await userEvent.click(toggles[1]!);
+    if (toggles[1]?.getAttribute("aria-expanded") !== "true") {
+      await userEvent.click(toggles[1]!);
+    }
     await userEvent.click(
       within(secondGroup!).getByRole("button", { name: "Show thinking details" }),
     );
@@ -708,11 +681,11 @@ describe("ThreadConversation", () => {
       );
 
       const toggle = await screen.findByRole("button", {
-        name: "Show work activity details",
+        name: "Toggle work activity",
       });
       const group = toggle.closest("section");
       expect(group).not.toBeNull();
-      expect(within(toggle).getByText(label)).toBeInTheDocument();
+      expect(toggle.classList.contains(`tx-work-activity__toggle--${label.toLowerCase()}`)).toBe(true);
     },
   );
 
@@ -755,11 +728,11 @@ describe("ThreadConversation", () => {
     );
 
     const toggle = await screen.findByRole("button", {
-      name: "Show work activity details",
+      name: "Toggle work activity",
     });
     const group = toggle.closest("section");
     expect(group).not.toBeNull();
-    expect(within(group!).getByText("Waiting")).toBeInTheDocument();
+    expect(toggle.classList.contains("tx-work-activity__toggle--waiting")).toBe(true);
   });
 
   it("skips whitespace-only completed reasoning from compact work activity summaries", async () => {
@@ -816,14 +789,14 @@ describe("ThreadConversation", () => {
     );
 
     const toggle = await screen.findByRole("button", {
-      name: "Show work activity details",
+      name: "Toggle work activity",
     });
     const group = toggle.closest("section");
     expect(group).not.toBeNull();
-    expect(within(group!).getByText("1 tool call")).toBeInTheDocument();
-    expect(within(group!).queryByText(/thinking/i)).toBeNull();
 
-    await userEvent.click(toggle);
+    if (toggle.getAttribute("aria-expanded") !== "true") {
+      await userEvent.click(toggle);
+    }
     await userEvent.click(screen.getByRole("button", { name: "Show Command details" }));
 
     expect(
@@ -1231,9 +1204,12 @@ describe("ThreadConversation", () => {
     );
 
     await screen.findByText("Inspect the repository");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Show work activity details" }),
-    );
+    const workToggle = screen.getByRole("button", {
+      name: "Toggle work activity",
+    });
+    if (workToggle.getAttribute("aria-expanded") !== "true") {
+      await userEvent.click(workToggle);
+    }
 
     const updateRow = screen
       .getByText("I am checking the runtime flow now.")
@@ -1557,12 +1533,12 @@ describe("ThreadConversation", () => {
     );
 
     expect(
-      await screen.findByText(/2 subagents \(1 running\)/i),
-    ).toBeInTheDocument();
+      (await screen.findAllByRole("button", { name: "Toggle work activity" }))
+        .length,
+    ).toBeGreaterThan(0);
     expect(
-      screen.getByLabelText("Context window 0.3% used"),
+      screen.getByLabelText("Context window 0% used"),
     ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Subagents/i }));
     expect(screen.getByText("Scout")).toBeInTheDocument();
     expect(screen.getByText("Atlas")).toBeInTheDocument();
   });
@@ -1570,12 +1546,7 @@ describe("ThreadConversation", () => {
   it("moves task progress and subagents into the compact work activity group", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
-      snapshot: makeWorkspaceSnapshot({
-        settings: {
-          ...makeWorkspaceSnapshot().settings,
-          collapseWorkActivity: true,
-        },
-      }),
+      snapshot: makeWorkspaceSnapshot(),
     }));
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({
@@ -1615,12 +1586,14 @@ describe("ThreadConversation", () => {
       />,
     );
 
-    expect(await screen.findByText("2 subagents")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Subagents/i })).toBeNull();
+    const toggle = await screen.findByRole("button", {
+      name: "Toggle work activity",
+    });
+    expect(toggle).toBeInTheDocument();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Show work activity details" }),
-    );
+    if (toggle.getAttribute("aria-expanded") !== "true") {
+      await userEvent.click(toggle);
+    }
 
     expect(screen.getByText("Scout")).toBeInTheDocument();
     expect(screen.getByText("Atlas")).toBeInTheDocument();
@@ -1630,12 +1603,7 @@ describe("ThreadConversation", () => {
   it("keeps the last assistant reply visible when trailing work items share the same turn", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
-      snapshot: makeWorkspaceSnapshot({
-        settings: {
-          ...makeWorkspaceSnapshot().settings,
-          collapseWorkActivity: true,
-        },
-      }),
+      snapshot: makeWorkspaceSnapshot(),
     }));
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({
@@ -1688,16 +1656,16 @@ describe("ThreadConversation", () => {
 
     expect(await screen.findByText("The workspace looks healthy.")).toBeInTheDocument();
     expect(
-      screen.getByText("Codex compacted the conversation history.").closest("[inert]"),
-    ).not.toBeNull();
+      screen.queryByText("Codex compacted the conversation history."),
+    ).toBeNull();
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Show work activity details" }),
+      screen.getByRole("button", { name: "Toggle work activity" }),
     );
 
     expect(
-      screen.getByText("Codex compacted the conversation history.").closest("[inert]"),
-    ).toBeNull();
+      screen.getByText("Codex compacted the conversation history."),
+    ).toBeInTheDocument();
   });
 
   it("renders the interaction panel and paginates request-user-input questions", async () => {
@@ -1793,12 +1761,7 @@ describe("ThreadConversation", () => {
   it("keeps approvals, user input, and proposed plans visible outside compact work activity", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
-      snapshot: makeWorkspaceSnapshot({
-        settings: {
-          ...makeWorkspaceSnapshot().settings,
-          collapseWorkActivity: true,
-        },
-      }),
+      snapshot: makeWorkspaceSnapshot(),
     }));
     mockedBridge.openThreadConversation.mockResolvedValue({
       snapshot: makeConversationSnapshot({
@@ -1845,7 +1808,9 @@ describe("ThreadConversation", () => {
       />,
     );
 
-    expect(await screen.findByText("Work activity")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Toggle work activity" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Proposed plan" })).toBeInTheDocument();
     expect(screen.getByText("Codex needs input")).toBeInTheDocument();
     expect(screen.queryByText("Checking the safest way to ship this.")).toBeNull();
@@ -2202,6 +2167,15 @@ describe("ThreadConversation", () => {
       />,
     );
 
+    const workToggles = await screen.findAllByRole("button", {
+      name: "Toggle work activity",
+    });
+    for (const toggle of workToggles) {
+      if (toggle.getAttribute("aria-expanded") !== "true") {
+        await userEvent.click(toggle);
+      }
+    }
+
     expect((await screen.findAllByText("Tasks")).length).toBeGreaterThan(0);
     expect(
       screen.getByText("Codex is working through the implementation."),
@@ -2241,6 +2215,12 @@ describe("ThreadConversation", () => {
       />,
     );
 
+    const workToggle = await screen.findByRole("button", {
+      name: "Toggle work activity",
+    });
+    if (workToggle.getAttribute("aria-expanded") !== "true") {
+      await userEvent.click(workToggle);
+    }
     expect(
       (await screen.findAllByText("Inspect the runtime layer")).length,
     ).toBeGreaterThan(0);

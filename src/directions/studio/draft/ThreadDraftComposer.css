@@ -1,17 +1,36 @@
-/* Drafts drop the meta header; the welcome area absorbs the slack and the
-   composer stays pinned at the bottom (env selector floats in the slot
-   reserved by --tx-conversation-bottom-slot). */
+/* Drafts drop the meta header. In active state (after first send) the timeline
+   absorbs the slack and the composer pins to the bottom (env selector floats in
+   the slot reserved by --tx-conversation-bottom-slot). In the centered draft
+   state, welcome + composer are vertically centered together. */
 
 .thread-draft {
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
-.thread-draft__welcome {
-  flex: 1;
+.thread-draft--centered {
+  grid-template-rows: auto auto auto;
+  align-content: center;
+}
+
+.thread-draft--centered .thread-draft-env {
+  position: static;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  padding: 0 var(--tx-space-sm);
+}
+
+.thread-draft__centered-stack {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+}
+
+.thread-draft__welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: var(--tx-space-sm);
   text-align: center;
 }
@@ -25,17 +44,19 @@
   border-radius: var(--tx-radius-md);
 }
 
+.thread-draft__welcome > .project-icon {
+  width: 56px;
+  height: 56px;
+  font-size: var(--tx-text-xl);
+  border-radius: var(--tx-radius-md);
+  margin-bottom: var(--tx-space-xs);
+}
+
 .thread-draft__welcome-heading {
   font-size: var(--tx-text-2xl);
   font-weight: var(--tx-weight-bold);
   color: var(--tx-text-primary);
   letter-spacing: var(--tx-tracking-tighter);
-}
-
-.thread-draft__welcome-project {
-  font-size: var(--tx-text-sm);
-  font-family: var(--tx-font-mono);
-  color: var(--tx-text-muted);
 }
 
 .thread-draft__optimistic {
@@ -99,11 +120,11 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 24px;
-  padding: 0 10px;
-  border-radius: 999px;
-  border: 1px solid var(--tx-border-subtle);
-  background: var(--tx-bg-raised);
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--tx-radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--tx-text-secondary);
   font-size: var(--tx-text-xs);
   transition:
@@ -157,9 +178,9 @@
 }
 
 .thread-draft-env__name {
-  height: 24px;
-  padding: 0 10px;
-  border-radius: 999px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--tx-radius-sm);
   border: 1px solid var(--tx-border-subtle);
   background: var(--tx-bg-raised);
   color: var(--tx-text-primary);

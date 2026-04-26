@@ -128,7 +128,5 @@ export function ContextWindowMeter({ usage }: Props) {
 }
 
 function formatPercentageLabel(value: number) {
-  return value < 10
-    ? value.toFixed(1).replace(/\.0$/, "")
-    : `${Math.round(value)}`;
+  return `${Math.round(value)}`;
 }

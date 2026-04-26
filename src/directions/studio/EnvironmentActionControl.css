@@ -4,8 +4,8 @@
   align-self: center;
   min-width: 0;
   border: 1px solid var(--tx-border-subtle);
-  border-radius: var(--tx-radius-md);
-  background: color-mix(in srgb, var(--tx-bg-raised) 92%, transparent);
+  border-radius: var(--tx-radius-sm);
+  background: transparent;
   overflow: hidden;
   transition:
     border-color var(--tx-transition-fast),
@@ -40,13 +40,13 @@
   gap: var(--tx-space-sm);
   min-width: 0;
   max-width: 176px;
-  padding: 0 10px;
-  height: 28px;
+  padding: 0 8px;
+  height: 26px;
 }
 
 .environment-action-control__chevron {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-left: 1px solid var(--tx-border-subtle);
 }
 

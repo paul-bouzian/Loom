@@ -17,9 +17,11 @@ import type {
 } from "../../../lib/types";
 import { useConversationStore } from "../../../stores/conversation-store";
 import { EMPTY_CONVERSATION_COMPOSER_DRAFT } from "../../../stores/conversation-drafts";
-import { composerFromSettings } from "../../../stores/draft-threads";
 import {
-  selectChatWorkspace,
+  composerFromSettings,
+  draftThreadTargetKey,
+} from "../../../stores/draft-threads";
+import {
   selectDraftThreadState,
   selectProjects,
   selectSettings,
@@ -27,6 +29,7 @@ import {
   type SlotKey,
   type ThreadDraftState,
 } from "../../../stores/workspace-store";
+import { ProjectIcon } from "../../../shared/ProjectIcon";
 import { InlineComposer } from "../composer/InlineComposer";
 import { ConversationItemRow } from "../ConversationItemRow";
 import { sortModelOptionsByPreference } from "../composerOptions";
@@ -290,7 +293,6 @@ function orderBranchesWithDefaults(branches: string[]): string[] {
 
 export function ThreadDraftComposer({ draft, paneId }: Props) {
   const projects = useWorkspaceStore(selectProjects);
-  const chatWorkspace = useWorkspaceStore(selectChatWorkspace);
   const settings = useWorkspaceStore(selectSettings);
   const persistedDraftState = useWorkspaceStore(selectDraftThreadState(draft));
   const hydrateDraftThreadState = useWorkspaceStore(
@@ -308,9 +310,20 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
   const [branches, setBranches] = useState<string[]>([]);
   const [branchesLoaded, setBranchesLoaded] = useState(draft.kind === "chat");
   const [isSending, setIsSending] = useState(false);
+  const [hasSentOnce, setHasSentOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [optimisticMessage, setOptimisticMessage] =
     useState<ConversationMessageItem | null>(null);
+
+  // Reset send-related layout state whenever the draft target changes —
+  // the component is reused in-place when the user retargets the same pane.
+  const draftKey = draftThreadTargetKey(draft);
+  useEffect(() => {
+    setHasSentOnce(false);
+    setOptimisticMessage(null);
+    setError(null);
+    setIsSending(false);
+  }, [draftKey]);
 
   useEffect(() => {
     void hydrateDraftThreadState(draft);
@@ -528,6 +541,7 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
     setError(null);
     if (optimisticUserMessage) {
       setOptimisticMessage(optimisticUserMessage);
+      setHasSentOnce(true);
       updateDraftThreadState(draft, (current) => ({
         ...current,
         composerDraft: cloneComposerDraft(EMPTY_CONVERSATION_COMPOSER_DRAFT),
@@ -578,34 +592,46 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
     );
   }
 
+  const welcomeHeading =
+    draft.kind === "chat"
+      ? "How can I help?"
+      : `What should we build in ${project?.name ?? "this project"}?`;
+
   return (
-    <div className="tx-conversation thread-draft">
-      <div className="tx-conversation__timeline">
-        {optimisticMessage ? (
+    <div
+      className={`tx-conversation thread-draft ${
+        hasSentOnce ? "" : "thread-draft--centered"
+      }`}
+    >
+      {optimisticMessage ? (
+        <div className="tx-conversation__timeline">
           <div className="thread-draft__optimistic">
             <ConversationItemRow
               item={optimisticMessage}
               provider={composer.provider}
             />
           </div>
-        ) : (
+        </div>
+      ) : (
+        <div className="thread-draft__centered-stack">
           <div className="thread-draft__welcome">
-            <img
-              src={skeinAppIcon}
-              alt=""
-              className="thread-draft__welcome-logo"
-            />
-            <h2 className="thread-draft__welcome-heading">
-              {draft.kind === "chat" ? "Ask Codex anything" : "Let's build"}
-            </h2>
-            <p className="thread-draft__welcome-project">
-              {draft.kind === "chat"
-                ? chatWorkspace?.title ?? "Chats"
-                : project?.name ?? "Project"}
-            </p>
+            {project ? (
+              <ProjectIcon
+                name={project.name}
+                rootPath={project.rootPath}
+                size="lg"
+              />
+            ) : (
+              <img
+                src={skeinAppIcon}
+                alt=""
+                className="thread-draft__welcome-logo"
+              />
+            )}
+            <h2 className="thread-draft__welcome-heading">{welcomeHeading}</h2>
           </div>
-        )}
-      </div>
+        </div>
+      )}
       <InlineComposer
         environmentId={resolvedComposerEnvId}
         threadId={`draft:${paneId}`}
@@ -639,7 +665,6 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
             },
           }))
         }
-        tokenUsage={null}
         onCancelRefine={() => undefined}
         onChangeDraft={(value, bindings) => {
           updateDraftThreadState(draft, (current) => ({

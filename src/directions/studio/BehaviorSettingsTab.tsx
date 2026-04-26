@@ -30,18 +30,6 @@ export function BehaviorSettingsTab({
     <>
       <SettingsSection title="Conversation">
         <SettingsRow
-          title="Collapse work activity"
-          description="Hide thinking, tool calls, and sub-agent noise behind one collapsible block."
-          control={
-            <SettingsSwitch
-              label="Collapse work activity"
-              disabled={disabled}
-              checked={settings.collapseWorkActivity}
-              onChange={(value) => onChange({ collapseWorkActivity: value })}
-            />
-          }
-        />
-        <SettingsRow
           title="Stream assistant responses"
           description="Stream replies token by token."
           control={

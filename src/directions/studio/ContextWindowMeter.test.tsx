@@ -29,7 +29,7 @@ describe("ContextWindowMeter", () => {
     const user = userEvent.setup();
 
     const trigger = screen.getByRole("button", {
-      name: "Context window 0.3% used",
+      name: "Context window 0% used",
     });
 
     await user.hover(trigger);
@@ -40,7 +40,7 @@ describe("ContextWindowMeter", () => {
       tooltip,
     );
     expect(tooltip).toHaveTextContent("Context window");
-    expect(tooltip).toHaveTextContent("0.3% · 384/128k context used");
+    expect(tooltip).toHaveTextContent("0% · 384/128k context used");
   });
 
   it("opens on focus and closes on blur", async () => {
@@ -50,7 +50,7 @@ describe("ContextWindowMeter", () => {
     await user.tab();
 
     const trigger = screen.getByRole("button", {
-      name: "Context window 0.3% used",
+      name: "Context window 0% used",
     });
     const tooltip = await screen.findByRole("tooltip");
     expect(trigger).toHaveAttribute("aria-describedby", tooltip.id);
@@ -68,7 +68,7 @@ describe("ContextWindowMeter", () => {
     const user = userEvent.setup();
 
     const trigger = screen.getByRole("button", {
-      name: "Context window 0.3% used",
+      name: "Context window 0% used",
     });
 
     await user.hover(trigger);

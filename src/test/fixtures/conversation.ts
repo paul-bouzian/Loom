@@ -56,7 +56,6 @@ export function makeGlobalSettings(
     defaultCollaborationMode: "build",
     defaultApprovalPolicy: "askToEdit",
     defaultServiceTier: null,
-    collapseWorkActivity: true,
     desktopNotificationsEnabled: false,
     streamAssistantResponses: true,
     multiAgentNudgeEnabled: false,

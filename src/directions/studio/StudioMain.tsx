@@ -19,7 +19,6 @@ import {
   type WorkspaceLayout,
 } from "../../stores/workspace-store";
 import {
-  selectHasAnyTerminalTabs,
   selectTerminalSlot,
   useTerminalStore,
 } from "../../stores/terminal-store";
@@ -85,13 +84,11 @@ export function StudioMain({
   const inspectorEnabled = actionableEnvironment !== null;
   const selectedEnvironmentId = actionableEnvironment?.id ?? null;
   const terminalSlot = useTerminalStore(selectTerminalSlot(selectedEnvironmentId));
-  const hasAnyTerminalTabs = useTerminalStore(selectHasAnyTerminalTabs);
 
   const toggleTerminal = useTerminalStore((s) => s.toggleVisible);
   const setTerminalHeight = useTerminalStore((s) => s.setHeight);
   const terminalVisible = selectedEnvironmentId != null && terminalSlot.visible;
   const terminalHeight = terminalSlot.height;
-  const terminalMounted = terminalVisible || hasAnyTerminalTabs;
   const terminalUnavailableMessage =
     effectiveEnvironment?.kind === "chat"
       ? "Terminal is unavailable for chats"
@@ -128,6 +125,14 @@ export function StudioMain({
               <PanelLeftIcon size={14} />
             </button>
           </Tooltip>
+          {selectedThread ? (
+            <span
+              className="studio-main__thread-title"
+              title={selectedThread.title}
+            >
+              {selectedThread.title}
+            </span>
+          ) : null}
         </div>
         <div className="studio-main__toolbar-actions">
           <EnvironmentActionControl
@@ -256,15 +261,13 @@ export function StudioMain({
           onResize={setTerminalHeight}
         />
       )}
-      {terminalMounted && (
-        <div
-          className={`studio-main__terminal ${terminalVisible ? "" : "studio-main__terminal--hidden"}`}
-          style={{ height: terminalVisible ? terminalHeight : undefined }}
-          inert={!terminalVisible || undefined}
-        >
-          <TerminalPanel theme={theme} />
-        </div>
-      )}
+      <div
+        className={`studio-main__terminal ${terminalVisible ? "" : "studio-main__terminal--hidden"}`}
+        style={{ height: terminalVisible ? terminalHeight : 0 }}
+        inert={!terminalVisible || undefined}
+      >
+        <TerminalPanel theme={theme} />
+      </div>
     </main>
   );
 }

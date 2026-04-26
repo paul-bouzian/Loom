@@ -162,6 +162,18 @@ export const SIDE_PANEL_WIDTH_STORAGE_KEY = buildStorageKey(
 );
 export const LEGACY_SIDE_PANEL_WIDTH_STORAGE_KEYS =
   buildLegacyStorageKeys("side-panel-width");
+export const SIDEBAR_PROJECTS_SORT_STORAGE_KEY = buildStorageKey(
+  APP_SLUG,
+  "sidebar-projects-sort",
+);
+export const LEGACY_SIDEBAR_PROJECTS_SORT_STORAGE_KEYS =
+  buildLegacyStorageKeys("sidebar-projects-sort");
+export const SIDEBAR_CHATS_SORT_STORAGE_KEY = buildStorageKey(
+  APP_SLUG,
+  "sidebar-chats-sort",
+);
+export const LEGACY_SIDEBAR_CHATS_SORT_STORAGE_KEYS =
+  buildLegacyStorageKeys("sidebar-chats-sort");
 export const VOICE_PROCESSOR_NAME = buildStorageKey(APP_SLUG, "voice-processor");
 
 export const RELEASES_BASE_URL =

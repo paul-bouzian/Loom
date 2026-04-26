@@ -2206,6 +2206,55 @@ fn item_id(item: &ConversationItem) -> &str {
     }
 }
 
+fn item_turn_id(item: &ConversationItem) -> Option<&str> {
+    match item {
+        ConversationItem::Message(message) => message.turn_id.as_deref(),
+        ConversationItem::Reasoning(reasoning) => reasoning.turn_id.as_deref(),
+        ConversationItem::Tool(tool) => tool.turn_id.as_deref(),
+        ConversationItem::System(system) => system.turn_id.as_deref(),
+    }
+}
+
+/// Merge persisted items back into a freshly-built snapshot. Persisted items
+/// arrive in their original insertion order (load is `ORDER BY rowid`); we
+/// walk the list and place each entry next to whichever item we last placed
+/// or matched, so:
+///
+/// * already-present IDs (round-tripped through provider history) keep their
+///   server-side position and act as anchors for nearby turnless items;
+/// * turn-attached items slot in right after the last sibling of the same
+///   `turn_id`;
+/// * turnless items (e.g., locally-pushed system banners) follow the last
+///   placed item, preserving their relative chronology with neighboring
+///   persisted activity instead of bunching up at the end of the transcript.
+pub fn merge_persisted_items(
+    items: &mut Vec<ConversationItem>,
+    persisted: Vec<ConversationItem>,
+) {
+    let mut cursor: Option<usize> = None;
+    for item in persisted {
+        let target_id = item_id(&item).to_string();
+        if let Some(index) = items
+            .iter()
+            .position(|candidate| item_id(candidate) == target_id)
+        {
+            cursor = Some(index);
+            continue;
+        }
+        let insert_at = if let Some(turn_id) = item_turn_id(&item) {
+            items
+                .iter()
+                .rposition(|candidate| item_turn_id(candidate) == Some(turn_id))
+                .map(|index| index + 1)
+                .unwrap_or_else(|| cursor.map(|i| i + 1).unwrap_or(items.len()))
+        } else {
+            cursor.map(|i| i + 1).unwrap_or(items.len())
+        };
+        items.insert(insert_at, item);
+        cursor = Some(insert_at);
+    }
+}
+
 fn optimistic_user_message_index(
     items: &[ConversationItem],
     incoming: &ConversationItem,

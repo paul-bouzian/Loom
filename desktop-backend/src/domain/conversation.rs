@@ -17,7 +17,7 @@ pub enum ConversationStatus {
     WaitingForExternalAction,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ConversationItemStatus {
     InProgress,
@@ -34,7 +34,7 @@ pub enum ConversationRole {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ConversationTone {
     Info,
@@ -531,7 +531,7 @@ pub struct ConversationErrorSnapshot {
     pub additional_details: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConversationItem {
     Message(ConversationMessageItem),
@@ -540,7 +540,7 @@ pub enum ConversationItem {
     System(ConversationSystemItem),
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationMessageItem {
     pub id: String,
@@ -551,7 +551,7 @@ pub struct ConversationMessageItem {
     pub is_streaming: bool,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationReasoningItem {
     pub id: String,
@@ -561,7 +561,7 @@ pub struct ConversationReasoningItem {
     pub is_streaming: bool,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationToolItem {
     pub id: String,
@@ -573,7 +573,7 @@ pub struct ConversationToolItem {
     pub output: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSystemItem {
     pub id: String,

@@ -16,7 +16,7 @@ export function branchChipHeaderLabel(
   pullRequest?: WorktreePullRequest,
 ): string {
   if (!pullRequest) {
-    return `Worktree: ${branch}`;
+    return branch;
   }
   return `${pullRequestStatePrefix(pullRequest.state)} PR #${pullRequest.number}: ${pullRequest.title}`;
 }

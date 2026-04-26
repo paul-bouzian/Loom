@@ -922,7 +922,6 @@ function renderComposer(
         mentionBindings={mentionBindings}
         modelOptions={options.modelOptions ?? capabilitiesFixture.models}
         onChangeImages={setImages}
-        tokenUsage={null}
         onCancelRefine={() => undefined}
         onChangeDraft={setDraft}
         onChangeMentionBindings={setMentionBindings}
@@ -983,7 +982,6 @@ function renderComposerWithExternalDraftAction(initialDraft: string) {
           mentionBindings={mentionBindings}
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
-          tokenUsage={null}
           onCancelRefine={() => undefined}
           onChangeDraft={setDraft}
           onChangeMentionBindings={setMentionBindings}
@@ -1037,7 +1035,6 @@ function renderComposerWithManagedServiceTier(initialServiceTier: "fast" | "flex
           mentionBindings={mentionBindings}
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
-          tokenUsage={null}
           onCancelRefine={() => undefined}
           onChangeDraft={setDraft}
           onChangeMentionBindings={setMentionBindings}
@@ -1091,7 +1088,6 @@ function renderComposerWithDynamicDisabledState(initialDraft: string) {
           mentionBindings={mentionBindings}
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
-          tokenUsage={null}
           onCancelRefine={() => undefined}
           onChangeDraft={setDraft}
           onChangeMentionBindings={setMentionBindings}
@@ -1149,7 +1145,6 @@ function renderComposerWithDynamicThread(initialDraft: string) {
           mentionBindings={mentionBindings}
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
-          tokenUsage={null}
           onCancelRefine={() => undefined}
           onChangeDraft={(value) =>
             setDraftByThreadId((state) => ({
@@ -1203,7 +1198,6 @@ function renderComposerWithDynamicTransport(initialDraft: string) {
           mentionBindings={mentionBindings}
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
-          tokenUsage={null}
           onCancelRefine={() => undefined}
           onChangeDraft={setDraft}
           onChangeMentionBindings={setMentionBindings}

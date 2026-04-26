@@ -5,7 +5,20 @@ import type {
   ConversationMessageItem,
   ProviderKind,
 } from "../../lib/types";
-import { CheckIcon, ChevronRightIcon, CopyIcon } from "../../shared/Icons";
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  FolderIcon,
+  GlobeIcon,
+  HammerIcon,
+  ImageIcon,
+  PencilIcon,
+  SparklesIcon,
+  TerminalIcon,
+  WrenchIcon,
+  type IconProps,
+} from "../../shared/Icons";
 import { ConversationLinkedText } from "./ConversationLinkedText";
 import { ConversationMessageImages } from "./ConversationMessageImages";
 import { ConversationMarkdown } from "./ConversationMarkdown";
@@ -44,13 +57,10 @@ export function ConversationItemRow({
           <div className="tx-item__header">
             <span className="tx-item__header-main">
               <ChevronRightIcon
-                size={12}
+                size={11}
                 className={`tx-item__chevron ${expanded ? "tx-item__chevron--expanded" : ""}`}
               />
-              Thinking
-            </span>
-            <span className="tx-pill tx-pill--neutral">
-              {expanded ? "Hide" : item.isStreaming ? "Thinking" : "Hidden"}
+              <span className="tx-item__title">Thinking</span>
             </span>
           </div>
         </button>
@@ -75,8 +85,11 @@ export function ConversationItemRow({
   }
 
   if (item.kind === "tool") {
+    const ToolIcon = iconForToolType(item.toolType);
     return (
-      <div className={`tx-item tx-item--tool ${compact ? "tx-item--compact" : ""}`}>
+      <div
+        className={`tx-item tx-item--tool tx-item--tool-${slugifyToolType(item.toolType)} ${compact ? "tx-item--compact" : ""}`}
+      >
         <button
           type="button"
           className="tx-item__toggle"
@@ -86,13 +99,11 @@ export function ConversationItemRow({
           <div className="tx-item__header">
             <span className="tx-item__header-main">
               <ChevronRightIcon
-                size={12}
+                size={11}
                 className={`tx-item__chevron ${expanded ? "tx-item__chevron--expanded" : ""}`}
               />
-              {item.title}
-            </span>
-            <span className={`tx-pill tx-pill--${item.status}`}>
-              {labelForItemStatus(item.status)}
+              <ToolIcon size={13} className="tx-item__kind-icon" />
+              <span className="tx-item__title">{item.title}</span>
             </span>
           </div>
         </button>
@@ -316,7 +327,61 @@ export function ConversationBanner({
   );
 }
 
-function labelForItemStatus(status: string) {
-  if (status === "inProgress") return "Running";
-  return status.charAt(0).toUpperCase() + status.slice(1);
+function iconForToolType(
+  toolType: string,
+): (props: IconProps) => React.ReactElement {
+  const normalized = typeof toolType === "string" ? toolType.toLowerCase() : "";
+  if (
+    normalized === "commandexecution" ||
+    normalized === "bash" ||
+    normalized === "terminal" ||
+    normalized.includes("shell")
+  ) {
+    return TerminalIcon;
+  }
+  if (
+    normalized === "websearch" ||
+    normalized === "webfetch" ||
+    normalized.includes("search") ||
+    normalized.includes("fetch") ||
+    normalized.includes("browser")
+  ) {
+    return GlobeIcon;
+  }
+  if (
+    normalized === "filechange" ||
+    normalized === "edit" ||
+    normalized === "write" ||
+    normalized === "multiedit" ||
+    normalized.includes("edit") ||
+    normalized.includes("write")
+  ) {
+    return PencilIcon;
+  }
+  if (
+    normalized === "read" ||
+    normalized === "ls" ||
+    normalized === "glob" ||
+    normalized.includes("read") ||
+    normalized.includes("list")
+  ) {
+    return FolderIcon;
+  }
+  if (normalized === "imageview" || normalized.includes("image")) {
+    return ImageIcon;
+  }
+  if (normalized.includes("think") || normalized.includes("plan")) {
+    return SparklesIcon;
+  }
+  if (normalized.includes("build") || normalized.includes("compile")) {
+    return HammerIcon;
+  }
+  return WrenchIcon;
+}
+
+function slugifyToolType(toolType: string): string {
+  return toolType
+    .replace(/([a-z])([A-Z])/g, "$1-$2")
+    .replace(/[^a-zA-Z0-9-]+/g, "-")
+    .toLowerCase();
 }

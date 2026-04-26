@@ -24,6 +24,19 @@
   gap: var(--tx-space-sm);
 }
 
+.studio-main__thread-title {
+  align-self: center;
+  font-size: var(--tx-text-lg);
+  font-weight: var(--tx-weight-bold);
+  letter-spacing: var(--tx-tracking-tight);
+  color: var(--tx-text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: var(--tx-space-sm);
+}
+
 .studio-main__toolbar-actions {
   display: flex;
   align-items: center;

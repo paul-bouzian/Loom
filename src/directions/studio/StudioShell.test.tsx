@@ -786,22 +786,6 @@ describe("StudioShell", () => {
     });
   });
 
-  it("saves the compact work activity setting from Behavior settings", async () => {
-    render(<StudioShell />);
-
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    await userEvent.click(screen.getByRole("button", { name: "Behavior" }));
-    await userEvent.click(
-      screen.getByRole("switch", { name: "Collapse work activity" }),
-    );
-
-    await waitFor(() => {
-      expect(mockedBridge.updateGlobalSettings).toHaveBeenCalledWith({
-        collapseWorkActivity: false,
-      });
-    });
-  });
-
   it("shows the assistant streaming copy in Behavior settings", async () => {
     render(<StudioShell />);
 
@@ -892,14 +876,6 @@ describe("StudioShell", () => {
     await waitFor(() => {
       expect(desktopToggle).toBeDisabled();
     });
-    expect(mockedBridge.updateGlobalSettings).not.toHaveBeenCalled();
-
-    await userEvent.click(screen.getByRole("button", { name: "Behavior" }));
-    const collapseToggle = screen.getByRole("switch", {
-      name: "Collapse work activity",
-    });
-    expect(collapseToggle).toBeDisabled();
-    await userEvent.click(collapseToggle);
     expect(mockedBridge.updateGlobalSettings).not.toHaveBeenCalled();
 
     permissionRequest.resolve("granted");
@@ -996,34 +972,6 @@ describe("StudioShell", () => {
     });
   });
 
-  it("ignores repeated compact-toggle clicks while the settings save is in flight", async () => {
-    const saveRequest =
-      createDeferred<ReturnType<typeof makeWorkspaceSnapshot>["settings"]>();
-    mockedBridge.updateGlobalSettings.mockImplementation(() => saveRequest.promise);
-
-    render(<StudioShell />);
-
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    await userEvent.click(screen.getByRole("button", { name: "Behavior" }));
-    const toggle = screen.getByRole("switch", { name: "Collapse work activity" });
-
-    await userEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(toggle).toBeDisabled();
-    });
-    expect(mockedBridge.updateGlobalSettings).toHaveBeenCalledTimes(1);
-
-    await userEvent.click(toggle);
-    expect(mockedBridge.updateGlobalSettings).toHaveBeenCalledTimes(1);
-
-    saveRequest.resolve(makeWorkspaceSnapshot().settings);
-
-    await waitFor(() => {
-      expect(toggle).not.toBeDisabled();
-    });
-  });
-
   it("queues the latest multi-agent slider save while a previous one is still in flight", async () => {
     const firstSave = createDeferred<ReturnType<typeof makeWorkspaceSnapshot>["settings"]>();
     mockedBridge.updateGlobalSettings
@@ -1090,7 +1038,9 @@ describe("StudioShell", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     await userEvent.click(screen.getByRole("button", { name: "Behavior" }));
-    const toggle = screen.getByRole("switch", { name: "Collapse work activity" });
+    const toggle = screen.getByRole("switch", {
+      name: "Stream assistant responses",
+    });
 
     await userEvent.click(toggle);
 

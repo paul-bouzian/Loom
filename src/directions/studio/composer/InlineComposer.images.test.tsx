@@ -360,7 +360,6 @@ function renderComposer(options: {
         mentionBindings={mentionBindings}
         modelOptions={options.modelOptions ?? capabilitiesFixture.models}
         onChangeImages={setImages}
-        tokenUsage={null}
         onCancelRefine={() => undefined}
         onChangeDraft={setDraft}
         onChangeMentionBindings={setMentionBindings}
@@ -418,7 +417,6 @@ function renderComposerWithDynamicThreadState() {
           mentionBindings={mentionBindings}
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
-          tokenUsage={null}
           onCancelRefine={() => undefined}
           onChangeDraft={setDraft}
           onChangeMentionBindings={setMentionBindings}

@@ -29,7 +29,47 @@ export type ConversationWorkActivityGroup = {
     subagentCount: number;
   };
   status: WorkActivityStatus;
+  startedAt: number | null;
+  finishedAt: number | null;
 };
+
+type WorkActivityTiming = {
+  startedAt: number;
+  finishedAt: number | null;
+};
+
+const TIMING_BY_TURN: Map<string, WorkActivityTiming> = new Map();
+const TIMING_MAX_ENTRIES = 500;
+
+function evictOldestTiming(): void {
+  while (TIMING_BY_TURN.size > TIMING_MAX_ENTRIES) {
+    const oldest = TIMING_BY_TURN.keys().next().value;
+    if (oldest === undefined) break;
+    TIMING_BY_TURN.delete(oldest);
+  }
+}
+
+function recordTiming(
+  turnId: string,
+  status: WorkActivityStatus,
+): WorkActivityTiming | null {
+  const existing = TIMING_BY_TURN.get(turnId) ?? null;
+  if (status === "running" || status === "waiting") {
+    if (existing) {
+      existing.finishedAt = null;
+      return existing;
+    }
+    const created: WorkActivityTiming = { startedAt: Date.now(), finishedAt: null };
+    TIMING_BY_TURN.set(turnId, created);
+    evictOldestTiming();
+    return created;
+  }
+  if (!existing) return null;
+  if (existing.finishedAt === null) {
+    existing.finishedAt = Date.now();
+  }
+  return existing;
+}
 
 export type ConversationTimelineEntry =
   | {
@@ -194,17 +234,16 @@ function collectAssistantSuppressedTurnIds(snapshot: ThreadConversationSnapshot)
 }
 
 function collectFinalAssistantMessageIds(
-  snapshot: ThreadConversationSnapshot,
+  _snapshot: ThreadConversationSnapshot,
   items: ConversationItem[],
   effectiveTurnIds: Map<string, string>,
   actionTurnIds: Set<string>,
 ) {
+  // The active turn is intentionally NOT suppressed: we want the streaming
+  // final reply to render outside the Working group as soon as it starts,
+  // matching the post-completion layout (no jump on turn end).
   const lastAssistantMessageIdByTurn = new Map<string, string>();
   const suppressedFinalTurnIds = new Set(actionTurnIds);
-
-  if (snapshot.activeTurnId) {
-    suppressedFinalTurnIds.add(snapshot.activeTurnId);
-  }
 
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
@@ -448,6 +487,9 @@ function finalizeGroup(
     subagentCount: group.subagents.length,
   };
 
+  const status = statusForGroup(group.turnId, group, snapshot, latestWorkTurnId);
+  const timing = recordTiming(group.turnId, status);
+
   return {
     id: `work-${group.turnId}`,
     turnId: group.turnId,
@@ -455,7 +497,9 @@ function finalizeGroup(
     taskPlan: group.taskPlan,
     subagents: group.subagents,
     counts,
-    status: statusForGroup(group.turnId, group, snapshot, latestWorkTurnId),
+    status,
+    startedAt: timing?.startedAt ?? null,
+    finishedAt: timing?.finishedAt ?? null,
   };
 }
 

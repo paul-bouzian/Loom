@@ -284,7 +284,6 @@ export type GlobalSettings = {
   defaultCollaborationMode: CollaborationMode;
   defaultApprovalPolicy: ApprovalPolicy;
   defaultServiceTier?: ServiceTier | null;
-  collapseWorkActivity: boolean;
   desktopNotificationsEnabled: boolean;
   streamAssistantResponses: boolean;
   multiAgentNudgeEnabled: boolean;
@@ -1039,7 +1038,6 @@ export type GlobalSettingsPatch = {
   defaultCollaborationMode?: CollaborationMode;
   defaultApprovalPolicy?: ApprovalPolicy;
   defaultServiceTier?: ServiceTier | null;
-  collapseWorkActivity?: boolean;
   desktopNotificationsEnabled?: boolean;
   streamAssistantResponses?: boolean;
   multiAgentNudgeEnabled?: boolean;

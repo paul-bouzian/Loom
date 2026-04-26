@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from "react";
+import { memo, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 import {
   indicatorToneForConversationStatus,
@@ -11,9 +11,9 @@ import type {
 } from "../../lib/types";
 import {
   AlertIcon,
+  ArchiveIcon,
   ArrowRightIcon,
   GitBranchIcon,
-  PanelRightIcon,
   SpinnerIcon,
 } from "../../shared/Icons";
 import { ProviderLogo } from "../../shared/ProviderLogo";
@@ -46,7 +46,7 @@ export type ThreadWorktreeBadge = {
 type SharedProps = {
   thread: ThreadRecord;
   onSelect: () => void;
-  onOpenInOtherPane: () => void;
+  onArchive: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLElement>) => void;
 };
 
@@ -69,7 +69,7 @@ function SidebarThreadRowImpl(props: Props) {
   const {
     thread,
     onSelect,
-    onOpenInOtherPane,
+    onArchive,
     onContextMenu,
   } = props;
   const worktree = props.worktree ?? null;
@@ -109,84 +109,107 @@ function SidebarThreadRowImpl(props: Props) {
     ? buildChecksRepositionKey(checks)
     : chipLabel;
 
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    // Only handle keys that landed on the row itself; nested controls (archive
+    // button, branch chip) need to receive their own Enter/Space.
+    if (event.target !== event.currentTarget) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect();
+    }
+  }
+
   return (
     <div className="tree-sidebar__thread-row">
-      <div className="tree-sidebar__thread-content">
-        <button
-          type="button"
-          className={classes}
-          title={paneHint ?? thread.title}
-          data-thread-id={thread.id}
-          onContextMenu={onContextMenu}
-          {...dragHandlers}
-        >
-          <span
-            className="tree-sidebar__thread-indicator"
-            aria-hidden="true"
-          >
-            {renderThreadIndicator(tone, unread)}
-          </span>
-          {indicatorAccessibleLabel(tone, unread) ? (
-            <span className="tree-sidebar__sr-only">
-              {indicatorAccessibleLabel(tone, unread)}
+      <div
+        role="button"
+        tabIndex={0}
+        className={classes}
+        title={paneHint ?? thread.title}
+        aria-label={thread.title}
+        data-thread-id={thread.id}
+        aria-pressed={inFocusedPane}
+        onContextMenu={onContextMenu}
+        onKeyDown={handleKeyDown}
+        {...dragHandlers}
+      >
+        <div className="tree-sidebar__thread-left">
+          <div className="tree-sidebar__thread-line tree-sidebar__thread-line--main">
+            <span
+              className="tree-sidebar__thread-indicator"
+              aria-hidden="true"
+            >
+              {renderThreadIndicator(tone, unread)}
             </span>
+            {indicatorAccessibleLabel(tone, unread) ? (
+              <span className="tree-sidebar__sr-only">
+                {indicatorAccessibleLabel(tone, unread)}
+              </span>
+            ) : null}
+            <span className="tree-sidebar__thread-title">{thread.title}</span>
+          </div>
+          {worktree && onBranchChipContextMenu && onBranchChipOpenPullRequest ? (
+            <div className="tree-sidebar__thread-line tree-sidebar__thread-line--branch">
+              <Tooltip
+                content={tooltipContent}
+                side="bottom"
+                repositionKey={tooltipRepositionKey}
+              >
+                <button
+                  type="button"
+                  className="tree-sidebar__thread-branch"
+                  data-pr-state={worktree.pullRequest?.state ?? "none"}
+                  aria-label={chipLabel}
+                  data-no-reorder-drag="true"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const pr = worktree.pullRequest;
+                    if (pr) {
+                      onBranchChipOpenPullRequest(pr.url);
+                    }
+                  }}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onBranchChipContextMenu(event);
+                  }}
+                >
+                  {checks ? (
+                    <span
+                      className="tree-sidebar__thread-checks-dot"
+                      data-checks-state={checks.rollup}
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <GitBranchIcon size={12} className="tree-sidebar__thread-branch-icon" />
+                  <span className="tree-sidebar__thread-branch-label">{chipLabel}</span>
+                </button>
+              </Tooltip>
+            </div>
           ) : null}
-          <span className="tree-sidebar__thread-title">{thread.title}</span>
+        </div>
+        <div className="tree-sidebar__thread-right">
           <ThreadProviderMark thread={thread} />
-        </button>
-        {worktree && onBranchChipContextMenu && onBranchChipOpenPullRequest ? (
-          <Tooltip
-            content={tooltipContent}
-            side="bottom"
-            repositionKey={tooltipRepositionKey}
-          >
+          <Tooltip content="Archive thread" side="bottom">
             <button
               type="button"
-              className="tree-sidebar__thread-branch"
-              data-pr-state={worktree.pullRequest?.state ?? "none"}
-              aria-label={chipLabel}
+              className="tree-sidebar__thread-archive"
+              aria-label="Archive thread"
               data-no-reorder-drag="true"
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                const pr = worktree.pullRequest;
-                if (pr) {
-                  onBranchChipOpenPullRequest(pr.url);
-                }
-              }}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onBranchChipContextMenu(event);
+                onArchive();
               }}
             >
-              {checks ? (
-                <span
-                  className="tree-sidebar__thread-checks-dot"
-                  data-checks-state={checks.rollup}
-                  aria-hidden="true"
-                />
-              ) : null}
-              <GitBranchIcon size={12} className="tree-sidebar__thread-branch-icon" />
-              <span className="tree-sidebar__thread-branch-label">{chipLabel}</span>
+              <ArchiveIcon size={14} />
             </button>
           </Tooltip>
-        ) : null}
+        </div>
       </div>
-      <Tooltip content="Open in other pane" side="bottom">
-        <button
-          type="button"
-          className="tree-sidebar__thread-split"
-          aria-label="Open in other pane"
-          onClick={(event) => {
-            event.stopPropagation();
-            onOpenInOtherPane();
-          }}
-        >
-          <PanelRightIcon size={11} />
-        </button>
-      </Tooltip>
     </div>
   );
 }
@@ -242,9 +265,9 @@ function ThreadProviderMark({ thread }: { thread: ThreadRecord }) {
         aria-label={`${providerLabel(sourceProvider)} handoff to ${providerLabel(provider)}`}
         title={`${providerLabel(sourceProvider)} handoff to ${providerLabel(provider)}`}
       >
-        <ProviderLogo provider={sourceProvider} size={13} decorative />
-        <ArrowRightIcon size={9} className="tree-sidebar__thread-provider-arrow" />
-        <ProviderLogo provider={provider} size={13} decorative />
+        <ProviderLogo provider={sourceProvider} size={16} decorative />
+        <ArrowRightIcon size={10} className="tree-sidebar__thread-provider-arrow" />
+        <ProviderLogo provider={provider} size={16} decorative />
       </span>
     );
   }
@@ -252,7 +275,7 @@ function ThreadProviderMark({ thread }: { thread: ThreadRecord }) {
   return (
     <ProviderLogo
       provider={provider}
-      size={13}
+      size={16}
       className="tree-sidebar__thread-provider"
       decorative
     />

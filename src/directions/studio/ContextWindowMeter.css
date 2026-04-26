@@ -8,24 +8,24 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 26px;
+  height: 26px;
   border-radius: 999px;
-  color: var(--tx-text-secondary);
+  color: var(--tx-text-muted);
   transition:
     color var(--tx-transition-fast),
     opacity var(--tx-transition-fast);
 }
 
 .tx-context-meter__trigger:hover {
-  color: var(--tx-text-primary);
+  color: var(--tx-text-secondary);
 }
 
 .tx-context-meter__visual {
   position: relative;
   display: flex;
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   align-items: center;
   justify-content: center;
 }
@@ -39,7 +39,7 @@
 .tx-context-meter__track,
 .tx-context-meter__progress {
   fill: none;
-  stroke-width: 3;
+  stroke-width: 2;
 }
 
 .tx-context-meter__track {
@@ -47,7 +47,7 @@
 }
 
 .tx-context-meter__progress {
-  stroke: var(--tx-text-primary);
+  stroke: var(--tx-text-secondary);
   stroke-linecap: round;
   transition: stroke-dashoffset 180ms ease-out;
 }
@@ -55,9 +55,9 @@
 .tx-context-meter__value {
   position: relative;
   z-index: 1;
-  font-size: var(--tx-text-xs);
-  font-weight: var(--tx-weight-semibold);
-  color: var(--tx-text-primary);
+  font-size: 9px;
+  font-weight: var(--tx-weight-medium);
+  color: var(--tx-text-secondary);
 }
 
 .tx-context-meter__tooltip {
