@@ -2215,26 +2215,43 @@ fn item_turn_id(item: &ConversationItem) -> Option<&str> {
     }
 }
 
-/// Merge a persisted item back into a freshly-built snapshot. If the item is
-/// already present (by ID) the existing entry wins. Otherwise, insert just
-/// after the last sibling sharing the same `turn_id` so the persisted
-/// activity rejoins its original turn instead of getting appended at the end
-/// of the transcript.
-pub fn merge_persisted_item(items: &mut Vec<ConversationItem>, item: ConversationItem) {
-    let target_id = item_id(&item);
-    if items.iter().any(|candidate| item_id(candidate) == target_id) {
-        return;
-    }
-    let Some(turn_id) = item_turn_id(&item) else {
-        items.push(item);
-        return;
-    };
-    let last_sibling = items
-        .iter()
-        .rposition(|candidate| item_turn_id(candidate) == Some(turn_id));
-    match last_sibling {
-        Some(index) => items.insert(index + 1, item),
-        None => items.push(item),
+/// Merge persisted items back into a freshly-built snapshot. Persisted items
+/// arrive in their original insertion order (load is `ORDER BY rowid`); we
+/// walk the list and place each entry next to whichever item we last placed
+/// or matched, so:
+///
+/// * already-present IDs (round-tripped through provider history) keep their
+///   server-side position and act as anchors for nearby turnless items;
+/// * turn-attached items slot in right after the last sibling of the same
+///   `turn_id`;
+/// * turnless items (e.g., locally-pushed system banners) follow the last
+///   placed item, preserving their relative chronology with neighboring
+///   persisted activity instead of bunching up at the end of the transcript.
+pub fn merge_persisted_items(
+    items: &mut Vec<ConversationItem>,
+    persisted: Vec<ConversationItem>,
+) {
+    let mut cursor: Option<usize> = None;
+    for item in persisted {
+        let target_id = item_id(&item).to_string();
+        if let Some(index) = items
+            .iter()
+            .position(|candidate| item_id(candidate) == target_id)
+        {
+            cursor = Some(index);
+            continue;
+        }
+        let insert_at = if let Some(turn_id) = item_turn_id(&item) {
+            items
+                .iter()
+                .rposition(|candidate| item_turn_id(candidate) == Some(turn_id))
+                .map(|index| index + 1)
+                .unwrap_or_else(|| cursor.map(|i| i + 1).unwrap_or(items.len()))
+        } else {
+            cursor.map(|i| i + 1).unwrap_or(items.len())
+        };
+        items.insert(insert_at, item);
+        cursor = Some(insert_at);
     }
 }
 

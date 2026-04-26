@@ -43,7 +43,7 @@ use crate::runtime::protocol::{
     initialized_notification, is_hidden_assistant_control_item,
     is_hidden_assistant_control_message, is_hidden_assistant_control_message_prefix,
     loaded_subagents_for_primary, mark_plan_approved, mark_plan_superseded,
-    merge_persisted_item, model_options_from_response, normalize_item,
+    merge_persisted_items, model_options_from_response, normalize_item,
     normalize_server_interaction, parse_incoming_message, plan_approval_message,
     proposed_plan_from_item,
     proposed_plan_from_turn_update, reconcile_snapshot_status, sandbox_policy_value,
@@ -501,9 +501,7 @@ impl RuntimeSession {
                     read_response.thread,
                 );
                 let persisted = item_store::load(&context.thread_id);
-                for item in persisted {
-                    merge_persisted_item(&mut snapshot.items, item);
-                }
+                merge_persisted_items(&mut snapshot.items, persisted);
                 self.send_request(
                     "thread/resume",
                     serde_json::json!({
