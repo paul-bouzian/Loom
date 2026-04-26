@@ -23,12 +23,10 @@ import type {
   ModelOption,
   ReasoningEffort,
   ThreadComposerCatalog,
-  ThreadTokenUsageSnapshot,
 } from "../../../lib/types";
 import { ArrowUpIcon, BoltIcon, CloseIcon, ImageIcon, MapIcon, MicIcon, StopIcon } from "../../../shared/Icons";
 import { Tooltip } from "../../../shared/Tooltip";
 import { ComposerPicker } from "../ComposerPicker";
-import { ContextWindowMeter } from "../ContextWindowMeter";
 import {
   modelImageSupportMessage,
   modelSupportsFastMode,
@@ -78,7 +76,6 @@ type Props = {
   mentionBindings: ComposerDraftMentionBinding[];
   modelOptions: ModelOption[];
   onChangeImages: Dispatch<SetStateAction<ConversationImageAttachment[]>>;
-  tokenUsage?: ThreadTokenUsageSnapshot | null;
   onCancelRefine: () => void;
   onChangeDraft: (
     value: string,
@@ -118,7 +115,6 @@ export function InlineComposer({
   mentionBindings,
   modelOptions,
   onChangeImages,
-  tokenUsage,
   onCancelRefine,
   onChangeDraft,
   onChangeMentionBindings,
@@ -728,7 +724,6 @@ export function InlineComposer({
           </Tooltip>
         </div>
         <div className="tx-composer__controls-right">
-          <ContextWindowMeter usage={tokenUsage} />
           <div className="tx-composer__voice-control">
             {isRecording ? (
               <span className="tx-composer__voice-duration" aria-hidden="true">

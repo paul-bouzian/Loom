@@ -1,4 +1,4 @@
-type IconProps = {
+export type IconProps = {
   size?: number;
   className?: string;
 };
@@ -630,6 +630,69 @@ export function AlertIcon({ size = 16, className }: IconProps) {
         strokeLinecap="round"
       />
       <circle cx="8" cy="11" r="0.85" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function SquarePenIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path
+        d="M13.5 8.5v3a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3.5 11.5v-7A1.5 1.5 0 0 1 5 3h3"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M11.5 2.7a1.13 1.13 0 0 1 1.6 1.6L8.4 9 6.4 9.6 7 7.6l4.5-4.9Z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function SortIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path
+        d="M3 4h10M3 8h6.5M3 12h3.5"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function ArchiveIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <rect
+        x="2.2"
+        y="3"
+        width="11.6"
+        height="3.2"
+        rx="1"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M3.4 6.2v6.1a1 1 0 0 0 1 1h7.2a1 1 0 0 0 1-1V6.2"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M6.6 9h2.8"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

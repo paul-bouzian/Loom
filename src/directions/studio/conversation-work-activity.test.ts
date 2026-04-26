@@ -75,12 +75,12 @@ describe("buildConversationTimeline", () => {
       "handoff-user-bordeaux",
       "handoff-assistant-bordeaux",
       "local-user-paris",
+      "assistant-paris-draft",
     ]);
     expect(workActivity?.kind).toBe("workActivity");
     expect(workActivity?.group.items.map((item) => item.id)).toEqual([
       "reason-paris",
       "tool-paris",
-      "assistant-paris-draft",
     ]);
   });
 

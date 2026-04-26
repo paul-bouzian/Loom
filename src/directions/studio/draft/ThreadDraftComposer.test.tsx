@@ -45,6 +45,7 @@ let latestInlineComposerProps: {
 vi.mock("../../../lib/bridge", () => ({
   getDraftThreadState: vi.fn(),
   getEnvironmentCapabilities: vi.fn(),
+  getProjectIcon: vi.fn().mockResolvedValue(null),
   listProjectBranches: vi.fn(),
   saveDraftThreadState: vi.fn(),
 }));

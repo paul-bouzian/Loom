@@ -411,7 +411,7 @@ describe("TreeSidebar", () => {
 
     renderSidebar();
 
-    fireEvent.click(screen.getByText("Right thread").closest("button")!);
+    fireEvent.click(screen.getByRole("button", { name: "Right thread" }));
 
     const workspace = useWorkspaceStore.getState();
     expect(workspace.layout.slots.topLeft?.threadId).toBe("thread-left");
@@ -661,7 +661,7 @@ describe("TreeSidebar", () => {
 
     renderSidebar();
 
-    const branchButton = screen.getByRole("button", { name: "Worktree: say-hello" });
+    const branchButton = screen.getByRole("button", { name: "say-hello" });
     vi.spyOn(branchButton, "getBoundingClientRect").mockReturnValue({
       x: 40,
       y: 96,
@@ -1103,7 +1103,7 @@ describe("TreeSidebar", () => {
     renderSidebar();
 
     fireEvent.contextMenu(
-      screen.getByRole("button", { name: "Worktree: add-themes" }),
+      screen.getByRole("button", { name: "add-themes" }),
     );
 
     expect(
@@ -1227,7 +1227,7 @@ describe("TreeSidebar", () => {
     renderSidebar();
 
     const badge = screen.getByRole("button", {
-      name: "Worktree: no-pr",
+      name: "no-pr",
     });
     expect(badge.getAttribute("data-pr-state")).toBe("none");
 
@@ -1291,7 +1291,7 @@ describe("TreeSidebar", () => {
     renderSidebar();
 
     expect(
-      screen.getByRole("button", { name: "Worktree: fuzzy-tiger" }),
+      screen.getByRole("button", { name: "fuzzy-tiger" }),
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Collapse Skein" }));
 
@@ -1303,7 +1303,7 @@ describe("TreeSidebar", () => {
       expect(refreshSnapshot).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Worktree: fuzzy-tiger" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "fuzzy-tiger" })).toBeNull();
     });
     expect(mockedBridge.reorderProjects).not.toHaveBeenCalled();
   });
@@ -1363,7 +1363,7 @@ describe("TreeSidebar", () => {
     const { container } = renderSidebar();
 
     expect(
-      screen.getByRole("button", { name: "Worktree: fuzzy-tiger" }),
+      screen.getByRole("button", { name: "fuzzy-tiger" }),
     ).toBeInTheDocument();
 
     await userEvent.click(repositoryProjectHeaders(container)[0]!);
@@ -1376,7 +1376,7 @@ describe("TreeSidebar", () => {
       expect(refreshSnapshot).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Worktree: fuzzy-tiger" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "fuzzy-tiger" })).toBeNull();
     });
     expect(mockedBridge.reorderProjects).not.toHaveBeenCalled();
   });

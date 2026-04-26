@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { APP_NAME } from "../../lib/app-identity";
@@ -9,13 +9,26 @@ import {
   selectProjects,
 } from "../../stores/workspace-store";
 import { useWorktreeScriptStore } from "../../stores/worktree-script-store";
+import {
+  compareThreadsByMode,
+  SORT_MODES,
+  SORT_MODE_LABELS,
+  selectChatsSort,
+  selectProjectsSort,
+  useSidebarPrefsStore,
+  type ThreadSortMode,
+} from "../../stores/sidebar-prefs-store";
 import * as bridge from "../../lib/bridge";
 import { ProjectIcon } from "../../shared/ProjectIcon";
 import {
+  CheckIcon,
   ChevronRightIcon,
   DotsHorizontalIcon,
-  PencilIcon,
+  FolderIcon,
   PlusIcon,
+  SortIcon,
+  SquarePenIcon,
+  ThreadIcon,
 } from "../../shared/Icons";
 import { Tooltip } from "../../shared/Tooltip";
 import type {
@@ -65,6 +78,14 @@ type ContextMenuState = {
   y: number;
 };
 
+type SortMenuKind = "projects" | "chats";
+
+type SortMenuState = {
+  kind: SortMenuKind;
+  x: number;
+  y: number;
+};
+
 const PROJECT_REMOVAL_BLOCKED_MESSAGE =
   `Delete this project's worktrees before removing it from ${APP_NAME}.`;
 const PROJECT_REMOVAL_DIALOG_TITLE = "Remove project";
@@ -88,6 +109,13 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   const { error, clearError, importProject, isImporting } = useProjectImport();
   const [actionError, setActionError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const projectsSort = useSidebarPrefsStore(selectProjectsSort);
+  const chatsSort = useSidebarPrefsStore(selectChatsSort);
+  const setProjectsSort = useSidebarPrefsStore((s) => s.setProjectsSort);
+  const setChatsSort = useSidebarPrefsStore((s) => s.setChatsSort);
+  const [sortMenu, setSortMenu] = useState<SortMenuState | null>(null);
+  const projectsSortButtonRef = useRef<HTMLButtonElement | null>(null);
+  const chatsSortButtonRef = useRef<HTMLButtonElement | null>(null);
   const notice = actionError ?? error;
   const {
     dragState,
@@ -127,6 +155,56 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!sortMenu) return undefined;
+
+    function handleDismiss() {
+      setSortMenu(null);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSortMenu(null);
+      }
+    }
+
+    window.addEventListener("pointerdown", handleDismiss);
+    window.addEventListener("blur", handleDismiss);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("pointerdown", handleDismiss);
+      window.removeEventListener("blur", handleDismiss);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [sortMenu]);
+
+  function handleOpenSortMenu(
+    kind: SortMenuKind,
+    button: HTMLButtonElement | null,
+  ) {
+    if (!button) return;
+    if (sortMenu?.kind === kind) {
+      setSortMenu(null);
+      return;
+    }
+    const rect = button.getBoundingClientRect();
+    setSortMenu({
+      kind,
+      x: rect.right - 180,
+      y: rect.bottom + 4,
+    });
+  }
+
+  function handleSortPick(kind: SortMenuKind, mode: ThreadSortMode) {
+    setSortMenu(null);
+    if (kind === "projects") {
+      setProjectsSort(mode);
+    } else {
+      setChatsSort(mode);
+    }
+  }
 
   function resetMessages() {
     clearError();
@@ -169,25 +247,19 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
     const worktreeEnvironments = project.environments.filter(
       (environment) => environment.kind !== "local",
     );
+    const threadComparator = compareThreadsByMode(projectsSort);
     const localThreads = localEnvironment
       ? localEnvironment.threads
           .filter((thread) => thread.status === "active")
-          .sort(sortThreadsByUpdatedAtDesc)
+          .sort(threadComparator)
       : [];
-    const worktreeGroups = buildWorktreeGroups(worktreeEnvironments);
+    const worktreeGroups = buildWorktreeGroups(
+      worktreeEnvironments,
+      threadComparator,
+    );
 
     if (localThreads.length === 0 && worktreeGroups.length === 0) {
-      return (
-        <div className="project-group__threads project-group__threads--empty">
-          <p className="project-group__empty-hint">
-            No threads yet — click{" "}
-            <span aria-hidden>
-              <PencilIcon size={10} />
-            </span>{" "}
-            to start one.
-          </p>
-        </div>
-      );
+      return null;
     }
 
     return (
@@ -197,7 +269,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
             <SidebarThreadRow
               thread={thread}
               onSelect={() => handleThreadSelect(thread.id)}
-              onOpenInOtherPane={() => handleOpenThreadInOtherPane(thread.id)}
+              onArchive={() => void handleArchiveThreadFromMenu(thread.id)}
               onContextMenu={(event) => {
                 event.preventDefault();
                 setContextMenu({
@@ -216,16 +288,19 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
         {worktreeGroups.map((group) => {
           const env = group.environment;
           const branchLabel = resolveWorktreeBranchLabel(env);
+          const showHeader = group.threads.length > 1;
           return (
             <Fragment key={env.id}>
-              <li
-                className="project-group__worktree-header"
-                aria-hidden="true"
-              >
-                <span className="project-group__worktree-header-label">
-                  {branchLabel}
-                </span>
-              </li>
+              {showHeader ? (
+                <li
+                  className="project-group__worktree-header"
+                  aria-hidden="true"
+                >
+                  <span className="project-group__worktree-header-label">
+                    {branchLabel}
+                  </span>
+                </li>
+              ) : null}
               {group.threads.map((thread) => (
                 <li
                   key={thread.id}
@@ -239,9 +314,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
                       pullRequest: env.pullRequest,
                     }}
                     onSelect={() => handleThreadSelect(thread.id)}
-                    onOpenInOtherPane={() =>
-                      handleOpenThreadInOtherPane(thread.id)
-                    }
+                    onArchive={() => void handleArchiveThreadFromMenu(thread.id)}
                     onBranchChipContextMenu={(event) => {
                       const anchor = resolveContextMenuAnchor(event);
                       setContextMenu(
@@ -274,6 +347,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
   }
 
   function renderChatThreads() {
+    const chatComparator = compareThreadsByMode(chatsSort);
     const chatThreads =
       chatWorkspace?.environments
         .flatMap((environment) =>
@@ -281,20 +355,10 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
             .filter((thread) => thread.status === "active")
             .map((thread) => ({ thread, environment })),
         )
-        .sort((left, right) => sortThreadsByUpdatedAtDesc(left.thread, right.thread)) ?? [];
+        .sort((left, right) => chatComparator(left.thread, right.thread)) ?? [];
 
     if (chatThreads.length === 0) {
-      return (
-        <div className="tree-sidebar__section-content">
-          <p className="tree-sidebar__section-empty-hint">
-            No chats yet — click{" "}
-            <span aria-hidden>
-              <PencilIcon size={10} />
-            </span>{" "}
-            to start one.
-          </p>
-        </div>
-      );
+      return null;
     }
 
     return (
@@ -305,7 +369,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
             <SidebarThreadRow
               thread={thread}
               onSelect={() => handleThreadSelect(thread.id)}
-              onOpenInOtherPane={() => handleOpenThreadInOtherPane(thread.id)}
+              onArchive={() => void handleArchiveThreadFromMenu(thread.id)}
               onContextMenu={(event) => {
                 event.preventDefault();
                 setContextMenu({
@@ -468,7 +532,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
       <div className="tree-sidebar__header">
         <span className="tree-sidebar__title tx-section-label">Workspace</span>
       </div>
-      <div className="tree-sidebar__scroll">
+      <div className="tree-sidebar__projects">
         <div className="tree-sidebar__project-list">
           {notice && <p className="tree-sidebar__notice">{notice}</p>}
           {latestScriptFailure ? (
@@ -493,19 +557,44 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
             </div>
           ) : null}
           <div className="tree-sidebar__section-header">
-            <span className="tree-sidebar__section-title tx-section-label">Projects</span>
-            <button
-              type="button"
-              className="tree-sidebar__add"
-              title="Add project"
-              onClick={() => {
-                resetMessages();
-                void importProject();
-              }}
-              disabled={isImporting}
-            >
-              <PlusIcon size={14} />
-            </button>
+            <span className="tree-sidebar__section-title-inner">
+              <FolderIcon size={12} className="tree-sidebar__section-icon" />
+              <span className="tree-sidebar__section-label">Projects</span>
+            </span>
+            <span className="tree-sidebar__section-actions">
+              <Tooltip content="Sort threads" side="bottom">
+                <button
+                  ref={projectsSortButtonRef}
+                  type="button"
+                  className="tree-sidebar__sort"
+                  aria-label="Sort threads"
+                  aria-haspopup="menu"
+                  aria-expanded={sortMenu?.kind === "projects"}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    handleOpenSortMenu("projects", projectsSortButtonRef.current);
+                  }}
+                >
+                  <SortIcon size={13} />
+                </button>
+              </Tooltip>
+              <Tooltip content="Add project" side="bottom">
+                <button
+                  type="button"
+                  className="tree-sidebar__add"
+                  aria-label="Add project"
+                  onClick={() => {
+                    resetMessages();
+                    void importProject();
+                  }}
+                  disabled={isImporting}
+                >
+                  <PlusIcon size={14} />
+                </button>
+              </Tooltip>
+            </span>
           </div>
           {projects.length === 0 ? (
             <p className="tree-sidebar__empty">
@@ -617,7 +706,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
                         handleOpenThreadDraft(project.id);
                       }}
                     >
-                      <PencilIcon size={13} />
+                      <SquarePenIcon size={13} />
                     </button>
                   </Tooltip>
                 </div>
@@ -626,10 +715,35 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
               </section>
               ))
             )}
-          <div className="tree-sidebar__section-header">
-            <span className="tree-sidebar__section-title tx-section-label">
+        </div>
+      </div>
+      <div className="tree-sidebar__chats">
+        <div className="tree-sidebar__section-header">
+          <span className="tree-sidebar__section-title-inner">
+            <ThreadIcon size={12} className="tree-sidebar__section-icon" />
+            <span className="tree-sidebar__section-label">
               {chatWorkspace?.title ?? "Chats"}
             </span>
+          </span>
+          <span className="tree-sidebar__section-actions">
+            <Tooltip content="Sort chats" side="bottom">
+              <button
+                ref={chatsSortButtonRef}
+                type="button"
+                className="tree-sidebar__sort"
+                aria-label="Sort chats"
+                aria-haspopup="menu"
+                aria-expanded={sortMenu?.kind === "chats"}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  handleOpenSortMenu("chats", chatsSortButtonRef.current);
+                }}
+              >
+                <SortIcon size={13} />
+              </button>
+            </Tooltip>
             <Tooltip content="New chat" side="bottom">
               <button
                 type="button"
@@ -642,12 +756,12 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
                   openChatDraft();
                 }}
               >
-                <PencilIcon size={13} />
+                <SquarePenIcon size={13} />
               </button>
             </Tooltip>
-          </div>
-          {renderChatThreads()}
+          </span>
         </div>
+        {renderChatThreads()}
       </div>
       <div className="tree-sidebar__footer">
         <SidebarUtilityActions
@@ -777,6 +891,43 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
           </div>,
           document.body,
         )}
+      {sortMenu &&
+        createPortal(
+          <div
+            className="tree-sidebar__sort-menu tx-dropdown-menu"
+            style={resolveSortMenuPosition(sortMenu)}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+            role="menu"
+          >
+            {SORT_MODES.map((mode) => {
+              const isActive =
+                (sortMenu.kind === "projects" ? projectsSort : chatsSort) ===
+                mode;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={isActive}
+                  className="tree-sidebar__sort-option tx-dropdown-option"
+                  onClick={() => handleSortPick(sortMenu.kind, mode)}
+                >
+                  <span className="tree-sidebar__sort-option-label">
+                    {SORT_MODE_LABELS[mode]}
+                  </span>
+                  <span
+                    className="tree-sidebar__sort-option-check"
+                    aria-hidden="true"
+                  >
+                    {isActive ? <CheckIcon size={12} /> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )}
     </aside>
   );
 }
@@ -869,12 +1020,13 @@ type WorktreeGroup = {
 
 function buildWorktreeGroups(
   environments: EnvironmentRecord[],
+  threadComparator: (left: ThreadRecord, right: ThreadRecord) => number,
 ): WorktreeGroup[] {
   const groups: WorktreeGroup[] = [];
   for (const environment of environments) {
     const activeThreads = environment.threads
       .filter((thread) => thread.status === "active")
-      .sort(sortThreadsByUpdatedAtDesc);
+      .sort(threadComparator);
     if (activeThreads.length === 0) {
       continue;
     }
@@ -895,12 +1047,12 @@ function buildWorktreeGroups(
 }
 
 function latestActiveThreadTimestamp(threads: ThreadRecord[]) {
-  // Threads are pre-sorted by updatedAt desc, so the first entry is the newest.
-  return threads.length > 0 ? timestampOf(threads[0].updatedAt) : 0;
-}
-
-function sortThreadsByUpdatedAtDesc(left: ThreadRecord, right: ThreadRecord) {
-  return timestampOf(right.updatedAt) - timestampOf(left.updatedAt);
+  let max = 0;
+  for (const thread of threads) {
+    const value = timestampOf(thread.updatedAt);
+    if (value > max) max = value;
+  }
+  return max;
 }
 
 function resolveWorktreeBranchLabel(environment: EnvironmentRecord) {
@@ -929,6 +1081,23 @@ function resolveContextMenuPosition(
     top: Math.max(
       margin,
       Math.min(contextMenu.y, window.innerHeight - menuHeight - margin),
+    ),
+  };
+}
+
+function resolveSortMenuPosition(menu: Pick<SortMenuState, "x" | "y">) {
+  const menuWidth = 180;
+  const menuHeight = 130;
+  const margin = 12;
+
+  return {
+    left: Math.max(
+      margin,
+      Math.min(menu.x, window.innerWidth - menuWidth - margin),
+    ),
+    top: Math.max(
+      margin,
+      Math.min(menu.y, window.innerHeight - menuHeight - margin),
     ),
   };
 }

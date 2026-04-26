@@ -798,7 +798,6 @@ describe("terminal-store", () => {
         defaultCollaborationMode: "build",
         defaultApprovalPolicy: "askToEdit",
         streamAssistantResponses: true,
-        collapseWorkActivity: true,
         desktopNotificationsEnabled: false,
         multiAgentNudgeEnabled: false,
         multiAgentNudgeMaxSubagents: 4,

@@ -38,7 +38,6 @@ export function StudioPane({
   let content;
   let isThreadView = false;
   let isDraftView = false;
-  const closeHandler = isSplit ? () => closePane(paneId) : null;
   if (thread && environment) {
     isThreadView = true;
     content = (
@@ -47,7 +46,6 @@ export function StudioPane({
         thread={thread}
         composerFocusKey={isFocused ? composerFocusKey : 0}
         approveOrSubmitKey={isFocused ? approveOrSubmitKey : 0}
-        onClosePane={closeHandler}
       />
     );
   } else if (draft) {
@@ -86,7 +84,7 @@ export function StudioPane({
       }}
     >
       <div className="studio-main__pane-scroll">{content}</div>
-      {isSplit && !isThreadView && (
+      {isSplit && (
         <Tooltip content="Close pane" side="bottom">
           <button
             type="button"
@@ -118,9 +116,7 @@ function shouldSkipFocusCapture(
 ): boolean {
   if (isFocused) return true;
   if (!(event.target instanceof Element)) return false;
-  return Boolean(
-    event.target.closest(".studio-main__pane-close, .tx-conversation__close"),
-  );
+  return Boolean(event.target.closest(".studio-main__pane-close"));
 }
 
 function OverviewView({ projects }: { projects: ProjectRecord[] }) {

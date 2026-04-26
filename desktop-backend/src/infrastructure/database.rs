@@ -1,17 +1,19 @@
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use chrono::Utc;
+use rusqlite::{params, Connection};
 
 use crate::app_identity::{
     AppStoragePaths, APP_DATABASE_FILE_NAME, LEGACY_APP_DATABASE_FILE_NAMES,
 };
 use crate::domain::conversation::{
     ComposerDraftMentionBinding, ConversationComposerDraft, ConversationImageAttachment,
+    ConversationItem,
 };
 use crate::domain::workspace::SavedDraftThreadState;
 use crate::error::{AppError, AppResult};
 
-const CURRENT_SCHEMA_VERSION: i32 = 8;
+const CURRENT_SCHEMA_VERSION: i32 = 9;
 
 #[derive(Debug, Clone)]
 pub struct AppDatabase {
@@ -353,6 +355,7 @@ impl AppDatabase {
                 )?;
             }
             7 => {}
+            8 => {}
             CURRENT_SCHEMA_VERSION => {}
             other => {
                 return Err(AppError::Runtime(format!(
@@ -361,8 +364,11 @@ impl AppDatabase {
             }
         }
 
-        if version < CURRENT_SCHEMA_VERSION {
+        if version < 8 {
             migrate_to_v8(&connection)?;
+        }
+        if version < 9 {
+            migrate_to_v9(&connection)?;
         }
 
         Ok(())
@@ -476,6 +482,72 @@ impl AppDatabase {
         }
         Ok(())
     }
+
+    pub fn save_conversation_item(
+        &self,
+        thread_id: &str,
+        item: &ConversationItem,
+    ) -> AppResult<()> {
+        let connection = self.open()?;
+        let (item_id, turn_id) = match item {
+            ConversationItem::Message(m) => (&m.id, m.turn_id.as_deref()),
+            ConversationItem::Reasoning(r) => (&r.id, r.turn_id.as_deref()),
+            ConversationItem::Tool(t) => (&t.id, t.turn_id.as_deref()),
+            ConversationItem::System(s) => (&s.id, s.turn_id.as_deref()),
+        };
+        let payload = serde_json::to_string(item)
+            .map_err(|error| AppError::Runtime(error.to_string()))?;
+        let now = Utc::now().to_rfc3339();
+        connection.execute(
+            "
+            INSERT INTO conversation_items (id, thread_id, turn_id, payload_json, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(thread_id, id) DO UPDATE SET
+              turn_id = excluded.turn_id,
+              payload_json = excluded.payload_json,
+              updated_at = excluded.updated_at
+            ",
+            params![item_id, thread_id, turn_id, payload, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_conversation_items(
+        &self,
+        thread_id: &str,
+    ) -> AppResult<Vec<ConversationItem>> {
+        let connection = self.open()?;
+        let mut statement = connection.prepare(
+            "SELECT payload_json FROM conversation_items WHERE thread_id = ?1 ORDER BY rowid",
+        )?;
+        let rows = statement
+            .query_map([thread_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut items = Vec::with_capacity(rows.len());
+        for payload in rows {
+            match serde_json::from_str::<ConversationItem>(&payload) {
+                Ok(item) => items.push(item),
+                Err(error) => {
+                    tracing::warn!(
+                        thread_id,
+                        ?error,
+                        "skipping unparseable persisted conversation item"
+                    );
+                }
+            }
+        }
+        Ok(items)
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_conversation_items(&self, thread_id: &str) -> AppResult<()> {
+        let connection = self.open()?;
+        connection.execute(
+            "DELETE FROM conversation_items WHERE thread_id = ?1",
+            [thread_id],
+        )?;
+        Ok(())
+    }
 }
 
 fn migrate_to_v8(connection: &Connection) -> AppResult<()> {
@@ -491,6 +563,26 @@ fn migrate_to_v8(connection: &Connection) -> AppResult<()> {
         WHERE provider_thread_id IS NULL
           AND codex_thread_id IS NOT NULL;
         PRAGMA user_version = 8;
+        COMMIT;
+        ",
+    )?;
+    Ok(())
+}
+
+fn migrate_to_v9(connection: &Connection) -> AppResult<()> {
+    connection.execute_batch(
+        "
+        BEGIN;
+        CREATE TABLE conversation_items (
+          id TEXT NOT NULL,
+          thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+          turn_id TEXT,
+          payload_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (thread_id, id)
+        );
+        CREATE INDEX conversation_items_thread_idx ON conversation_items(thread_id);
+        PRAGMA user_version = 9;
         COMMIT;
         ",
     )?;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ProviderKind, SubagentThreadSnapshot } from "../../lib/types";
 import { ChevronRightIcon } from "../../shared/Icons";
@@ -14,78 +14,109 @@ type Props = {
   provider: ProviderKind;
 };
 
-export function ConversationWorkActivityGroup({ group, provider }: Props) {
-  const [expanded, setExpanded] = useState(false);
-  const sectionRef = useRef<HTMLElement | null>(null);
-  const bodyRef = useRef<HTMLDivElement | null>(null);
-  const summary = useMemo(() => buildSummary(group), [group]);
+const LIVE_TIMER_INTERVAL_MS = 500;
 
-  // On open, scroll the body to the end (newest content) so the panel
-  // doesn't push the timeline around with old content.
+function isActiveStatus(status: WorkActivityStatus): boolean {
+  return status === "running" || status === "waiting";
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes === 0
+    ? `${hours}h`
+    : `${hours}h ${remainingMinutes}m`;
+}
+
+export function ConversationWorkActivityGroup({ group, provider }: Props) {
+  const isActive = isActiveStatus(group.status);
+  const [expanded, setExpanded] = useState(isActive);
+  const wasActiveRef = useRef(isActive);
+  const [, forceTick] = useState(0);
+
+  // Auto-collapse when work transitions from active → done.
   useEffect(() => {
-    if (!expanded) {
-      return;
+    if (wasActiveRef.current && !isActive) {
+      setExpanded(false);
     }
-    const frame = window.requestAnimationFrame(() => {
-      const body = bodyRef.current;
-      if (body) {
-        body.scrollTop = body.scrollHeight;
-      }
-      const prefersReducedMotion =
-        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-      sectionRef.current?.scrollIntoView?.({
-        behavior: prefersReducedMotion ? "auto" : "smooth",
-        block: "nearest",
-      });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [expanded]);
+    wasActiveRef.current = isActive;
+  }, [isActive]);
+
+  // Tick once a second while active so the live timer updates.
+  useEffect(() => {
+    if (!isActive || !group.startedAt) return undefined;
+    const id = window.setInterval(
+      () => forceTick((value) => (value + 1) % 1000),
+      LIVE_TIMER_INTERVAL_MS,
+    );
+    return () => window.clearInterval(id);
+  }, [isActive, group.startedAt]);
+
+  const headerLabel = buildHeaderLabel(
+    isActive,
+    group.startedAt,
+    group.finishedAt,
+  );
+
+  const hasContent =
+    group.items.length > 0 ||
+    group.subagents.length > 0 ||
+    group.taskPlan !== null;
 
   return (
-    <section ref={sectionRef} className="tx-work-activity">
+    <section className="tx-work-activity">
       <button
         type="button"
-        className="tx-work-activity__toggle"
+        className={`tx-work-activity__toggle ${
+          expanded ? "tx-work-activity__toggle--expanded" : ""
+        } tx-work-activity__toggle--${group.status}`}
         aria-expanded={expanded}
-        aria-label={expanded ? "Hide work activity details" : "Show work activity details"}
+        aria-label="Toggle work activity"
         onClick={() => setExpanded((value) => !value)}
+        disabled={!hasContent}
       >
-        <div className="tx-work-activity__header">
-          <span className="tx-item__header-main">
-            <ChevronRightIcon
-              size={12}
-              className={`tx-item__chevron ${expanded ? "tx-item__chevron--expanded" : ""}`}
-            />
-            Work activity
-          </span>
-          <span className={`tx-pill tx-pill--${group.status}`}>
-            {labelForStatus(group.status)}
-          </span>
-        </div>
-        {summary ? <span className="tx-work-activity__summary">{summary}</span> : null}
+        <ChevronRightIcon
+          size={11}
+          className={`tx-work-activity__chevron ${
+            expanded ? "tx-work-activity__chevron--expanded" : ""
+          }`}
+        />
+        <span className="tx-work-activity__label">{headerLabel}</span>
       </button>
-      <div
-        className={`tx-work-activity__body-wrap ${expanded ? "tx-work-activity__body-wrap--open" : ""}`}
-        aria-hidden={!expanded}
-        inert={!expanded || undefined}
-      >
-        <div ref={bodyRef} className="tx-work-activity__body">
-          {group.taskPlan ? <ConversationTaskCard taskPlan={group.taskPlan} compact /> : null}
+      {expanded && hasContent ? (
+        <div className="tx-work-activity__body">
+          {group.taskPlan ? (
+            <ConversationTaskCard taskPlan={group.taskPlan} compact />
+          ) : null}
           {group.subagents.length > 0 ? (
             <div className="tx-work-activity__subagents">
-              <div className="tx-item__header">Subagents</div>
+              <div className="tx-work-activity__subagents-label">Subagents</div>
               <div className="tx-work-activity__subagent-list">
                 {group.subagents.map((subagent) => (
-                  <div key={subagent.threadId} className="tx-work-activity__subagent">
-                    <div className="tx-work-activity__subagent-copy">
-                      <span className="tx-work-activity__subagent-name">
-                        {labelForSubagent(subagent)}
+                  <div
+                    key={subagent.threadId}
+                    className="tx-work-activity__subagent"
+                  >
+                    <span className="tx-work-activity__subagent-name">
+                      {labelForSubagent(subagent)}
+                    </span>
+                    {subagent.role ? (
+                      <span className="tx-work-activity__subagent-role">
+                        {subagent.role}
                       </span>
-                      {subagent.role ? (
-                        <span className="tx-work-activity__subagent-role">{subagent.role}</span>
-                      ) : null}
-                    </div>
-                    <span className={`tx-pill tx-pill--${toneForSubagent(subagent.status)}`}>
+                    ) : null}
+                    <span
+                      className={`tx-work-activity__subagent-status tx-work-activity__subagent-status--${subagent.status}`}
+                    >
                       {labelForSubagentStatus(subagent.status)}
                     </span>
                   </div>
@@ -94,49 +125,32 @@ export function ConversationWorkActivityGroup({ group, provider }: Props) {
             </div>
           ) : null}
           {group.items.map((item) => (
-            <ConversationItemRow key={item.id} item={item} compact provider={provider} />
+            <ConversationItemRow
+              key={item.id}
+              item={item}
+              compact
+              provider={provider}
+            />
           ))}
         </div>
-      </div>
+      ) : null}
     </section>
   );
 }
 
-function buildSummary(group: ConversationWorkActivityGroupData) {
-  const parts = [
-    formatCount(group.counts.updateCount + group.counts.systemCount, "update", "updates"),
-    formatCount(group.counts.reasoningCount, "thinking", "thinking"),
-    formatCount(group.counts.toolCount, "tool call", "tool calls"),
-    formatCount(group.counts.subagentCount, "subagent", "subagents"),
-  ].filter(Boolean);
-
-  if (parts.length === 0 && group.taskPlan) {
-    return "Task tracker";
+function buildHeaderLabel(
+  isActive: boolean,
+  startedAt: number | null,
+  finishedAt: number | null,
+): string {
+  if (isActive) {
+    if (!startedAt) return "Working…";
+    return `Working for ${formatElapsed(Date.now() - startedAt)}`;
   }
-
-  return parts.join(" · ");
-}
-
-function formatCount(value: number, singular: string, plural: string) {
-  if (value <= 0) {
-    return "";
+  if (startedAt && finishedAt) {
+    return `Worked for ${formatElapsed(finishedAt - startedAt)}`;
   }
-  return `${value} ${value === 1 ? singular : plural}`;
-}
-
-function labelForStatus(status: WorkActivityStatus) {
-  switch (status) {
-    case "waiting":
-      return "Waiting";
-    case "interrupted":
-      return "Interrupted";
-    case "failed":
-      return "Failed";
-    case "completed":
-      return "Completed";
-    default:
-      return "Running";
-  }
+  return "Worked";
 }
 
 function labelForSubagent(subagent: SubagentThreadSnapshot) {
@@ -146,11 +160,5 @@ function labelForSubagent(subagent: SubagentThreadSnapshot) {
 function labelForSubagentStatus(status: SubagentThreadSnapshot["status"]) {
   if (status === "running") return "Running";
   if (status === "failed") return "Failed";
-  return "Completed";
-}
-
-function toneForSubagent(status: SubagentThreadSnapshot["status"]) {
-  if (status === "running") return "running";
-  if (status === "failed") return "failed";
-  return "completed";
+  return "Done";
 }

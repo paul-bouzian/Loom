@@ -30,6 +30,7 @@ use crate::error::{AppError, AppResult};
 use crate::events::EventSink;
 use crate::runtime::claude::append_claude_provider;
 use crate::runtime::codex_paths::build_codex_process_path;
+use crate::runtime::item_store;
 use crate::runtime::proposed_plan_markup::{
     extract_proposed_plan_text, strip_proposed_plan_blocks,
 };
@@ -491,13 +492,17 @@ impl RuntimeSession {
                         }),
                     )
                     .await?;
-                let snapshot = build_history_snapshot(
+                let mut snapshot = build_history_snapshot(
                     context.thread_id.clone(),
                     context.environment_id.clone(),
                     Some(codex_thread_id.clone()),
                     context.composer.clone(),
                     read_response.thread,
                 );
+                let persisted = item_store::load(&context.thread_id);
+                for item in persisted {
+                    upsert_item(&mut snapshot.items, item);
+                }
                 self.send_request(
                     "thread/resume",
                     serde_json::json!({
@@ -2189,6 +2194,9 @@ async fn handle_notification(
                                     }
                                 })
                             {
+                                if !is_started {
+                                    item_store::save(&local_thread_id, &item);
+                                }
                                 upsert_item(&mut snapshot.items, item);
                             }
                             reconcile_snapshot_status(snapshot);

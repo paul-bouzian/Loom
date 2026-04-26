@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod codex_paths;
 pub mod collaboration_mode_templates;
+pub mod item_store;
 pub mod proposed_plan_markup;
 pub mod protocol;
 pub mod session;
