@@ -13,14 +13,21 @@ fn db() -> Option<&'static AppDatabase> {
     ITEM_STORE.get()
 }
 
-/// Only persist items that the upstream provider (Codex `thread/read`,
-/// Claude resume) does NOT return on its own. Messages and reasoning are
-/// returned reliably; saving them locally would double-render on reload.
+/// Persist durable local projection metadata and provider-missing activity.
+/// Provider history usually returns messages, but not always the local
+/// `turn_id`/work-activity metadata needed to rebuild grouped activity after
+/// restart. User messages stay provider-owned to avoid duplicating optimistic
+/// composer entries.
 fn should_persist(item: &ConversationItem) -> bool {
-    matches!(
-        item,
-        ConversationItem::Tool(_) | ConversationItem::System(_)
-    )
+    match item {
+        ConversationItem::Tool(_)
+        | ConversationItem::System(_)
+        | ConversationItem::Reasoning(_) => true,
+        ConversationItem::Message(message) => {
+            message.role == crate::domain::conversation::ConversationRole::Assistant
+                && message.turn_id.is_some()
+        }
+    }
 }
 
 pub fn save(thread_id: &str, item: &ConversationItem) {
@@ -42,7 +49,11 @@ pub fn load(thread_id: &str) -> Vec<ConversationItem> {
     match database.load_conversation_items(thread_id) {
         Ok(items) => items,
         Err(error) => {
-            tracing::warn!(thread_id, ?error, "failed to load persisted conversation items");
+            tracing::warn!(
+                thread_id,
+                ?error,
+                "failed to load persisted conversation items"
+            );
             Vec::new()
         }
     }
@@ -54,6 +65,77 @@ pub fn remove(thread_id: &str) {
         return;
     };
     if let Err(error) = database.delete_conversation_items(thread_id) {
-        tracing::warn!(thread_id, ?error, "failed to delete persisted conversation items");
+        tracing::warn!(
+            thread_id,
+            ?error,
+            "failed to delete persisted conversation items"
+        );
+    }
+}
+
+pub fn remove_turn(thread_id: &str, turn_id: &str) {
+    let Some(database) = db() else {
+        return;
+    };
+    if let Err(error) = database.delete_conversation_items_for_turn(thread_id, turn_id) {
+        tracing::warn!(
+            thread_id,
+            turn_id,
+            ?error,
+            "failed to delete persisted conversation items for turn"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::conversation::{
+        ConversationMessageItem, ConversationReasoningItem, ConversationRole,
+    };
+
+    #[test]
+    fn persists_assistant_turn_metadata_but_not_provider_owned_user_messages() {
+        let assistant = ConversationItem::Message(ConversationMessageItem {
+            id: "assistant-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            role: ConversationRole::Assistant,
+            text: "Je cherche la météo.".to_string(),
+            images: None,
+            is_streaming: false,
+        });
+        let assistant_without_turn = ConversationItem::Message(ConversationMessageItem {
+            id: "assistant-2".to_string(),
+            turn_id: None,
+            role: ConversationRole::Assistant,
+            text: "Réponse historique.".to_string(),
+            images: None,
+            is_streaming: false,
+        });
+        let user = ConversationItem::Message(ConversationMessageItem {
+            id: "user-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            role: ConversationRole::User,
+            text: "Fais une recherche météo.".to_string(),
+            images: None,
+            is_streaming: false,
+        });
+
+        assert!(should_persist(&assistant));
+        assert!(!should_persist(&assistant_without_turn));
+        assert!(!should_persist(&user));
+    }
+
+    #[test]
+    fn persists_reasoning_activity_for_history_rebuilds() {
+        let reasoning = ConversationItem::Reasoning(ConversationReasoningItem {
+            id: "reasoning-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            summary: "Thinking".to_string(),
+            content: String::new(),
+            is_streaming: false,
+        });
+
+        assert!(should_persist(&reasoning));
     }
 }

@@ -495,8 +495,8 @@ impl AppDatabase {
             ConversationItem::Tool(t) => (&t.id, t.turn_id.as_deref()),
             ConversationItem::System(s) => (&s.id, s.turn_id.as_deref()),
         };
-        let payload = serde_json::to_string(item)
-            .map_err(|error| AppError::Runtime(error.to_string()))?;
+        let payload =
+            serde_json::to_string(item).map_err(|error| AppError::Runtime(error.to_string()))?;
         let now = Utc::now().to_rfc3339();
         connection.execute(
             "
@@ -512,10 +512,7 @@ impl AppDatabase {
         Ok(())
     }
 
-    pub fn load_conversation_items(
-        &self,
-        thread_id: &str,
-    ) -> AppResult<Vec<ConversationItem>> {
+    pub fn load_conversation_items(&self, thread_id: &str) -> AppResult<Vec<ConversationItem>> {
         let connection = self.open()?;
         let mut statement = connection.prepare(
             "SELECT payload_json FROM conversation_items WHERE thread_id = ?1 ORDER BY rowid",
@@ -545,6 +542,19 @@ impl AppDatabase {
         connection.execute(
             "DELETE FROM conversation_items WHERE thread_id = ?1",
             [thread_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_conversation_items_for_turn(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> AppResult<()> {
+        let connection = self.open()?;
+        connection.execute(
+            "DELETE FROM conversation_items WHERE thread_id = ?1 AND turn_id = ?2",
+            params![thread_id, turn_id],
         )?;
         Ok(())
     }
@@ -708,7 +718,7 @@ mod tests {
     use super::{migrate_legacy_database_file, AppDatabase, CURRENT_SCHEMA_VERSION};
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
-        ConversationImageAttachment,
+        ConversationImageAttachment, ConversationItem, ConversationMessageItem, ConversationRole,
     };
     use rusqlite::Connection;
     use std::path::Path;
@@ -1471,6 +1481,82 @@ mod tests {
         assert!(draft_thread_state.contains("/Users/test/.skein/worktrees/skein/feature/draft.md"));
         assert!(!draft_thread_state.contains("/Users/test/.threadex"));
         assert!(!draft_thread_state.contains("/Users/test/.loom"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_conversation_items_for_turn_only_removes_target_turn() {
+        let root = std::env::temp_dir().join(format!("skein-db-items-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("test directory should exist");
+        let db_path = root.join("skein.sqlite3");
+        let database = AppDatabase::for_test(db_path).expect("db should initialize");
+        let connection = database.open().expect("db should open");
+        connection
+            .execute(
+                "
+                INSERT INTO projects (
+                  id, name, root_path, settings_json, created_at, updated_at
+                )
+                VALUES ('project-1', 'Skein', '/tmp/skein-db-items', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ",
+                [],
+            )
+            .expect("project should insert");
+        connection
+            .execute(
+                "
+                INSERT INTO environments (
+                  id, project_id, name, kind, path, is_default, created_at, updated_at
+                )
+                VALUES ('env-1', 'project-1', 'main', 'repository', '/tmp/skein-db-items', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ",
+                [],
+            )
+            .expect("environment should insert");
+        connection
+            .execute(
+                "
+                INSERT INTO threads (
+                  id, environment_id, title, status, codex_thread_id, overrides_json, created_at, updated_at
+                )
+                VALUES ('thread-1', 'env-1', 'Thread', 'active', NULL, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ",
+                [],
+            )
+            .expect("thread should insert");
+
+        for (id, turn_id, text) in [
+            ("assistant-failed", "turn-failed", "failed"),
+            ("assistant-kept", "turn-kept", "kept"),
+        ] {
+            database
+                .save_conversation_item(
+                    "thread-1",
+                    &ConversationItem::Message(ConversationMessageItem {
+                        id: id.to_string(),
+                        turn_id: Some(turn_id.to_string()),
+                        role: ConversationRole::Assistant,
+                        text: text.to_string(),
+                        images: None,
+                        is_streaming: false,
+                    }),
+                )
+                .expect("item should save");
+        }
+
+        database
+            .delete_conversation_items_for_turn("thread-1", "turn-failed")
+            .expect("target turn should delete");
+
+        let remaining = database
+            .load_conversation_items("thread-1")
+            .expect("items should load");
+        assert_eq!(remaining.len(), 1);
+        assert!(matches!(
+            &remaining[0],
+            ConversationItem::Message(message) if message.id == "assistant-kept"
+        ));
 
         let _ = std::fs::remove_dir_all(root);
     }

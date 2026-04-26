@@ -12,6 +12,17 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ContentBlockParam } from "@anthropic-ai/sdk/resources/messages";
 
+import {
+  createClaudeEventNormalizer,
+  extractPlanFromInput,
+  textFromContent,
+  summarizeTool,
+  type ClaudeEvent,
+  type TokenUsageBreakdown,
+  type UserInputQuestion,
+} from "./claude-agent-events.js";
+import { allowClaudeTool } from "./claude-agent-permissions.js";
+
 type WorkerRequest<T = unknown> = {
   id: number;
   type: "open" | "send";
@@ -40,6 +51,7 @@ type SendPayload = {
   providerThreadId?: string | null;
   cwd: string;
   model: string;
+  supportsThinking: boolean;
   effort: "low" | "medium" | "high" | "xhigh" | "max";
   serviceTier?: "fast" | "flex" | null;
   collaborationMode: "build" | "plan";
@@ -66,98 +78,6 @@ type SimpleMessage = {
   role: "user" | "assistant";
   text: string;
   images?: ImagePayload[] | null;
-};
-
-type ClaudeEvent =
-  | {
-      kind: "session";
-      providerThreadId: string;
-    }
-  | {
-      kind: "tokenUsage";
-      total: TokenUsageBreakdown;
-      last: TokenUsageBreakdown;
-      modelContextWindow?: number | null;
-    }
-  | {
-      kind: "assistantDelta";
-      itemId: string;
-      delta: string;
-    }
-  | {
-      kind: "toolStarted";
-      itemId: string;
-      toolName: string;
-      title: string;
-      summary?: string;
-    }
-  | {
-      kind: "toolUpdated";
-      itemId: string;
-      toolName: string;
-      title: string;
-      summary?: string;
-    }
-  | {
-      kind: "toolOutput";
-      itemId: string;
-      delta: string;
-      isError?: boolean;
-    }
-  | {
-      kind: "toolCompleted";
-      itemId: string;
-      isError?: boolean;
-    }
-  | {
-      kind: "reasoning";
-      itemId: string;
-      delta: string;
-    }
-  | {
-      kind: "planReady";
-      itemId?: string;
-      markdown: string;
-    }
-  | {
-      kind: "userInputRequest";
-      interactionId: string;
-      itemId: string;
-      questions: UserInputQuestion[];
-    }
-  | {
-      kind: "approvalRequest";
-      interactionId: string;
-      itemId: string;
-      toolName: string;
-      title: string;
-      summary?: string;
-      command?: string;
-      reason?: string;
-    };
-
-type UserInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  options: Array<{ label: string; description: string }>;
-};
-
-type TokenUsageBreakdown = {
-  totalTokens: number;
-  inputTokens: number;
-  cachedInputTokens: number;
-  outputTokens: number;
-  reasoningOutputTokens: number;
-};
-
-type InFlightTool = {
-  itemId: string;
-  toolName: string;
-  title: string;
-  summary?: string;
-  partialInputJson: string;
-  lastInputFingerprint?: string;
 };
 
 type ActiveQuery = {
@@ -243,7 +163,9 @@ function optionsFor(
     allowDangerouslySkipPermissions: mode === "bypassPermissions" ? true : undefined,
     pathToClaudeCodeExecutable: payload.claudeBinaryPath?.trim() || undefined,
     effort: payload.effort,
-    thinking: { type: "adaptive" },
+    thinking: payload.supportsThinking
+      ? { type: "adaptive", display: "summarized" } as Options["thinking"]
+      : undefined,
     systemPrompt: { type: "preset", preset: "claude_code" },
     tools: { type: "preset", preset: "claude_code" },
     settingSources: ["user", "project", "local"],
@@ -253,7 +175,7 @@ function optionsFor(
         : undefined,
     canUseTool: (toolName, input, options) =>
       approveToolUse(requestId, payload, toolName, input, options),
-    includePartialMessages: false,
+    includePartialMessages: true,
     promptSuggestions: false,
     env: {
       ...process.env,
@@ -284,7 +206,7 @@ async function approveToolUse(
     };
   }
   if (READ_ONLY_PLAN_TOOLS.has(toolName)) {
-    return { behavior: "allow" as const };
+    return allowClaudeTool(input);
   }
   if (payload.collaborationMode === "plan") {
     return {
@@ -294,10 +216,10 @@ async function approveToolUse(
     };
   }
   if (payload.approvalPolicy === "fullAccess") {
-    return { behavior: "allow", updatedInput: input };
+    return allowClaudeTool(input);
   }
   if (SAFE_BUILD_TOOLS.has(toolName)) {
-    return { behavior: "allow" as const };
+    return allowClaudeTool(input);
   }
   return requestToolApproval(requestId, toolName, input, options);
 }
@@ -338,7 +260,7 @@ async function requestToolApproval(
       message: `The user declined ${toolName}.`,
     };
   }
-  return { behavior: "allow", updatedInput: input };
+  return allowClaudeTool(input);
 }
 
 async function askUserQuestion(
@@ -449,20 +371,6 @@ function stringFromUnknown(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
-function textFromContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") continue;
-    const entry = block as Record<string, unknown>;
-    if (entry.type === "text" && typeof entry.text === "string") {
-      parts.push(entry.text);
-    }
-  }
-  return parts.join("\n\n");
-}
-
 function imagesFromContent(content: unknown): ImagePayload[] {
   if (!Array.isArray(content)) return [];
   const images: ImagePayload[] = [];
@@ -511,11 +419,6 @@ function planFromContent(content: unknown): string | null {
   return null;
 }
 
-function extractPlanFromInput(input: Record<string, unknown>): string | null {
-  const plan = input.plan;
-  return typeof plan === "string" && plan.trim() ? plan.trim() : null;
-}
-
 function messageToSimple(message: {
   type: string;
   uuid?: string;
@@ -538,68 +441,6 @@ function messageToSimple(message: {
   };
 }
 
-function summarizeTool(toolName: string, input: Record<string, unknown>) {
-  const readPath = stringFromUnknown(input.file_path) || stringFromUnknown(input.path);
-  switch (toolName) {
-    case "Bash":
-      return stringFromUnknown(input.description) || stringFromUnknown(input.command);
-    case "Read":
-    case "Edit":
-    case "MultiEdit":
-    case "Write":
-      return readPath;
-    case "Grep":
-      return [stringFromUnknown(input.pattern), stringFromUnknown(input.path)]
-        .filter(Boolean)
-        .join(" in ");
-    case "Glob":
-      return [stringFromUnknown(input.pattern), stringFromUnknown(input.path)]
-        .filter(Boolean)
-        .join(" in ");
-    case "LS":
-      return readPath;
-    case "WebSearch":
-      return stringFromUnknown(input.query);
-    case "WebFetch":
-      return stringFromUnknown(input.url);
-    case "TodoWrite":
-      return "Task list";
-    case "AskUserQuestion":
-      return "User question";
-    case "ExitPlanMode":
-      return "Proposed plan";
-    default:
-      return readPath || compactJson(input);
-  }
-}
-
-function titleForTool(toolName: string) {
-  switch (toolName) {
-    case "Bash":
-      return "Command";
-    case "Read":
-    case "LS":
-    case "Glob":
-    case "Grep":
-      return "Search";
-    case "Edit":
-    case "MultiEdit":
-    case "Write":
-      return "File change";
-    case "WebSearch":
-    case "WebFetch":
-      return "Web";
-    case "TodoWrite":
-      return "Task plan";
-    case "AskUserQuestion":
-      return "Question";
-    case "ExitPlanMode":
-      return "Plan";
-    default:
-      return toolName;
-  }
-}
-
 function approvalTitleForTool(toolName: string) {
   switch (toolName) {
     case "Bash":
@@ -610,167 +451,6 @@ function approvalTitleForTool(toolName: string) {
       return "File change approval";
     default:
       return "Permission approval";
-  }
-}
-
-function compactJson(value: unknown) {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "";
-  }
-}
-
-function toolResultText(block: Record<string, unknown>) {
-  return textFromContent(block.content).trim();
-}
-
-function processUserToolResults(
-  requestId: number,
-  message: { message?: unknown },
-  toolsById: Map<string, InFlightTool>,
-) {
-  const payload =
-    message.message && typeof message.message === "object"
-      ? (message.message as { content?: unknown })
-      : undefined;
-  const content = payload?.content;
-  if (!Array.isArray(content)) return;
-  for (const entry of content) {
-    if (!entry || typeof entry !== "object") continue;
-    const block = entry as Record<string, unknown>;
-    if (block.type !== "tool_result") continue;
-    const toolUseId = stringFromUnknown(block.tool_use_id);
-    const tool = toolsById.get(toolUseId);
-    if (!tool) continue;
-    const output = toolResultText(block);
-    const isError = block.is_error === true;
-    if (output) {
-      writeEvent(requestId, {
-        kind: "toolOutput",
-        itemId: tool.itemId,
-        delta: output,
-        isError,
-      });
-    }
-    writeEvent(requestId, {
-      kind: "toolCompleted",
-      itemId: tool.itemId,
-      isError,
-    });
-    toolsById.delete(toolUseId);
-  }
-}
-
-function processStreamEvent(
-  requestId: number,
-  activeQuery: ActiveQuery,
-  itemPrefix: string,
-  message: { event?: unknown },
-  toolsByIndex: Map<number, InFlightTool>,
-  toolsById: Map<string, InFlightTool>,
-) {
-  const event = message.event && typeof message.event === "object"
-    ? message.event as Record<string, unknown>
-    : null;
-  if (!event) return;
-  const index = typeof event.index === "number" ? event.index : null;
-  if (event.type === "content_block_start") {
-    const block = event.content_block && typeof event.content_block === "object"
-      ? event.content_block as Record<string, unknown>
-      : null;
-    if (!block) return;
-    if (block.type === "text") {
-      const text = stringFromUnknown(block.text);
-      if (text) {
-        writeEvent(requestId, {
-          kind: "assistantDelta",
-          itemId: `${itemPrefix}-assistant-${index ?? 0}`,
-          delta: text,
-        });
-      }
-      return;
-    }
-    if (block.type !== "tool_use" && block.type !== "server_tool_use" && block.type !== "mcp_tool_use") {
-      return;
-    }
-    const toolName = stringFromUnknown(block.name) || "Tool";
-    const input = block.input && typeof block.input === "object"
-      ? block.input as Record<string, unknown>
-      : {};
-    const itemId = stringFromUnknown(block.id) || `${itemPrefix}-tool-${index ?? 0}`;
-    if (toolName === "ExitPlanMode") {
-      const plan = extractPlanFromInput(input);
-      if (plan) {
-        emitPlanReady(requestId, activeQuery, itemId, plan);
-      }
-      return;
-    }
-    const tool: InFlightTool = {
-      itemId,
-      toolName,
-      title: titleForTool(toolName),
-      summary: summarizeTool(toolName, input),
-      partialInputJson: "",
-      lastInputFingerprint: Object.keys(input).length ? compactJson(input) : undefined,
-    };
-    if (index !== null) toolsByIndex.set(index, tool);
-    toolsById.set(itemId, tool);
-    writeEvent(requestId, {
-      kind: "toolStarted",
-      itemId,
-      toolName,
-      title: tool.title,
-      summary: tool.summary,
-    });
-    return;
-  }
-
-  if (event.type === "content_block_delta") {
-    const delta = event.delta && typeof event.delta === "object"
-      ? event.delta as Record<string, unknown>
-      : null;
-    if (!delta) return;
-    if (delta.type === "text_delta") {
-      const text = stringFromUnknown(delta.text);
-      if (text) {
-        writeEvent(requestId, {
-          kind: "assistantDelta",
-          itemId: `${itemPrefix}-assistant-${index ?? 0}`,
-          delta: text,
-        });
-      }
-      return;
-    }
-    if (delta.type !== "input_json_delta" || index === null) return;
-    const tool = toolsByIndex.get(index);
-    const partial = stringFromUnknown(delta.partial_json);
-    if (!tool || !partial) return;
-    tool.partialInputJson += partial;
-    const parsed = parsePartialJson(tool.partialInputJson);
-    if (!parsed) return;
-    const fingerprint = compactJson(parsed);
-    if (!fingerprint || fingerprint === tool.lastInputFingerprint) return;
-    tool.lastInputFingerprint = fingerprint;
-    tool.summary = summarizeTool(tool.toolName, parsed);
-    writeEvent(requestId, {
-      kind: "toolUpdated",
-      itemId: tool.itemId,
-      toolName: tool.toolName,
-      title: tool.title,
-      summary: tool.summary,
-    });
-  }
-}
-
-function parsePartialJson(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null;
-  } catch {
-    return null;
   }
 }
 
@@ -943,8 +623,8 @@ async function handleSend(requestId: number, payload: SendPayload) {
     planMarkdown: null,
   };
   const itemPrefix = `claude-turn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const toolsByIndex = new Map<number, InFlightTool>();
-  const toolsById = new Map<string, InFlightTool>();
+  const normalizer = createClaudeEventNormalizer(itemPrefix);
+  let toolSummaryOrdinal = 0;
   const streamedMessages: SimpleMessage[] = [
     {
       id: `local-user-${Date.now()}`,
@@ -969,19 +649,25 @@ async function handleSend(requestId: number, payload: SendPayload) {
         writeEvent(requestId, { kind: "session", providerThreadId });
       }
       if (message.type === "stream_event") {
-        processStreamEvent(
+        emitClaudeEvents(
           requestId,
           activeQuery,
-          itemPrefix,
-          message,
-          toolsByIndex,
-          toolsById,
+          normalizer.processStreamMessage(message),
         );
       }
       if (message.type === "user") {
-        processUserToolResults(requestId, message, toolsById);
+        emitClaudeEvents(
+          requestId,
+          activeQuery,
+          normalizer.processUserToolResults(message),
+        );
       }
       if (message.type === "assistant") {
+        emitClaudeEvents(
+          requestId,
+          activeQuery,
+          normalizer.processAssistantMessage(message),
+        );
         const discoveredPlan = planFromContent(message.message.content);
         if (discoveredPlan) {
           emitPlanReady(requestId, activeQuery, undefined, discoveredPlan);
@@ -992,7 +678,7 @@ async function handleSend(requestId: number, payload: SendPayload) {
       if (message.type === "tool_use_summary") {
         writeEvent(requestId, {
           kind: "reasoning",
-          itemId: message.uuid ?? `summary-${Date.now()}`,
+          itemId: message.uuid ?? `${itemPrefix}-summary-${toolSummaryOrdinal++}`,
           delta: message.summary,
         });
       }
@@ -1063,6 +749,20 @@ function emitPlanReady(
     activeQuery.planMarkdown = plan;
   }
   writeEvent(requestId, { kind: "planReady", itemId, markdown: plan });
+}
+
+function emitClaudeEvents(
+  requestId: number,
+  activeQuery: ActiveQuery,
+  events: ClaudeEvent[],
+) {
+  for (const event of events) {
+    if (event.kind === "planReady") {
+      emitPlanReady(requestId, activeQuery, event.itemId, event.markdown);
+      continue;
+    }
+    writeEvent(requestId, event);
+  }
 }
 
 async function tokenUsageEventFor(
