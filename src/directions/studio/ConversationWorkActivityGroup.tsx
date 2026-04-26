@@ -70,7 +70,7 @@ export function ConversationWorkActivityGroup({ group, provider }: Props) {
   const hasContent =
     group.items.length > 0 ||
     group.subagents.length > 0 ||
-    group.taskPlan !== null;
+    group.taskPlan != null;
 
   return (
     <section className="tx-work-activity">

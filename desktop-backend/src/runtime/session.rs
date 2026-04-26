@@ -2199,11 +2199,25 @@ async fn handle_notification(
                                     }
                                 })
                             {
-                                if !is_started {
-                                    item_to_persist =
-                                        Some((local_thread_id.clone(), item.clone()));
-                                }
+                                let normalized_item_id =
+                                    conversation_item_id(&item).to_string();
                                 upsert_item(&mut snapshot.items, item);
+                                // Persist the merged result so prior `summary`/`output`
+                                // preserved by `upsert_item` is not truncated to the
+                                // partial completion payload on disk.
+                                if !is_started {
+                                    if let Some(merged) = snapshot
+                                        .items
+                                        .iter()
+                                        .find(|candidate| {
+                                            conversation_item_id(candidate) == normalized_item_id
+                                        })
+                                        .cloned()
+                                    {
+                                        item_to_persist =
+                                            Some((local_thread_id.clone(), merged));
+                                    }
+                                }
                             }
                             reconcile_snapshot_status(snapshot);
                             Some(snapshot.clone())
@@ -2566,6 +2580,15 @@ fn task_status_from_snapshot(snapshot: &ThreadConversationSnapshot) -> Conversat
 
 fn assistant_control_delta_key(thread_id: &str, item_id: &str) -> String {
     format!("{thread_id}:{item_id}")
+}
+
+fn conversation_item_id(item: &ConversationItem) -> &str {
+    match item {
+        ConversationItem::Message(message) => message.id.as_str(),
+        ConversationItem::Reasoning(reasoning) => reasoning.id.as_str(),
+        ConversationItem::Tool(tool) => tool.id.as_str(),
+        ConversationItem::System(system) => system.id.as_str(),
+    }
 }
 
 fn agent_message_text_key(thread_id: &str, item_id: &str) -> String {

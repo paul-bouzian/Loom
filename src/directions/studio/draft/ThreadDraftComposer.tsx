@@ -17,7 +17,10 @@ import type {
 } from "../../../lib/types";
 import { useConversationStore } from "../../../stores/conversation-store";
 import { EMPTY_CONVERSATION_COMPOSER_DRAFT } from "../../../stores/conversation-drafts";
-import { composerFromSettings } from "../../../stores/draft-threads";
+import {
+  composerFromSettings,
+  draftThreadTargetKey,
+} from "../../../stores/draft-threads";
 import {
   selectDraftThreadState,
   selectProjects,
@@ -311,6 +314,16 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [optimisticMessage, setOptimisticMessage] =
     useState<ConversationMessageItem | null>(null);
+
+  // Reset send-related layout state whenever the draft target changes —
+  // the component is reused in-place when the user retargets the same pane.
+  const draftKey = draftThreadTargetKey(draft);
+  useEffect(() => {
+    setHasSentOnce(false);
+    setOptimisticMessage(null);
+    setError(null);
+    setIsSending(false);
+  }, [draftKey]);
 
   useEffect(() => {
     void hydrateDraftThreadState(draft);
