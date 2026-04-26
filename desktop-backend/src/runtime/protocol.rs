@@ -2227,10 +2227,7 @@ fn item_turn_id(item: &ConversationItem) -> Option<&str> {
 /// * turnless items (e.g., locally-pushed system banners) follow the last
 ///   placed item, preserving their relative chronology with neighboring
 ///   persisted activity instead of bunching up at the end of the transcript.
-pub fn merge_persisted_items(
-    items: &mut Vec<ConversationItem>,
-    persisted: Vec<ConversationItem>,
-) {
+pub fn merge_persisted_items(items: &mut Vec<ConversationItem>, persisted: Vec<ConversationItem>) {
     let mut cursor: Option<usize> = None;
     for item in persisted {
         let target_id = item_id(&item).to_string();
@@ -2238,6 +2235,7 @@ pub fn merge_persisted_items(
             .iter()
             .position(|candidate| item_id(candidate) == target_id)
         {
+            items[index] = merge_existing_with_persisted_item(items[index].clone(), item);
             cursor = Some(index);
             continue;
         }
@@ -2252,6 +2250,44 @@ pub fn merge_persisted_items(
         };
         items.insert(insert_at, item);
         cursor = Some(insert_at);
+    }
+}
+
+fn merge_existing_with_persisted_item(
+    existing: ConversationItem,
+    persisted: ConversationItem,
+) -> ConversationItem {
+    match (existing, persisted) {
+        (
+            ConversationItem::Message(existing_message),
+            ConversationItem::Message(persisted_message),
+        ) => ConversationItem::Message(ConversationMessageItem {
+            id: existing_message.id,
+            turn_id: existing_message.turn_id.or(persisted_message.turn_id),
+            role: existing_message.role,
+            text: existing_message.text,
+            images: existing_message.images.or(persisted_message.images),
+            is_streaming: existing_message.is_streaming,
+        }),
+        (
+            ConversationItem::Reasoning(existing_reasoning),
+            ConversationItem::Reasoning(persisted_reasoning),
+        ) => ConversationItem::Reasoning(ConversationReasoningItem {
+            id: existing_reasoning.id,
+            turn_id: existing_reasoning.turn_id.or(persisted_reasoning.turn_id),
+            summary: if existing_reasoning.summary.is_empty() {
+                persisted_reasoning.summary
+            } else {
+                existing_reasoning.summary
+            },
+            content: if existing_reasoning.content.is_empty() {
+                persisted_reasoning.content
+            } else {
+                existing_reasoning.content
+            },
+            is_streaming: existing_reasoning.is_streaming,
+        }),
+        (existing, _) => existing,
     }
 }
 
@@ -2749,6 +2785,77 @@ mod tests {
             ConversationItem::Message(message) => {
                 assert_eq!(message.id, "user-1");
                 assert_eq!(message.text, visible_text);
+            }
+            _ => panic!("expected a message item"),
+        }
+    }
+
+    #[test]
+    fn merge_persisted_items_restores_turn_id_on_provider_message() {
+        let mut items = vec![ConversationItem::Message(ConversationMessageItem {
+            id: "claude-assistant-progress".to_string(),
+            turn_id: None,
+            role: ConversationRole::Assistant,
+            text: "Je cherche la météo pour demain à Bordeaux.".to_string(),
+            images: None,
+            is_streaming: false,
+        })];
+
+        merge_persisted_items(
+            &mut items,
+            vec![ConversationItem::Message(ConversationMessageItem {
+                id: "claude-assistant-progress".to_string(),
+                turn_id: Some("turn-bordeaux".to_string()),
+                role: ConversationRole::Assistant,
+                text: "Old local projection".to_string(),
+                images: None,
+                is_streaming: false,
+            })],
+        );
+
+        match &items[0] {
+            ConversationItem::Message(message) => {
+                assert_eq!(message.turn_id.as_deref(), Some("turn-bordeaux"));
+                assert_eq!(message.text, "Je cherche la météo pour demain à Bordeaux.");
+            }
+            _ => panic!("expected a message item"),
+        }
+    }
+
+    #[test]
+    fn merge_persisted_items_restores_missing_provider_images() {
+        let mut items = vec![ConversationItem::Message(ConversationMessageItem {
+            id: "claude-assistant-progress".to_string(),
+            turn_id: None,
+            role: ConversationRole::Assistant,
+            text: "Image context".to_string(),
+            images: None,
+            is_streaming: false,
+        })];
+
+        merge_persisted_items(
+            &mut items,
+            vec![ConversationItem::Message(ConversationMessageItem {
+                id: "claude-assistant-progress".to_string(),
+                turn_id: Some("turn-image".to_string()),
+                role: ConversationRole::Assistant,
+                text: "Persisted copy".to_string(),
+                images: Some(vec![ConversationImageAttachment::Image {
+                    url: "https://example.com/screenshot.png".to_string(),
+                }]),
+                is_streaming: false,
+            })],
+        );
+
+        match &items[0] {
+            ConversationItem::Message(message) => {
+                assert_eq!(message.turn_id.as_deref(), Some("turn-image"));
+                assert_eq!(
+                    message.images,
+                    Some(vec![ConversationImageAttachment::Image {
+                        url: "https://example.com/screenshot.png".to_string(),
+                    }])
+                );
             }
             _ => panic!("expected a message item"),
         }

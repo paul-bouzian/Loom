@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::{mpsc as std_mpsc, OnceLock};
 use std::time::Duration;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -27,9 +28,10 @@ use crate::domain::settings::{
 };
 use crate::error::{AppError, AppResult};
 use crate::events::EventSink;
+use crate::runtime::item_store;
 use crate::runtime::protocol::{
-    clear_streaming_flags, mark_plan_approved, mark_plan_superseded, plan_approval_message,
-    reconcile_snapshot_status, upsert_item, CONVERSATION_EVENT_NAME,
+    clear_streaming_flags, mark_plan_approved, mark_plan_superseded, merge_persisted_items,
+    plan_approval_message, reconcile_snapshot_status, upsert_item, CONVERSATION_EVENT_NAME,
 };
 use crate::runtime::session::SendMessageResult;
 use crate::services::composer::{load_prompt_definitions, resolve_composer_text};
@@ -198,6 +200,7 @@ struct ClaudeSendPayload {
     provider_thread_id: Option<String>,
     cwd: String,
     model: String,
+    supports_thinking: bool,
     effort: ReasoningEffort,
     service_tier: Option<ServiceTier>,
     collaboration_mode: CollaborationMode,
@@ -298,13 +301,15 @@ impl ClaudeRuntimeSession {
                 },
             )
             .await?;
-            Ok(snapshot_from_claude_messages(
+            let mut snapshot = snapshot_from_claude_messages(
                 context,
                 result.provider_thread_id.or(Some(provider_thread_id)),
                 result.messages,
                 ConversationStatus::Completed,
                 None,
-            ))
+            );
+            merge_persisted_claude_items(&mut snapshot, &context.thread_id);
+            Ok(snapshot)
         } else {
             let messages = context
                 .handoff
@@ -322,13 +327,15 @@ impl ClaudeRuntimeSession {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            Ok(snapshot_from_claude_messages(
+            let mut snapshot = snapshot_from_claude_messages(
                 context,
                 None,
                 messages,
                 ConversationStatus::Idle,
                 None,
-            ))
+            );
+            merge_persisted_claude_items(&mut snapshot, &context.thread_id);
+            Ok(snapshot)
         }
     }
 
@@ -510,6 +517,7 @@ impl ClaudeRuntimeSession {
                 provider_thread_id: context.provider_thread_id.clone(),
                 cwd: context.environment_path.clone(),
                 model: context.composer.model.clone(),
+                supports_thinking: claude_model_supports_thinking(&context.composer.model),
                 effort: context.composer.reasoning_effort,
                 service_tier: supported_claude_service_tier(
                     &context.composer.model,
@@ -552,6 +560,7 @@ impl ClaudeRuntimeSession {
                         new_codex_thread_id: None,
                     });
                 }
+                remove_persisted_claude_items_for_turn(&context.thread_id, &active_turn_id).await;
                 let mut snapshot = rollback_snapshot;
                 snapshot.status = ConversationStatus::Failed;
                 snapshot.error = Some(ConversationErrorSnapshot {
@@ -594,6 +603,7 @@ impl ClaudeRuntimeSession {
         complete_current_claude_turn(&mut snapshot, show_user_message);
         clear_streaming_flags(&mut snapshot.items);
         complete_running_tools(&mut snapshot.items);
+        persist_claude_items_for_turn(&context.thread_id, &snapshot.items, &active_turn_id);
         snapshot.active_turn_id = None;
         if show_user_message {
             attach_current_user_images(&mut snapshot, visible_text, &images);
@@ -636,7 +646,7 @@ impl ClaudeRuntimeSession {
         &self,
         context: ThreadRuntimeContext,
     ) -> AppResult<ThreadConversationSnapshot> {
-        let (control_sender, snapshot) = {
+        let (control_sender, snapshot, items_to_persist) = {
             let mut state = self.state.lock().await;
             let active_turn_id = state
                 .snapshots_by_thread
@@ -666,9 +676,15 @@ impl ClaudeRuntimeSession {
             snapshot.pending_interactions.clear();
             clear_streaming_flags(&mut snapshot.items);
             complete_running_tools(&mut snapshot.items);
+            let items_to_persist = active_turn_id
+                .clone()
+                .map(|turn_id| (turn_id, snapshot.items.clone()));
             reconcile_snapshot_status(snapshot);
-            (control_sender, snapshot.clone())
+            (control_sender, snapshot.clone(), items_to_persist)
         };
+        if let Some((turn_id, items)) = items_to_persist {
+            persist_claude_items_for_turn_async(context.thread_id.clone(), items, turn_id);
+        }
         control_sender
             .sender
             .send(ClaudeControlMessage::Interrupt { request_id: 1 })
@@ -949,6 +965,7 @@ impl ClaudeRuntimeSession {
     }
 
     async fn apply_runtime_event(&self, thread_id: &str, turn_id: &str, event: ClaudeRuntimeEvent) {
+        let event_item_id = claude_event_item_id(&event).map(ToString::to_string);
         let snapshot = {
             let mut state = self.state.lock().await;
             let Some(snapshot) = state.snapshots_by_thread.get_mut(thread_id) else {
@@ -959,7 +976,17 @@ impl ClaudeRuntimeSession {
             }
             snapshot.clone()
         };
+        let item_to_persist = event_item_id.and_then(|item_id| {
+            snapshot
+                .items
+                .iter()
+                .find(|item| conversation_item_id(item) == item_id)
+                .cloned()
+        });
         self.emit_snapshot(snapshot);
+        if let Some(item) = item_to_persist {
+            persist_claude_item_async(thread_id.to_string(), item);
+        }
     }
 
     async fn store_and_emit(&self, snapshot: ThreadConversationSnapshot) {
@@ -1412,6 +1439,147 @@ fn conversation_item_id(item: &ConversationItem) -> &str {
     }
 }
 
+fn merge_persisted_claude_items(snapshot: &mut ThreadConversationSnapshot, thread_id: &str) {
+    merge_persisted_items(&mut snapshot.items, item_store::load(thread_id));
+    finalize_opened_claude_snapshot(snapshot);
+    reconcile_snapshot_status(snapshot);
+}
+
+fn finalize_opened_claude_snapshot(snapshot: &mut ThreadConversationSnapshot) {
+    if snapshot.active_turn_id.is_none() {
+        clear_streaming_flags(&mut snapshot.items);
+        complete_running_tools(&mut snapshot.items);
+    }
+}
+
+fn conversation_item_turn_id(item: &ConversationItem) -> Option<&str> {
+    match item {
+        ConversationItem::Message(item) => item.turn_id.as_deref(),
+        ConversationItem::Reasoning(item) => item.turn_id.as_deref(),
+        ConversationItem::Tool(item) => item.turn_id.as_deref(),
+        ConversationItem::System(item) => item.turn_id.as_deref(),
+    }
+}
+
+fn persist_claude_items_for_turn(thread_id: &str, items: &[ConversationItem], turn_id: &str) {
+    for item in items
+        .iter()
+        .filter(|item| conversation_item_turn_id(item) == Some(turn_id))
+    {
+        item_store::save(thread_id, item);
+    }
+}
+
+fn persist_claude_item_async(thread_id: String, item: ConversationItem) {
+    enqueue_claude_persistence(ClaudePersistenceOperation::SaveItem { thread_id, item });
+}
+
+fn persist_claude_items_for_turn_async(
+    thread_id: String,
+    items: Vec<ConversationItem>,
+    turn_id: String,
+) {
+    enqueue_claude_persistence(ClaudePersistenceOperation::SaveTurn {
+        thread_id,
+        items,
+        turn_id,
+    });
+}
+
+async fn remove_persisted_claude_items_for_turn(thread_id: &str, turn_id: &str) {
+    let thread_id = thread_id.to_string();
+    let turn_id = turn_id.to_string();
+    let (done_tx, done_rx) = std_mpsc::channel();
+    enqueue_claude_persistence(ClaudePersistenceOperation::RemoveTurn {
+        thread_id,
+        turn_id,
+        done: Some(done_tx),
+    });
+    let _ = tokio::task::spawn_blocking(move || done_rx.recv()).await;
+}
+
+enum ClaudePersistenceOperation {
+    SaveItem {
+        thread_id: String,
+        item: ConversationItem,
+    },
+    SaveTurn {
+        thread_id: String,
+        items: Vec<ConversationItem>,
+        turn_id: String,
+    },
+    RemoveTurn {
+        thread_id: String,
+        turn_id: String,
+        done: Option<std_mpsc::Sender<()>>,
+    },
+}
+
+static CLAUDE_PERSISTENCE_QUEUE: OnceLock<std_mpsc::Sender<ClaudePersistenceOperation>> =
+    OnceLock::new();
+
+fn enqueue_claude_persistence(operation: ClaudePersistenceOperation) {
+    if let Err(error) = claude_persistence_sender().send(operation) {
+        apply_claude_persistence_operation(error.0);
+    }
+}
+
+fn claude_persistence_sender() -> &'static std_mpsc::Sender<ClaudePersistenceOperation> {
+    CLAUDE_PERSISTENCE_QUEUE.get_or_init(|| {
+        let (sender, receiver) = std_mpsc::channel();
+        std::thread::Builder::new()
+            .name("claude-item-persistence".to_string())
+            .spawn(move || {
+                while let Ok(operation) = receiver.recv() {
+                    apply_claude_persistence_operation(operation);
+                }
+            })
+            .expect("claude persistence worker should start");
+        sender
+    })
+}
+
+fn apply_claude_persistence_operation(operation: ClaudePersistenceOperation) {
+    match operation {
+        ClaudePersistenceOperation::SaveItem { thread_id, item } => {
+            item_store::save(&thread_id, &item);
+        }
+        ClaudePersistenceOperation::SaveTurn {
+            thread_id,
+            items,
+            turn_id,
+        } => {
+            persist_claude_items_for_turn(&thread_id, &items, &turn_id);
+        }
+        ClaudePersistenceOperation::RemoveTurn {
+            thread_id,
+            turn_id,
+            done,
+        } => {
+            item_store::remove_turn(&thread_id, &turn_id);
+            if let Some(done) = done {
+                let _ = done.send(());
+            }
+        }
+    }
+}
+
+fn claude_event_item_id(event: &ClaudeRuntimeEvent) -> Option<&str> {
+    match event {
+        ClaudeRuntimeEvent::AssistantDelta { item_id, .. }
+        | ClaudeRuntimeEvent::ToolStarted { item_id, .. }
+        | ClaudeRuntimeEvent::ToolUpdated { item_id, .. }
+        | ClaudeRuntimeEvent::ToolOutput { item_id, .. }
+        | ClaudeRuntimeEvent::ToolCompleted { item_id, .. }
+        | ClaudeRuntimeEvent::Reasoning { item_id, .. } => Some(item_id),
+        ClaudeRuntimeEvent::Session { .. }
+        | ClaudeRuntimeEvent::TokenUsage { .. }
+        | ClaudeRuntimeEvent::PlanReady { .. }
+        | ClaudeRuntimeEvent::UserInputRequest { .. }
+        | ClaudeRuntimeEvent::ApprovalRequest { .. } => None,
+    }
+}
+
 fn complete_claude_plan(snapshot: &mut ThreadConversationSnapshot, markdown: Option<String>) {
     if let Some(markdown) = markdown.filter(|value| !value.trim().is_empty()) {
         upsert_claude_plan(snapshot, None, markdown, ProposedPlanStatus::Ready, true);
@@ -1699,13 +1867,24 @@ fn append_reasoning(
     if delta.trim().is_empty() {
         return;
     }
+
+    if let Some(reasoning) = snapshot.items.iter_mut().find_map(|item| match item {
+        ConversationItem::Reasoning(reasoning) if reasoning.id == item_id => Some(reasoning),
+        _ => None,
+    }) {
+        reasoning.turn_id.get_or_insert_with(|| turn_id.to_string());
+        reasoning.summary.push_str(delta);
+        reasoning.is_streaming = true;
+        return;
+    }
+
     snapshot.items.push(ConversationItem::Reasoning(
         crate::domain::conversation::ConversationReasoningItem {
             id: item_id.to_string(),
             turn_id: Some(turn_id.to_string()),
             summary: delta.to_string(),
             content: String::new(),
-            is_streaming: false,
+            is_streaming: true,
         },
     ));
 }
@@ -1818,6 +1997,13 @@ fn supported_claude_service_tier(
             .find(|model| model.id == model_id)
             .is_some_and(|model| model.supported_service_tiers.contains(tier))
     })
+}
+
+fn claude_model_supports_thinking(model_id: &str) -> bool {
+    claude_model_options()
+        .into_iter()
+        .find(|model| model.id == model_id)
+        .is_some_and(|model| model.supports_thinking)
 }
 
 fn claude_snapshot_has_active_turn(snapshot: &ThreadConversationSnapshot) -> bool {
@@ -2242,6 +2428,22 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
         apply_claude_event(
             &mut snapshot,
             "turn-1",
+            ClaudeRuntimeEvent::Reasoning {
+                item_id: "reasoning-1".to_string(),
+                delta: "Inspecting".to_string(),
+            },
+        );
+        apply_claude_event(
+            &mut snapshot,
+            "turn-1",
+            ClaudeRuntimeEvent::Reasoning {
+                item_id: "reasoning-1".to_string(),
+                delta: " files".to_string(),
+            },
+        );
+        apply_claude_event(
+            &mut snapshot,
+            "turn-1",
             ClaudeRuntimeEvent::ToolStarted {
                 item_id: "tool-1".to_string(),
                 tool_name: "Read".to_string(),
@@ -2278,8 +2480,27 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
         assert!(snapshot.items.iter().any(|item| {
             matches!(
                 item,
+                ConversationItem::Reasoning(reasoning)
+                    if reasoning.id == "reasoning-1"
+                        && reasoning.turn_id.as_deref() == Some("turn-1")
+                        && reasoning.summary == "Inspecting files"
+                        && reasoning.is_streaming
+            )
+        }));
+        assert_eq!(
+            snapshot
+                .items
+                .iter()
+                .filter(|item| matches!(item, ConversationItem::Reasoning(reasoning) if reasoning.id == "reasoning-1"))
+                .count(),
+            1
+        );
+        assert!(snapshot.items.iter().any(|item| {
+            matches!(
+                item,
                 ConversationItem::Tool(tool)
                     if tool.id == "tool-1"
+                        && tool.turn_id.as_deref() == Some("turn-1")
                         && tool.status == ConversationItemStatus::Completed
                         && tool.output.contains("file contents")
             )
@@ -2294,6 +2515,63 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                         && message.is_streaming
             )
         }));
+    }
+
+    #[test]
+    fn claude_event_item_id_includes_assistant_progress_messages() {
+        let event = ClaudeRuntimeEvent::AssistantDelta {
+            item_id: "assistant-progress".to_string(),
+            delta: "Checking the weather.".to_string(),
+        };
+
+        assert_eq!(claude_event_item_id(&event), Some("assistant-progress"));
+    }
+
+    #[test]
+    fn opened_claude_snapshots_finalize_persisted_streaming_activity() {
+        let mut snapshot = snapshot();
+        snapshot.items.push(ConversationItem::Reasoning(
+            crate::domain::conversation::ConversationReasoningItem {
+                id: "reasoning-1".to_string(),
+                turn_id: Some("turn-crashed".to_string()),
+                summary: "Thinking".to_string(),
+                content: String::new(),
+                is_streaming: true,
+            },
+        ));
+        snapshot
+            .items
+            .push(ConversationItem::Tool(ConversationToolItem {
+                id: "tool-1".to_string(),
+                turn_id: Some("turn-crashed".to_string()),
+                tool_type: "WebSearch".to_string(),
+                title: "Web".to_string(),
+                status: ConversationItemStatus::InProgress,
+                summary: Some("weather Bordeaux".to_string()),
+                output: String::new(),
+            }));
+
+        finalize_opened_claude_snapshot(&mut snapshot);
+        reconcile_snapshot_status(&mut snapshot);
+
+        assert!(snapshot.items.iter().any(|item| matches!(
+            item,
+            ConversationItem::Reasoning(reasoning)
+                if reasoning.id == "reasoning-1" && !reasoning.is_streaming
+        )));
+        assert!(snapshot.items.iter().any(|item| matches!(
+            item,
+            ConversationItem::Tool(tool)
+                if tool.id == "tool-1" && tool.status == ConversationItemStatus::Completed
+        )));
+        assert_eq!(snapshot.status, ConversationStatus::Completed);
+    }
+
+    #[test]
+    fn claude_model_supports_thinking_matches_model_catalog() {
+        assert!(claude_model_supports_thinking("claude-opus-4-7"));
+        assert!(!claude_model_supports_thinking("claude-haiku-4-5"));
+        assert!(!claude_model_supports_thinking("unknown-claude-model"));
     }
 
     #[test]
@@ -2533,6 +2811,18 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
             ClaudeRuntimeEvent::AssistantDelta {
                 item_id: "assistant-old".to_string(),
                 delta: "old".to_string(),
+            },
+        ));
+        assert!(mismatched.items.is_empty());
+
+        assert!(!apply_claude_event(
+            &mut mismatched,
+            "turn-old",
+            ClaudeRuntimeEvent::ToolStarted {
+                item_id: "tool-old".to_string(),
+                tool_name: "Read".to_string(),
+                title: "Search".to_string(),
+                summary: Some("README.md".to_string()),
             },
         ));
         assert!(mismatched.items.is_empty());

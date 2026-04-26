@@ -4,7 +4,7 @@ import { makeConversationSnapshot } from "../../test/fixtures/conversation";
 import { buildConversationTimeline } from "./conversation-work-activity";
 
 describe("buildConversationTimeline", () => {
-  it("keeps handoff history outside the active work activity", () => {
+  it("keeps live assistant updates inside the active work activity", () => {
     const entries = buildConversationTimeline(
       makeConversationSnapshot({
         status: "running",
@@ -75,12 +75,12 @@ describe("buildConversationTimeline", () => {
       "handoff-user-bordeaux",
       "handoff-assistant-bordeaux",
       "local-user-paris",
-      "assistant-paris-draft",
     ]);
     expect(workActivity?.kind).toBe("workActivity");
     expect(workActivity?.group.items.map((item) => item.id)).toEqual([
       "reason-paris",
       "tool-paris",
+      "assistant-paris-draft",
     ]);
   });
 

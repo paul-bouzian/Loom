@@ -234,16 +234,16 @@ function collectAssistantSuppressedTurnIds(snapshot: ThreadConversationSnapshot)
 }
 
 function collectFinalAssistantMessageIds(
-  _snapshot: ThreadConversationSnapshot,
+  snapshot: ThreadConversationSnapshot,
   items: ConversationItem[],
   effectiveTurnIds: Map<string, string>,
   actionTurnIds: Set<string>,
 ) {
-  // The active turn is intentionally NOT suppressed: we want the streaming
-  // final reply to render outside the Working group as soon as it starts,
-  // matching the post-completion layout (no jump on turn end).
   const lastAssistantMessageIdByTurn = new Map<string, string>();
   const suppressedFinalTurnIds = new Set(actionTurnIds);
+  if (snapshot.activeTurnId && snapshot.status === "running") {
+    suppressedFinalTurnIds.add(snapshot.activeTurnId);
+  }
 
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];

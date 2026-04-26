@@ -377,6 +377,76 @@ describe("ThreadConversation", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders live Claude thinking and web activity inside compact work activity", async () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot(),
+    }));
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        provider: "claude",
+        providerThreadId: "claude-session-1",
+        status: "running",
+        activeTurnId: "claude-turn-live-1",
+        items: [
+          {
+            kind: "message",
+            id: "user-claude-live-1",
+            turnId: "claude-turn-live-1",
+            role: "user",
+            text: "Check the latest SDK streaming docs.",
+            images: null,
+            isStreaming: false,
+          },
+          {
+            kind: "reasoning",
+            id: "claude-reasoning-live-1",
+            turnId: "claude-turn-live-1",
+            summary: "Checking the Claude Agent SDK stream shape.",
+            content: "",
+            isStreaming: true,
+          },
+          {
+            kind: "tool",
+            id: "claude-web-live-1",
+            turnId: "claude-turn-live-1",
+            toolType: "WebSearch",
+            title: "Web",
+            status: "completed",
+            summary: "Claude Agent SDK streaming",
+            output: "Streaming output - https://code.claude.com/docs/en/agent-sdk/streaming-output",
+          },
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread({ provider: "claude", providerThreadId: "claude-session-1" })}
+      />,
+    );
+
+    const toggle = await screen.findByRole("button", {
+      name: "Toggle work activity",
+    });
+    const group = toggle.closest("section");
+    expect(group).not.toBeNull();
+    if (toggle.getAttribute("aria-expanded") !== "true") {
+      await userEvent.click(toggle);
+    }
+
+    expect(
+      within(group!).getByRole("button", { name: "Show thinking details" }),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(group!).getByRole("button", { name: "Show Web details" }),
+    );
+    expect(within(group!).getByText("Claude Agent SDK streaming")).toBeInTheDocument();
+    expect(within(group!).getByText(/Streaming output/)).toBeInTheDocument();
+  });
+
   it("groups turnless live updates under the active compact work activity", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
