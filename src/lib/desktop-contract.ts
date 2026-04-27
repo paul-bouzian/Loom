@@ -36,6 +36,7 @@ export const DESKTOP_BACKEND_COMMANDS = [
   "get_git_review_snapshot",
   "get_project_icon",
   "get_shortcut_defaults",
+  "get_thread_conversation_snapshot",
   "get_workspace_snapshot",
   "interrupt_thread_turn",
   "list_project_branches",

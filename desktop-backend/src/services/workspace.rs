@@ -16,11 +16,10 @@ use crate::domain::shortcuts::ShortcutSettings;
 use crate::domain::workspace::{
     ChatThreadCreateResult, ChatWorkspaceSnapshot, DraftProjectSelection, DraftThreadTarget,
     EnvironmentKind, EnvironmentPullRequestSnapshot, EnvironmentRecord,
-    FirstPromptRenameFailureEvent, ManagedWorktreeCreateResult, ProjectManualAction, ProjectRecord,
-    ProjectSettings, ProjectSettingsPatch, RuntimeState, RuntimeStatusSnapshot,
-    SavedDraftThreadState, ThreadHandoffBootstrapStatus, ThreadHandoffImportedMessage,
-    ThreadHandoffState, ThreadOverrides, ThreadRecord, ThreadStatus, WorkspaceSnapshot,
-    WorktreeScriptTrigger,
+    ManagedWorktreeCreateResult, ProjectManualAction, ProjectRecord, ProjectSettings,
+    ProjectSettingsPatch, RuntimeState, RuntimeStatusSnapshot, SavedDraftThreadState,
+    ThreadHandoffBootstrapStatus, ThreadHandoffImportedMessage, ThreadHandoffState,
+    ThreadOverrides, ThreadRecord, ThreadStatus, WorkspaceSnapshot, WorktreeScriptTrigger,
 };
 use crate::error::{AppError, AppResult};
 use crate::infrastructure::database::AppDatabase;
@@ -231,6 +230,8 @@ pub struct AutoRenameFirstPromptRequest {
     pub thread_id: String,
     pub message: String,
     pub codex_binary_path: Option<String>,
+    pub preserve_worktree_path: bool,
+    pub require_unstarted_environment: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1377,7 +1378,10 @@ impl WorkspaceService {
         if !prompt_naming::is_auto_generated_worktree_name(&metadata.environment_name) {
             return Ok(None);
         }
-        if metadata.thread_id != metadata.first_thread_id || metadata.started_thread_count > 0 {
+        if metadata.thread_id != metadata.first_thread_id {
+            return Ok(None);
+        }
+        if input.require_unstarted_environment && metadata.started_thread_count > 0 {
             return Ok(None);
         }
 
@@ -1389,31 +1393,39 @@ impl WorkspaceService {
             },
         )?;
 
-        let environment_parent = metadata.environment_path.parent().ok_or_else(|| {
-            AppError::Runtime("Managed worktree path is missing its parent directory.".to_string())
-        })?;
         let branch_refs = git::list_branch_refs(&metadata.project_root)?
             .into_iter()
             .collect::<HashSet<_>>();
+        let environment_parent = metadata.environment_path.parent().ok_or_else(|| {
+            AppError::Runtime("Managed worktree path is missing its parent directory.".to_string())
+        })?;
         let next_branch_name =
             prompt_naming::ensure_unique_branch_slug(&suggestion.branch_slug, |candidate| {
                 let branch_taken =
                     candidate != current_branch_name && branch_ref_exists(&branch_refs, candidate);
-                let path_taken =
-                    candidate != current_branch_name && environment_parent.join(candidate).exists();
+                let path_taken = !input.preserve_worktree_path
+                    && candidate != current_branch_name
+                    && environment_parent.join(candidate).exists();
                 branch_taken || path_taken
             });
-        let next_environment_path = environment_parent.join(&next_branch_name);
+        let next_environment_path = if input.preserve_worktree_path {
+            metadata.environment_path.clone()
+        } else {
+            environment_parent.join(&next_branch_name)
+        };
         let next_environment_name = prompt_naming::clamp_worktree_label(&suggestion.worktree_label)
             .ok_or_else(|| {
                 AppError::Runtime(
                     "Codex returned an empty worktree label for first prompt naming.".to_string(),
                 )
             })?;
-        let next_thread_title =
+        let fallback_title = thread_titles::derive_thread_title_from_message(&input.message);
+        let can_replace_thread_title =
             thread_titles::is_auto_generated_thread_title(&metadata.thread_title)
-                .then_some(suggestion.thread_title.clone())
-                .filter(|value| value != &metadata.thread_title);
+                || fallback_title.as_ref() == Some(&metadata.thread_title);
+        let next_thread_title = can_replace_thread_title
+            .then_some(suggestion.thread_title.clone())
+            .filter(|value| value != &metadata.thread_title);
 
         let environment_renamed = next_environment_name != metadata.environment_name
             || next_branch_name != current_branch_name
@@ -1514,46 +1526,6 @@ impl WorkspaceService {
             environment_renamed,
             thread_renamed,
         }))
-    }
-
-    pub fn first_prompt_rename_failure_event(
-        &self,
-        thread_id: &str,
-        message: String,
-    ) -> AppResult<FirstPromptRenameFailureEvent> {
-        let connection = self.database.open()?;
-        connection
-            .query_row(
-                "
-                SELECT
-                  environments.project_id,
-                  environments.id,
-                  threads.id,
-                  environments.name,
-                  environments.git_branch
-                FROM threads
-                JOIN environments ON environments.id = threads.environment_id
-                JOIN projects ON projects.id = environments.project_id
-                WHERE threads.id = ?1 AND projects.archived_at IS NULL
-                ",
-                params![thread_id],
-                |row| {
-                    let environment_name = row.get::<_, String>(3)?;
-                    let branch_name = row
-                        .get::<_, Option<String>>(4)?
-                        .unwrap_or_else(|| environment_name.clone());
-                    Ok(FirstPromptRenameFailureEvent {
-                        project_id: row.get(0)?,
-                        environment_id: row.get(1)?,
-                        thread_id: row.get(2)?,
-                        environment_name,
-                        branch_name,
-                        message: message.clone(),
-                    })
-                },
-            )
-            .optional()?
-            .ok_or_else(|| AppError::NotFound("Thread not found.".to_string()))
     }
 
     pub fn archive_thread(&self, input: ArchiveThreadRequest) -> AppResult<ArchiveThreadResult> {
@@ -4440,6 +4412,8 @@ mod tests {
                 thread_id: result.thread.id,
                 message: "Salut, ca va ?".to_string(),
                 codex_binary_path: None,
+                preserve_worktree_path: false,
+                require_unstarted_environment: true,
             })
             .expect("chat threads should skip first-prompt auto rename");
 
@@ -4490,6 +4464,8 @@ mod tests {
                 thread_id: result.thread.id.clone(),
                 message: "Ajouter un systeme de themes".to_string(),
                 codex_binary_path: Some(fake_codex.to_string_lossy().to_string()),
+                preserve_worktree_path: false,
+                require_unstarted_environment: true,
             })
             .expect("started provider threads should skip first-prompt auto rename");
 
@@ -5099,6 +5075,8 @@ mod tests {
                 thread_id: result.thread.id.clone(),
                 message: "Ajouter un systeme de themes".to_string(),
                 codex_binary_path: Some(fake_codex.to_string_lossy().to_string()),
+                preserve_worktree_path: false,
+                require_unstarted_environment: true,
             })
             .expect("rename should succeed")
             .expect("rename should apply");
@@ -5122,6 +5100,83 @@ mod tests {
         assert_eq!(environment.name, "Add themes");
         assert_eq!(environment.git_branch.as_deref(), Some("add-themes"));
         assert!(environment.path.ends_with("/add-themes"));
+        assert_eq!(thread.title, "Add themes");
+        assert!(Path::new(&environment.path).exists());
+        assert!(
+            git::current_branch(Path::new(&environment.path))
+                .expect("branch should resolve")
+                .as_deref()
+                == Some("add-themes")
+        );
+    }
+
+    #[test]
+    fn first_prompt_auto_rename_can_preserve_active_worktree_path() {
+        let harness = WorkspaceHarness::new().expect("harness");
+        let repo = harness
+            .create_repo(
+                &harness
+                    .temp_root
+                    .join("repos")
+                    .join("background-rename-repo"),
+            )
+            .expect("repo");
+        let project = harness
+            .service
+            .add_project(AddProjectRequest {
+                path: repo.path.to_string_lossy().to_string(),
+                name: None,
+            })
+            .expect("project should be added");
+        let result = harness
+            .service
+            .create_managed_worktree(CreateManagedWorktreeRequest::for_project(&project.id))
+            .expect("worktree should be created");
+        let original_path = result.environment.path.clone();
+        let message = "Ajouter un systeme de themes";
+        harness
+            .service
+            .auto_rename_thread_from_message(&result.thread.id, message)
+            .expect("fallback title should persist");
+        harness
+            .service
+            .persist_provider_thread_id(&result.thread.id, ProviderKind::Codex, "codex-thread-1")
+            .expect("provider thread id should persist");
+        let fake_codex = harness.create_fake_codex(
+            r#"{"threadTitle":"Add themes","worktreeLabel":"Add themes","branchSlug":"add-themes"}"#,
+        );
+
+        let rename = harness
+            .service
+            .maybe_auto_rename_first_prompt_environment(AutoRenameFirstPromptRequest {
+                thread_id: result.thread.id.clone(),
+                message: message.to_string(),
+                codex_binary_path: Some(fake_codex.to_string_lossy().to_string()),
+                preserve_worktree_path: true,
+                require_unstarted_environment: false,
+            })
+            .expect("background rename should succeed")
+            .expect("rename should apply");
+
+        assert!(rename.environment_renamed);
+        assert!(rename.thread_renamed);
+
+        let snapshot = harness.service.snapshot(Vec::new()).expect("snapshot");
+        let environment = snapshot
+            .projects
+            .into_iter()
+            .flat_map(|project| project.environments.into_iter())
+            .find(|environment| environment.id == result.environment.id)
+            .expect("environment should exist");
+        let thread = environment
+            .threads
+            .into_iter()
+            .find(|thread| thread.id == result.thread.id)
+            .expect("thread should exist");
+
+        assert_eq!(environment.name, "Add themes");
+        assert_eq!(environment.git_branch.as_deref(), Some("add-themes"));
+        assert_eq!(environment.path, original_path);
         assert_eq!(thread.title, "Add themes");
         assert!(Path::new(&environment.path).exists());
         assert!(
@@ -5158,6 +5213,8 @@ mod tests {
                 thread_id: result.thread.id.clone(),
                 message: "Ajouter un systeme de themes".to_string(),
                 codex_binary_path: Some(fake_codex.to_string_lossy().to_string()),
+                preserve_worktree_path: false,
+                require_unstarted_environment: true,
             })
             .expect_err("naming failure should surface");
 
@@ -5209,6 +5266,8 @@ mod tests {
                 thread_id: result.thread.id.clone(),
                 message: "Diagnose empty naming stderr".to_string(),
                 codex_binary_path: Some(fake_codex.to_string_lossy().to_string()),
+                preserve_worktree_path: false,
+                require_unstarted_environment: true,
             })
             .expect_err("naming failure should surface");
 
@@ -5218,79 +5277,6 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(message.contains("43"), "unexpected error: {error}");
-    }
-
-    #[test]
-    fn first_prompt_rename_failure_event_uses_current_workspace_metadata() {
-        let harness = WorkspaceHarness::new().expect("harness");
-        let repo = harness
-            .create_repo(&harness.temp_root.join("repos").join("failure-event-repo"))
-            .expect("repo");
-        let project = harness
-            .service
-            .add_project(AddProjectRequest {
-                path: repo.path.to_string_lossy().to_string(),
-                name: None,
-            })
-            .expect("project should be added");
-        let result = harness
-            .service
-            .create_managed_worktree(CreateManagedWorktreeRequest::for_project(&project.id))
-            .expect("worktree should be created");
-
-        let event = harness
-            .service
-            .first_prompt_rename_failure_event(&result.thread.id, "naming failed".to_string())
-            .expect("event should be built");
-
-        assert_eq!(event.project_id, project.id);
-        assert_eq!(event.environment_id, result.environment.id);
-        assert_eq!(event.thread_id, result.thread.id);
-        assert_eq!(event.environment_name, result.environment.name);
-        assert_eq!(
-            event.branch_name,
-            result.environment.git_branch.expect("branch should exist")
-        );
-        assert_eq!(event.message, "naming failed");
-    }
-
-    #[test]
-    fn first_prompt_rename_failure_event_falls_back_to_environment_name_without_branch() {
-        let harness = WorkspaceHarness::new().expect("harness");
-        let repo = harness
-            .create_repo(
-                &harness
-                    .temp_root
-                    .join("repos")
-                    .join("failure-event-no-branch-repo"),
-            )
-            .expect("repo");
-        let project = harness
-            .service
-            .add_project(AddProjectRequest {
-                path: repo.path.to_string_lossy().to_string(),
-                name: None,
-            })
-            .expect("project should be added");
-        let result = harness
-            .service
-            .create_managed_worktree(CreateManagedWorktreeRequest::for_project(&project.id))
-            .expect("worktree should be created");
-        harness
-            .open_connection()
-            .execute(
-                "UPDATE environments SET git_branch = NULL WHERE id = ?1",
-                params![&result.environment.id],
-            )
-            .expect("environment branch should be cleared");
-
-        let event = harness
-            .service
-            .first_prompt_rename_failure_event(&result.thread.id, "naming failed".to_string())
-            .expect("event should be built");
-
-        assert_eq!(event.environment_name, result.environment.name);
-        assert_eq!(event.branch_name, result.environment.name);
     }
 
     #[test]

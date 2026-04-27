@@ -23,6 +23,7 @@ import { useWorkspaceStore } from "./workspace-store";
 
 vi.mock("../lib/bridge", () => ({
   openThreadConversation: vi.fn(),
+  getThreadConversationSnapshot: vi.fn(),
   saveThreadComposerDraft: vi.fn(),
   refreshThreadConversation: vi.fn(),
   getEnvironmentCapabilities: vi.fn(),
@@ -83,8 +84,10 @@ function userMessage(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useRealTimers();
   resetConversationState();
   mockedBridge.saveThreadComposerDraft.mockResolvedValue(undefined);
+  mockedBridge.getThreadConversationSnapshot.mockResolvedValue(null);
   useWorkspaceStore.setState((state) => ({
     ...state,
     snapshot: null,
@@ -113,6 +116,49 @@ describe("conversation store", () => {
     expect(state.capabilitiesByEnvironmentId["env-1"]).toEqual(capabilitiesFixture);
     expect(state.composerByThreadId["thread-1"]).toEqual(snapshot.composer);
     expect(state.hydrationByThreadId["thread-1"]).toBe("ready");
+    expect(state.runtimeHydrationByThreadId["thread-1"]).toBe("ready");
+  });
+
+  it("renders a local snapshot before runtime hydration completes", async () => {
+    const localSnapshot = makeConversationSnapshot({
+      items: [userMessage("cached-user", "Cached immediately")],
+    });
+    const runtimeSnapshot = makeConversationSnapshot({
+      items: [userMessage("runtime-user", "Runtime refreshed")],
+    });
+    const runtime = deferredPromise<{
+      snapshot: ThreadConversationSnapshot;
+      capabilities: typeof capabilitiesFixture;
+    }>();
+    mockedBridge.getThreadConversationSnapshot.mockResolvedValue(localSnapshot);
+    mockedBridge.openThreadConversation.mockReturnValue(runtime.promise);
+
+    const opened = useConversationStore.getState().openThread("thread-1");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useConversationStore.getState().snapshotsByThreadId["thread-1"]).toEqual(
+      localSnapshot,
+    );
+    expect(useConversationStore.getState().hydrationByThreadId["thread-1"]).toBe(
+      "ready",
+    );
+    expect(
+      useConversationStore.getState().runtimeHydrationByThreadId["thread-1"],
+    ).toBe("loading");
+    expect(useConversationStore.getState().composerByThreadId["thread-1"]).toBeUndefined();
+
+    runtime.resolve({ snapshot: runtimeSnapshot, capabilities: capabilitiesFixture });
+    await opened;
+
+    expect(useConversationStore.getState().snapshotsByThreadId["thread-1"]).toEqual(
+      runtimeSnapshot,
+    );
+    expect(
+      useConversationStore.getState().runtimeHydrationByThreadId["thread-1"],
+    ).toBe("ready");
+    expect(useConversationStore.getState().composerByThreadId["thread-1"]).toEqual(
+      runtimeSnapshot.composer,
+    );
   });
 
   it("loads environment capabilities without opening a thread", async () => {
@@ -173,6 +219,7 @@ describe("conversation store", () => {
       ...state,
       snapshotsByThreadId: { "thread-1": snapshot },
       capabilitiesByEnvironmentId: { "env-1": capabilitiesFixture },
+      runtimeHydrationByThreadId: { "thread-1": "ready" },
     }));
 
     await useConversationStore.getState().openThread("thread-1");
@@ -206,6 +253,7 @@ describe("conversation store", () => {
       snapshotsByThreadId: { "thread-1": snapshot },
       capabilitiesByEnvironmentId: { "env-1": capabilitiesFixture },
       hydrationByThreadId: { "thread-1": "ready" },
+      runtimeHydrationByThreadId: { "thread-1": "ready" },
     }));
 
     await useConversationStore.getState().openThread("thread-1");
@@ -221,7 +269,8 @@ describe("conversation store", () => {
       snapshotsByThreadId: { "thread-1": snapshot },
       capabilitiesByEnvironmentId: { "env-1": capabilitiesFixture },
       hydrationByThreadId: { "thread-1": "error" },
-      errorByThreadId: { "thread-1": "runtime unavailable" },
+      runtimeHydrationByThreadId: { "thread-1": "ready" },
+      errorByThreadId: { "thread-1": null },
     }));
 
     await useConversationStore.getState().openThread("thread-1");
@@ -229,6 +278,127 @@ describe("conversation store", () => {
     expect(mockedBridge.openThreadConversation).not.toHaveBeenCalled();
     expect(useConversationStore.getState().hydrationByThreadId["thread-1"]).toBe("ready");
     expect(useConversationStore.getState().errorByThreadId["thread-1"]).toBeNull();
+  });
+
+  it("retries runtime hydration instead of restoring a cached runtime error", async () => {
+    const snapshot = makeConversationSnapshot();
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot,
+      capabilities: capabilitiesFixture,
+    });
+    useConversationStore.setState((state) => ({
+      ...state,
+      snapshotsByThreadId: { "thread-1": snapshot },
+      capabilitiesByEnvironmentId: { "env-1": capabilitiesFixture },
+      hydrationByThreadId: { "thread-1": "ready" },
+      runtimeHydrationByThreadId: { "thread-1": "error" },
+      errorByThreadId: { "thread-1": "runtime unavailable" },
+    }));
+
+    await useConversationStore.getState().openThread("thread-1");
+
+    expect(mockedBridge.openThreadConversation).toHaveBeenCalledWith("thread-1");
+    expect(useConversationStore.getState().runtimeHydrationByThreadId["thread-1"]).toBe("ready");
+    expect(useConversationStore.getState().errorByThreadId["thread-1"]).toBeNull();
+  });
+
+  it("keeps a local snapshot visible when runtime hydration fails", async () => {
+    const snapshot = makeConversationSnapshot();
+    mockedBridge.getThreadConversationSnapshot.mockResolvedValue(snapshot);
+    mockedBridge.openThreadConversation.mockRejectedValue(
+      new Error("runtime unavailable"),
+    );
+
+    await useConversationStore.getState().openThread("thread-1");
+
+    const state = useConversationStore.getState();
+    expect(state.snapshotsByThreadId["thread-1"]).toEqual(snapshot);
+    expect(state.hydrationByThreadId["thread-1"]).toBe("ready");
+    expect(state.runtimeHydrationByThreadId["thread-1"]).toBe("error");
+    expect(state.errorByThreadId["thread-1"]).toBe("runtime unavailable");
+  });
+
+  it("backfills chat workspace thread projections from workspace snapshots", async () => {
+    vi.useFakeTimers();
+    const snapshot = makeConversationSnapshot({
+      threadId: "chat-thread-1",
+      environmentId: "chat-env-1",
+    });
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot,
+      capabilities: capabilitiesFixture,
+    });
+
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [],
+        chat: {
+          projectId: "skein-chat-workspace",
+          title: "Chats",
+          rootPath: "/tmp/.skein/chats",
+          environments: [
+            makeEnvironment({
+              id: "chat-env-1",
+              projectId: "skein-chat-workspace",
+              kind: "chat",
+              threads: [
+                makeThread({
+                  id: "chat-thread-1",
+                  environmentId: "chat-env-1",
+                  providerThreadId: "chat-provider-thread-1",
+                  codexThreadId: "chat-provider-thread-1",
+                }),
+              ],
+            }),
+          ],
+        },
+      }),
+    }));
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(mockedBridge.openThreadConversation).toHaveBeenCalledWith(
+      "chat-thread-1",
+    );
+    expect(
+      useConversationStore.getState().snapshotsByThreadId["chat-thread-1"],
+    ).toEqual(snapshot);
+  });
+
+  it("does not keep retrying hidden backfill after a runtime hydration failure", async () => {
+    vi.useFakeTimers();
+    useConversationStore.setState((state) => ({
+      ...state,
+      runtimeHydrationByThreadId: { "thread-1": "error" },
+    }));
+
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            environments: [
+              makeEnvironment({
+                id: "env-1",
+                threads: [
+                  makeThread({
+                    id: "thread-1",
+                    environmentId: "env-1",
+                    providerThreadId: "provider-thread-1",
+                    codexThreadId: "provider-thread-1",
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    }));
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(mockedBridge.openThreadConversation).not.toHaveBeenCalled();
   });
 
   it("deduplicates concurrent thread openings", async () => {
@@ -241,6 +411,8 @@ describe("conversation store", () => {
     const first = useConversationStore.getState().openThread("thread-1");
     const second = useConversationStore.getState().openThread("thread-1");
 
+    await Promise.resolve();
+    await Promise.resolve();
     expect(mockedBridge.openThreadConversation).toHaveBeenCalledTimes(1);
 
     deferred.resolve({
@@ -276,6 +448,8 @@ describe("conversation store", () => {
       composerByThreadId: {
         "thread-1": { ...initialSnapshot.composer, reasoningEffort: "xhigh" },
       },
+      runtimeHydrationByThreadId: { "thread-1": "error" },
+      errorByThreadId: { "thread-1": "runtime unavailable" },
     }));
 
     await useConversationStore.getState().sendMessage("thread-1", "Ship it");
@@ -288,6 +462,8 @@ describe("conversation store", () => {
     expect(useConversationStore.getState().snapshotsByThreadId["thread-1"]).toEqual(
       nextSnapshot,
     );
+    expect(useConversationStore.getState().runtimeHydrationByThreadId["thread-1"]).toBe("ready");
+    expect(useConversationStore.getState().errorByThreadId["thread-1"]).toBeNull();
   });
 
   it("sends the selected model and reasoning effort to the backend", async () => {
@@ -727,11 +903,18 @@ describe("conversation store", () => {
       ],
     });
     mockedBridge.refreshThreadConversation.mockResolvedValue(snapshot);
+    useConversationStore.setState((state) => ({
+      ...state,
+      runtimeHydrationByThreadId: { "thread-1": "error" },
+      errorByThreadId: { "thread-1": "runtime unavailable" },
+    }));
 
     await useConversationStore.getState().refreshThread("thread-1");
 
     expect(mockedBridge.refreshThreadConversation).toHaveBeenCalledWith("thread-1");
     expect(useConversationStore.getState().snapshotsByThreadId["thread-1"]).toEqual(snapshot);
+    expect(useConversationStore.getState().runtimeHydrationByThreadId["thread-1"]).toBe("ready");
+    expect(useConversationStore.getState().errorByThreadId["thread-1"]).toBeNull();
   });
 
   it("applies conversation events from the runtime stream", async () => {

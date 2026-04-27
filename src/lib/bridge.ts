@@ -193,6 +193,15 @@ export function openThreadConversation(
   });
 }
 
+export function getThreadConversationSnapshot(
+  threadId: string,
+): Promise<ThreadConversationSnapshot | null> {
+  return invoke<ThreadConversationSnapshot | null>(
+    "get_thread_conversation_snapshot",
+    { threadId },
+  );
+}
+
 export function saveThreadComposerDraft(
   input: PersistThreadComposerDraftInput,
 ): Promise<void> {

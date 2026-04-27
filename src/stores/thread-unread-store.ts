@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import type { ConversationStatus } from "../lib/types";
 import { useConversationStore } from "./conversation-store";
 import {
   selectThreadInAnyPane,
@@ -30,7 +31,7 @@ export function selectThreadUnread(threadId: string) {
 // Watch conversation snapshots for transitions into `completed`. When a thread
 // just finished and isn't visible in any pane, flag it as unread so the sidebar
 // nudges the user. Opening or focusing the thread clears the flag automatically.
-const previousStatuses = new Map<string, string | null>();
+const previousStatuses = new Map<string, ConversationStatus | null>();
 for (const [threadId, snapshot] of Object.entries(
   useConversationStore.getState().snapshotsByThreadId,
 )) {
@@ -48,8 +49,7 @@ useConversationStore.subscribe((state, previousState) => {
     const nextStatus = snapshot?.status ?? null;
     const prevStatus = previousStatuses.get(threadId) ?? null;
     previousStatuses.set(threadId, nextStatus);
-    const justCompleted =
-      nextStatus === "completed" && prevStatus !== "completed";
+    const justCompleted = isUnreadCompletionTransition(prevStatus, nextStatus);
     if (!justCompleted) continue;
     const visible = selectThreadInAnyPane(threadId)(
       useWorkspaceStore.getState(),
@@ -93,4 +93,27 @@ function resolveVisibleThreadIds(
     if (threadId) ids.add(threadId);
   }
   return ids;
+}
+
+function isUnreadCompletionTransition(
+  prevStatus: ConversationStatus | null,
+  nextStatus: ConversationStatus | null,
+): boolean {
+  if (nextStatus !== "completed") return false;
+  return (
+    prevStatus === "running" || prevStatus === "waitingForExternalAction"
+  );
+}
+
+export function resetThreadUnreadStoreForTest() {
+  previousStatuses.clear();
+  for (const [threadId, snapshot] of Object.entries(
+    useConversationStore.getState().snapshotsByThreadId,
+  )) {
+    previousStatuses.set(threadId, snapshot?.status ?? null);
+  }
+  previousVisibleThreadIds = resolveVisibleThreadIds(
+    useWorkspaceStore.getState(),
+  );
+  useThreadUnreadStore.setState({ unreadByThreadId: {} });
 }

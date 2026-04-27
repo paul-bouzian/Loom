@@ -29,12 +29,12 @@ use crate::domain::settings::{
 };
 use crate::error::{AppError, AppResult};
 use crate::events::EventSink;
-use crate::runtime::item_store;
 use crate::runtime::protocol::{
     clear_streaming_flags, mark_plan_approved, mark_plan_superseded, merge_persisted_items,
     plan_approval_message, reconcile_snapshot_status, upsert_item, CONVERSATION_EVENT_NAME,
 };
 use crate::runtime::session::SendMessageResult;
+use crate::runtime::{item_store, snapshot_store};
 use crate::services::composer::{load_prompt_definitions, resolve_composer_text};
 use crate::services::workspace::ThreadRuntimeContext;
 
@@ -301,12 +301,33 @@ impl ClaudeRuntimeSession {
             .await
             .snapshots_by_thread
             .insert(context.thread_id.clone(), snapshot.clone());
+        snapshot_store::save(&snapshot);
 
         Ok(ThreadConversationOpenResponse {
             snapshot,
             capabilities: claude_capabilities(&context),
             composer_draft: None,
         })
+    }
+
+    pub async fn cached_thread_snapshot(
+        &self,
+        context: &ThreadRuntimeContext,
+    ) -> Option<ThreadConversationSnapshot> {
+        self.state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .get(&context.thread_id)
+            .cloned()
+            .map(|mut snapshot| {
+                snapshot.environment_id = context.environment_id.clone();
+                snapshot.provider = context.provider;
+                snapshot.provider_thread_id = context.provider_thread_id.clone();
+                snapshot.codex_thread_id = context.codex_thread_id.clone();
+                snapshot.composer = context.composer.clone();
+                snapshot
+            })
     }
 
     async fn load_open_snapshot(
@@ -1023,6 +1044,7 @@ impl ClaudeRuntimeSession {
     }
 
     fn emit_snapshot(&self, snapshot: ThreadConversationSnapshot) {
+        snapshot_store::save(&snapshot);
         self.events.emit(
             CONVERSATION_EVENT_NAME,
             ConversationEventPayload {

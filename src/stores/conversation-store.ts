@@ -11,6 +11,7 @@ import type {
   EnvironmentCapabilitiesSnapshot,
   SubmitPlanDecisionInput,
   ThreadConversationSnapshot,
+  WorkspaceSnapshot,
 } from "../lib/types";
 import {
   clearThreadDraftPersistence,
@@ -29,6 +30,7 @@ import {
 } from "./conversation-drafts";
 import {
   requestWorkspaceRefresh,
+  useWorkspaceStore,
 } from "./workspace-store";
 
 type ConversationSet = (
@@ -42,6 +44,7 @@ type OpenThreadOptions = {
 };
 
 export type ThreadHydrationState = "cold" | "loading" | "ready" | "error";
+export type RuntimeHydrationState = "cold" | "loading" | "ready" | "error";
 
 export type PendingFirstMessage = {
   text: string;
@@ -56,6 +59,7 @@ type ConversationState = {
   composerByThreadId: Record<string, ConversationComposerSettings>;
   draftByThreadId: Record<string, ConversationComposerDraft>;
   hydrationByThreadId: Record<string, ThreadHydrationState>;
+  runtimeHydrationByThreadId: Record<string, RuntimeHydrationState>;
   errorByThreadId: Record<string, string | null>;
   pendingFirstMessageByThreadId: Record<string, PendingFirstMessage>;
   listenerReady: boolean;
@@ -108,6 +112,7 @@ type ConversationStateData = Pick<
   | "composerByThreadId"
   | "draftByThreadId"
   | "hydrationByThreadId"
+  | "runtimeHydrationByThreadId"
   | "errorByThreadId"
   | "pendingFirstMessageByThreadId"
   | "listenerReady"
@@ -119,10 +124,27 @@ export const INITIAL_CONVERSATION_STATE: ConversationStateData = {
   composerByThreadId: {},
   draftByThreadId: {},
   hydrationByThreadId: {},
+  runtimeHydrationByThreadId: {},
   errorByThreadId: {},
   pendingFirstMessageByThreadId: {},
   listenerReady: false,
 };
+
+function runtimeHydrationReadyPatch(
+  state: ConversationState,
+  threadId: string,
+): Pick<ConversationStateData, "runtimeHydrationByThreadId" | "errorByThreadId"> {
+  return {
+    runtimeHydrationByThreadId: {
+      ...state.runtimeHydrationByThreadId,
+      [threadId]: "ready",
+    },
+    errorByThreadId: {
+      ...state.errorByThreadId,
+      [threadId]: null,
+    },
+  };
+}
 
 let unlistenConversationEvents: null | (() => void) = null;
 let listenerInitialization: Promise<void> | null = null;
@@ -141,6 +163,10 @@ const pendingOptimisticUserMessages = new Map<
   string,
   PendingOptimisticUserMessage
 >();
+const BACKFILL_DELAY_MS = 1_500;
+const projectionBackfillQueuesByEnvironment = new Map<string, string[]>();
+const projectionBackfillTimersByEnvironment = new Map<string, number>();
+const projectionBackfillRunningEnvironmentIds = new Set<string>();
 
 function refreshWorkspaceSnapshotNonBlocking() {
   requestWorkspaceRefresh();
@@ -179,10 +205,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
             ...state.hydrationByThreadId,
             [payload.threadId]: "ready",
           },
-          errorByThreadId: {
-            ...state.errorByThreadId,
-            [payload.threadId]: null,
-          },
+          ...runtimeHydrationReadyPatch(state, payload.threadId),
         }));
       })
       .then((unlisten) => {
@@ -269,7 +292,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           ...state.hydrationByThreadId,
           [threadId]: "ready",
         },
-        errorByThreadId: { ...state.errorByThreadId, [threadId]: null },
+        ...runtimeHydrationReadyPatch(state, threadId),
       }));
     } catch (cause: unknown) {
       const message =
@@ -402,6 +425,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
             [threadId]: storedSnapshot.composer,
           },
           draftByThreadId: removeDraftEntry(state.draftByThreadId, threadId),
+          ...runtimeHydrationReadyPatch(state, threadId),
         };
       });
       clearThreadDraftPersistence(threadId);
@@ -438,6 +462,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           ...state.snapshotsByThreadId,
           [threadId]: snapshot,
         },
+        ...runtimeHydrationReadyPatch(state, threadId),
       }));
     } catch (cause: unknown) {
       const message =
@@ -463,6 +488,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           ...state.snapshotsByThreadId,
           [threadId]: snapshot,
         },
+        ...runtimeHydrationReadyPatch(state, threadId),
       }));
     } catch (cause: unknown) {
       const message =
@@ -488,6 +514,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           ...state.snapshotsByThreadId,
           [threadId]: snapshot,
         },
+        ...runtimeHydrationReadyPatch(state, threadId),
       }));
     } catch (cause: unknown) {
       const message =
@@ -514,6 +541,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           [input.threadId]: snapshot.composer,
         },
         draftByThreadId: removeDraftEntry(state.draftByThreadId, input.threadId),
+        ...runtimeHydrationReadyPatch(state, input.threadId),
       }));
       clearThreadDraftPersistence(input.threadId);
       refreshWorkspaceSnapshotNonBlocking();
@@ -577,6 +605,11 @@ export function selectConversationHydration(threadId: string | null) {
     (threadId ? state.hydrationByThreadId[threadId] : null) ?? "cold";
 }
 
+export function selectConversationRuntimeHydration(threadId: string | null) {
+  return (state: ConversationState) =>
+    (threadId ? state.runtimeHydrationByThreadId[threadId] : null) ?? "cold";
+}
+
 export function selectConversationCapabilities(environmentId: string | null) {
   return (state: ConversationState) =>
     (environmentId ? state.capabilitiesByEnvironmentId[environmentId] : null) ?? null;
@@ -595,6 +628,12 @@ export function teardownConversationListener() {
   inflightThreadLoads.clear();
   inflightEnvironmentCapabilityLoads.clear();
   pendingOptimisticUserMessages.clear();
+  for (const timer of projectionBackfillTimersByEnvironment.values()) {
+    window.clearTimeout(timer);
+  }
+  projectionBackfillQueuesByEnvironment.clear();
+  projectionBackfillTimersByEnvironment.clear();
+  projectionBackfillRunningEnvironmentIds.clear();
   clearDraftPersistenceControllers();
   useConversationStore.setState({ listenerReady: false });
 }
@@ -622,12 +661,45 @@ async function openThreadWithOptions(
     set((state) => ({
       hydrationByThreadId: {
         ...state.hydrationByThreadId,
+        [threadId]: state.snapshotsByThreadId[threadId] ? "ready" : "loading",
+      },
+      runtimeHydrationByThreadId: {
+        ...state.runtimeHydrationByThreadId,
         [threadId]: "loading",
       },
       errorByThreadId: { ...state.errorByThreadId, [threadId]: null },
     }));
 
     try {
+      const localSnapshot = await bridge
+        .getThreadConversationSnapshot(threadId)
+        .catch(() => null);
+      if (localSnapshot) {
+        set((state) => {
+          const existingSnapshot = state.snapshotsByThreadId[threadId];
+          const shouldKeepExisting =
+            existingSnapshot !== undefined &&
+            existingSnapshot.items.length > localSnapshot.items.length;
+          const nextSnapshot = shouldKeepExisting
+            ? existingSnapshot
+            : localSnapshot;
+          const reconciledSnapshot = snapshotWithPendingOptimisticMessage(
+            threadId,
+            nextSnapshot,
+          );
+          return {
+            snapshotsByThreadId: {
+              ...state.snapshotsByThreadId,
+              [threadId]: reconciledSnapshot,
+            },
+            hydrationByThreadId: {
+              ...state.hydrationByThreadId,
+              [threadId]: "ready",
+            },
+          };
+        });
+      }
+
       const response = await bridge.openThreadConversation(threadId);
       set((state) => {
         // The bridge call can race with live snapshot events and in-flight
@@ -674,6 +746,7 @@ async function openThreadWithOptions(
             ...state.hydrationByThreadId,
             [threadId]: "ready",
           },
+          ...runtimeHydrationReadyPatch(state, threadId),
         };
       });
 
@@ -684,6 +757,10 @@ async function openThreadWithOptions(
       set((state) => ({
         hydrationByThreadId: {
           ...state.hydrationByThreadId,
+          [threadId]: state.snapshotsByThreadId[threadId] ? "ready" : "error",
+        },
+        runtimeHydrationByThreadId: {
+          ...state.runtimeHydrationByThreadId,
           [threadId]: "error",
         },
         errorByThreadId: { ...state.errorByThreadId, [threadId]: message },
@@ -842,21 +919,98 @@ function restoreHydratedThreadIfPresent(
     return false;
   }
 
-  if (
-    state.hydrationByThreadId[threadId] !== "ready" ||
-    state.errorByThreadId[threadId] !== null
-  ) {
+  if (state.hydrationByThreadId[threadId] !== "ready") {
     set((currentState) => ({
       hydrationByThreadId: {
         ...currentState.hydrationByThreadId,
         [threadId]: "ready",
       },
-      errorByThreadId: {
-        ...currentState.errorByThreadId,
-        [threadId]: null,
-      },
     }));
   }
 
-  return true;
+  return (
+    state.runtimeHydrationByThreadId[threadId] === "ready" &&
+    (state.errorByThreadId[threadId] ?? null) === null
+  );
 }
+
+function enqueueProjectionBackfill(snapshot: WorkspaceSnapshot | null) {
+  if (!snapshot) return;
+  const conversationState = useConversationStore.getState();
+  const environments = [
+    ...snapshot.projects.flatMap((project) => project.environments),
+    ...snapshot.chat.environments,
+  ];
+  for (const environment of environments) {
+    const candidates = environment.threads
+      .filter((thread) => thread.providerThreadId || thread.codexThreadId)
+      .filter((thread) => {
+        if (conversationState.runtimeHydrationByThreadId[thread.id] === "error") {
+          return false;
+        }
+        const existing = conversationState.snapshotsByThreadId[thread.id];
+        return !existing || existing.items.length === 0;
+      })
+      .map((thread) => thread.id);
+    if (candidates.length === 0) continue;
+
+    const queue = projectionBackfillQueuesByEnvironment.get(environment.id) ?? [];
+    for (const threadId of candidates) {
+      if (!queue.includes(threadId)) {
+        queue.push(threadId);
+      }
+    }
+    projectionBackfillQueuesByEnvironment.set(environment.id, queue);
+    scheduleProjectionBackfill(environment.id);
+  }
+}
+
+function scheduleProjectionBackfill(environmentId: string) {
+  if (projectionBackfillTimersByEnvironment.has(environmentId)) return;
+  const timer = window.setTimeout(() => {
+    projectionBackfillTimersByEnvironment.delete(environmentId);
+    void drainProjectionBackfillQueue(environmentId);
+  }, BACKFILL_DELAY_MS);
+  projectionBackfillTimersByEnvironment.set(environmentId, timer);
+}
+
+async function drainProjectionBackfillQueue(environmentId: string) {
+  if (projectionBackfillRunningEnvironmentIds.has(environmentId)) return;
+  projectionBackfillRunningEnvironmentIds.add(environmentId);
+  try {
+    while (true) {
+      const queue = projectionBackfillQueuesByEnvironment.get(environmentId) ?? [];
+      const threadId = queue.shift();
+      if (!threadId) {
+        projectionBackfillQueuesByEnvironment.delete(environmentId);
+        return;
+      }
+      projectionBackfillQueuesByEnvironment.set(environmentId, queue);
+      const state = useConversationStore.getState();
+      if (state.runtimeHydrationByThreadId[threadId] === "error") {
+        continue;
+      }
+      const snapshot = state.snapshotsByThreadId[threadId];
+      if (snapshot && snapshot.items.length > 0) {
+        continue;
+      }
+      await openThreadWithOptions(
+        () => useConversationStore.getState(),
+        (updater) => useConversationStore.setState((current) => updater(current)),
+        threadId,
+        { skipIfLoaded: true },
+      );
+    }
+  } finally {
+    projectionBackfillRunningEnvironmentIds.delete(environmentId);
+    if ((projectionBackfillQueuesByEnvironment.get(environmentId)?.length ?? 0) > 0) {
+      scheduleProjectionBackfill(environmentId);
+    }
+  }
+}
+
+useWorkspaceStore.subscribe((state, previousState) => {
+  if (state.snapshot !== previousState.snapshot) {
+    enqueueProjectionBackfill(state.snapshot);
+  }
+});

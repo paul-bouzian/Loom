@@ -21,7 +21,6 @@ pub const CONVERSATION_EVENT_NAME: &str = "skein://conversation-event";
 pub const CODEX_USAGE_EVENT_NAME: &str = "skein://codex-usage-event";
 pub const WORKSPACE_EVENT_NAME: &str = "skein://workspace-event";
 pub const WORKTREE_SCRIPT_FAILURE_EVENT_NAME: &str = "skein://worktree-script-failure";
-pub const FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME: &str = "skein://first-prompt-rename-failure";
 pub const TERMINAL_OUTPUT_EVENT_NAME: &str = "skein://terminal-output";
 pub const TERMINAL_EXIT_EVENT_NAME: &str = "skein://terminal-exit";
 pub const PROJECT_ACTION_STATE_EVENT_NAME: &str = "skein://project-action-state";

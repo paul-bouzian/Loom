@@ -95,10 +95,6 @@ vi.mock("./draft/ThreadDraftComposer", async () => {
   };
 });
 
-vi.mock("./StudioWelcome", () => ({
-  StudioWelcome: () => <div data-testid="studio-welcome" />,
-}));
-
 vi.mock("./TerminalPanel", () => ({
   TerminalPanel: () => <div data-testid="terminal-panel" />,
 }));
@@ -248,16 +244,18 @@ beforeEach(() => {
 });
 
 describe("StudioMain", () => {
-  it("wraps the default workspace overview in the canonical pane scroll container", () => {
+  it("renders a chat draft instead of the removed workspace overview when no pane is selected", () => {
     const { container } = renderStudioMain();
 
-    expect(
-      screen.getByRole("heading", { name: "Workspace" }),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("thread-draft-composer")).toHaveAttribute(
+      "data-draft-kind",
+      "chat",
+    );
+    expect(screen.queryByRole("heading", { name: "Workspace" })).toBeNull();
     expect(container.querySelector(".studio-main__pane-scroll")).not.toBeNull();
   });
 
-  it("uses project onboarding when the workspace has no imported projects", () => {
+  it("renders a chat draft when the workspace has no imported projects", () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
       snapshot: makeWorkspaceSnapshot({
@@ -272,22 +270,25 @@ describe("StudioMain", () => {
 
     renderStudioMain();
 
-    expect(screen.getByTestId("studio-welcome")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", { name: "Workspace" }),
-    ).toBeNull();
+    expect(screen.getByTestId("thread-draft-composer")).toHaveAttribute(
+      "data-draft-kind",
+      "chat",
+    );
+    expect(screen.queryByRole("heading", { name: "Workspace" })).toBeNull();
   });
 
-  it("falls back to the workspace overview when a selected environment has no active thread", () => {
+  it("falls back to a chat draft when a selected environment has no active thread", () => {
     act(() => {
       useWorkspaceStore.getState().selectEnvironment("env-1");
     });
 
     renderStudioMain();
 
-    expect(
-      screen.getByRole("heading", { name: "Workspace" }),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("thread-draft-composer")).toHaveAttribute(
+      "data-draft-kind",
+      "chat",
+    );
+    expect(screen.queryByRole("heading", { name: "Workspace" })).toBeNull();
     expect(
       screen.queryByText("Start a new thread to begin working"),
     ).toBeNull();
@@ -500,7 +501,7 @@ describe("StudioMain", () => {
     expect(screen.queryByRole("button", { name: /Handoff to/i })).toBeNull();
   });
 
-  it("shows project onboarding when the chats workspace is selected without imported projects", () => {
+  it("renders a chat draft when the chats workspace is selected without imported projects", () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
       snapshot: makeWorkspaceSnapshot({
@@ -519,10 +520,11 @@ describe("StudioMain", () => {
 
     renderStudioMain();
 
-    expect(screen.getByTestId("studio-welcome")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", { name: "Workspace" }),
-    ).toBeNull();
+    expect(screen.getByTestId("thread-draft-composer")).toHaveAttribute(
+      "data-draft-kind",
+      "chat",
+    );
+    expect(screen.queryByRole("heading", { name: "Workspace" })).toBeNull();
   });
 
   it("keeps the chat draft composer visible when no imported projects exist", () => {
@@ -547,7 +549,6 @@ describe("StudioMain", () => {
     renderStudioMain();
 
     expect(screen.getByTestId("thread-draft-composer")).toBeInTheDocument();
-    expect(screen.queryByTestId("studio-welcome")).toBeNull();
   });
 
   it("keeps an open chat thread visible when no imported projects exist", () => {
@@ -594,7 +595,6 @@ describe("StudioMain", () => {
     renderStudioMain();
 
     expect(screen.getByTestId("thread-conversation")).toBeInTheDocument();
-    expect(screen.queryByTestId("studio-welcome")).toBeNull();
   });
 
   it("keeps TerminalPanel mounted when another environment still has tabs", () => {

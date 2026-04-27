@@ -999,7 +999,9 @@ export function selectIsSplitOpen(s: WorkspaceState): boolean {
 }
 
 export function selectHasAnyPane(s: WorkspaceState): boolean {
-  return countPanes(s.layout.slots) > 0;
+  return SLOT_KEYS.some(
+    (key) => s.layout.slots[key] !== null || s.draftBySlot[key] !== undefined,
+  );
 }
 
 export function selectThreadInAnyPane(threadId: string) {
@@ -1130,7 +1132,7 @@ function selectThreadInFocusedSlot(
   if (id === null) {
     const slots = {
       ...state.layout.slots,
-      [target]: { ...current, threadId: null },
+      [target]: null,
     };
     const nextDrafts = omitSlot(state.draftBySlot, target);
     return withLayoutAndDrafts(
@@ -1233,10 +1235,7 @@ function withReconciledLayout(
   snapshot: WorkspaceSnapshot | null,
   reconciled: ReconciledLayout,
 ) {
-  return {
-    ...withLayout(reconciled.layout, snapshot, reconciled.drafts),
-    draftBySlot: reconciled.drafts,
-  };
+  return withLayoutAndDrafts(reconciled.layout, snapshot, reconciled.drafts);
 }
 
 function withLayoutAndDrafts(
@@ -1244,9 +1243,60 @@ function withLayoutAndDrafts(
   snapshot: WorkspaceSnapshot | null,
   draftBySlot: Partial<Record<SlotKey, ThreadDraftState>>,
 ) {
+  const ensured = ensureRenderableLayout(snapshot, layout, draftBySlot);
   return {
-    ...withLayout(layout, snapshot, draftBySlot),
-    draftBySlot,
+    ...withLayout(ensured.layout, snapshot, ensured.drafts),
+    draftBySlot: ensured.drafts,
+  };
+}
+
+function ensureRenderableLayout(
+  snapshot: WorkspaceSnapshot | null,
+  layout: WorkspaceLayout,
+  draftBySlot: Partial<Record<SlotKey, ThreadDraftState>>,
+): ReconciledLayout {
+  if (!snapshot) {
+    return { layout, drafts: draftBySlot };
+  }
+
+  let changed = false;
+  const slots = { ...layout.slots };
+  const drafts = { ...draftBySlot };
+
+  for (const key of SLOT_KEYS) {
+    const selection = slots[key];
+    const hasDraft = drafts[key] !== undefined;
+    const hasThread = selection?.threadId != null;
+    const hasScope =
+      selection?.projectId != null || selection?.environmentId != null;
+    if (!selection || hasDraft || hasThread || hasScope) {
+      continue;
+    }
+
+    changed = true;
+    slots[key] = null;
+  }
+
+  if (SLOT_KEYS.some((key) => slots[key] !== null)) {
+    return changed ? { layout: { ...layout, slots }, drafts } : { layout, drafts };
+  }
+
+  return {
+    layout: {
+      ...layout,
+      slots: {
+        ...EMPTY_SLOTS,
+        topLeft: {
+          projectId: snapshot.chat.projectId,
+          environmentId: null,
+          threadId: null,
+        },
+      },
+      focusedSlot: "topLeft",
+    },
+    drafts: {
+      topLeft: { kind: "chat" },
+    },
   };
 }
 
@@ -1588,14 +1638,11 @@ function reconcileLayout(
     ? (SLOT_KEYS.find((key) => compacted[key] === focusedSelection) ?? null)
     : null;
   const focusedSlot = relocatedFocus ?? firstFilledSlot(compacted);
-  return {
-    layout: {
-      ...layout,
-      slots: compacted,
-      focusedSlot,
-    },
-    drafts: remappedDrafts,
-  };
+  return ensureRenderableLayout(snapshot, {
+    ...layout,
+    slots: compacted,
+    focusedSlot,
+  }, remappedDrafts);
 }
 
 function reconcilePaneSelection(

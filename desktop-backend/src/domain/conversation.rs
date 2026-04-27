@@ -6,7 +6,7 @@ use super::settings::{
     ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort, ServiceTier,
 };
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ConversationStatus {
     Idle,
@@ -186,7 +186,7 @@ pub struct TokenUsageBreakdown {
     pub reasoning_output_tokens: i64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadTokenUsageSnapshot {
     pub total: TokenUsageBreakdown,
@@ -523,7 +523,7 @@ impl ConversationComposerDraft {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationErrorSnapshot {
     pub message: String,
@@ -583,7 +583,7 @@ pub struct ConversationSystemItem {
     pub body: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadConversationSnapshot {
     pub thread_id: String,

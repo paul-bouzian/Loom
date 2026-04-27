@@ -142,7 +142,7 @@ describe("workspace store", () => {
     expect(state.selectedThreadId).toBe("thread-latest");
   });
 
-  it("keeps the environment selected when clearing the active thread", () => {
+  it("falls back to a chat draft when clearing the active thread leaves no transcript", () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
       snapshot: makeWorkspaceSnapshot(),
@@ -169,8 +169,47 @@ describe("workspace store", () => {
     useWorkspaceStore.getState().selectThread(null);
 
     const state = useWorkspaceStore.getState();
-    expect(state.selectedProjectId).toBe("project-1");
-    expect(state.selectedEnvironmentId).toBe("env-1");
+    expect(state.layout.slots.topLeft).toEqual({
+      projectId: "skein-chat-workspace",
+      environmentId: null,
+      threadId: null,
+    });
+    expect(state.draftBySlot.topLeft).toEqual({ kind: "chat" });
+    expect(state.selectedProjectId).toBe("skein-chat-workspace");
+    expect(state.selectedEnvironmentId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+  });
+
+  it("keeps project scope panes stable when no active thread exists", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            id: "project-empty",
+            environments: [
+              makeEnvironment({
+                id: "env-empty",
+                projectId: "project-empty",
+                threads: [],
+              }),
+            ],
+          }),
+        ],
+      }),
+    }));
+
+    useWorkspaceStore.getState().selectProject("project-empty");
+
+    const state = useWorkspaceStore.getState();
+    expect(state.layout.slots.topLeft).toEqual({
+      projectId: "project-empty",
+      environmentId: "env-empty",
+      threadId: null,
+    });
+    expect(state.draftBySlot.topLeft).toBeUndefined();
+    expect(state.selectedProjectId).toBe("project-empty");
+    expect(state.selectedEnvironmentId).toBe("env-empty");
     expect(state.selectedThreadId).toBeNull();
   });
 
@@ -262,12 +301,16 @@ describe("workspace store", () => {
     await useWorkspaceStore.getState().refreshSnapshot();
 
     // The pane pointed at env-worktree / thread-worktree — both gone. We
-    // must not silently redirect to env-local, otherwise a user who
-    // deleted a worktree is stuck with a pane locked onto the project's
-    // local env in split view.
+    // must not silently redirect to env-local; the empty surface becomes a
+    // fresh chat draft instead.
     const state = useWorkspaceStore.getState();
-    expect(state.layout.slots.topLeft).toBeNull();
-    expect(state.selectedProjectId).toBeNull();
+    expect(state.layout.slots.topLeft).toEqual({
+      projectId: "skein-chat-workspace",
+      environmentId: null,
+      threadId: null,
+    });
+    expect(state.draftBySlot.topLeft).toEqual({ kind: "chat" });
+    expect(state.selectedProjectId).toBe("skein-chat-workspace");
     expect(state.selectedEnvironmentId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
     expect(useTerminalStore.getState().byEnv["env-worktree"]).toBeUndefined();
@@ -352,9 +395,14 @@ describe("workspace store", () => {
     await useWorkspaceStore.getState().refreshSnapshot();
 
     const state = useWorkspaceStore.getState();
-    expect(state.layout.slots.topLeft).toBeNull();
+    expect(state.layout.slots.topLeft).toEqual({
+      projectId: "skein-chat-workspace",
+      environmentId: null,
+      threadId: null,
+    });
     expect(state.layout.slots.topRight).toBeNull();
-    expect(state.layout.focusedSlot).toBeNull();
+    expect(state.draftBySlot.topLeft).toEqual({ kind: "chat" });
+    expect(state.layout.focusedSlot).toBe("topLeft");
     expect(state.selectedThreadId).toBeNull();
   });
 
@@ -1323,7 +1371,7 @@ describe("workspace store — grid 2x2 panes", () => {
       expect(useWorkspaceStore.getState().selectedThreadId).toBeNull();
     });
 
-    it("refreshSnapshot closes a draft pane when its project disappears", async () => {
+    it("refreshSnapshot falls back to a chat draft when a draft project disappears", async () => {
       seedTwoThreadWorkspace();
       useWorkspaceStore.setState((state) => ({
         ...state,
@@ -1369,10 +1417,16 @@ describe("workspace store — grid 2x2 panes", () => {
 
       await useWorkspaceStore.getState().refreshSnapshot();
 
-      expect(slots().topLeft).toBeNull();
-      expect(drafts().topLeft).toBeUndefined();
-      expect(useWorkspaceStore.getState().layout.focusedSlot).toBeNull();
-      expect(useWorkspaceStore.getState().selectedProjectId).toBeNull();
+      expect(slots().topLeft).toEqual({
+        projectId: "skein-chat-workspace",
+        environmentId: null,
+        threadId: null,
+      });
+      expect(drafts().topLeft).toEqual({ kind: "chat" });
+      expect(useWorkspaceStore.getState().layout.focusedSlot).toBe("topLeft");
+      expect(useWorkspaceStore.getState().selectedProjectId).toBe(
+        "skein-chat-workspace",
+      );
       expect(useWorkspaceStore.getState().selectedEnvironmentId).toBeNull();
       expect(useWorkspaceStore.getState().selectedThreadId).toBeNull();
     });
@@ -1397,14 +1451,18 @@ describe("workspace store — grid 2x2 panes", () => {
       expect(drafts().topLeft).toBeUndefined();
     });
 
-    it("closePane removes the draft entry for that slot", () => {
+    it("closePane falls back to a chat draft when the last draft pane is closed", () => {
       seedTwoThreadWorkspace();
       useWorkspaceStore.getState().openThreadDraft("project-a");
 
       useWorkspaceStore.getState().closePane("topLeft");
 
-      expect(drafts().topLeft).toBeUndefined();
-      expect(slots().topLeft).toBeNull();
+      expect(drafts().topLeft).toEqual({ kind: "chat" });
+      expect(slots().topLeft).toEqual({
+        projectId: "skein-chat-workspace",
+        environmentId: null,
+        threadId: null,
+      });
     });
 
     it("closeThreadDraft removes only the targeted slot's draft", () => {

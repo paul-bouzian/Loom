@@ -771,6 +771,17 @@ impl RuntimeSupervisor {
         session.open_thread(context).await
     }
 
+    pub async fn cached_thread_snapshot(
+        &self,
+        context: &ThreadRuntimeContext,
+    ) -> Option<ThreadConversationSnapshot> {
+        if matches!(context.provider, ProviderKind::Claude) {
+            return self.claude.cached_thread_snapshot(context).await;
+        }
+        let runtime = self.running_runtime(&context.environment_id).await?;
+        runtime.session.cached_thread_snapshot(context).await
+    }
+
     pub async fn get_composer_catalog(
         &self,
         context: ComposerTargetContext,

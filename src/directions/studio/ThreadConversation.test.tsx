@@ -36,6 +36,7 @@ const clipboardWriteTextMock = vi.fn();
 
 vi.mock("../../lib/bridge", () => ({
   openThreadConversation: vi.fn(),
+  getThreadConversationSnapshot: vi.fn(),
   saveThreadComposerDraft: vi.fn(),
   refreshThreadConversation: vi.fn(),
   getComposerCatalog: vi.fn(),
@@ -114,6 +115,7 @@ beforeEach(async () => {
   await resetVoiceSessionStore();
   resetStores();
   mockedBridge.saveThreadComposerDraft.mockResolvedValue(undefined);
+  mockedBridge.getThreadConversationSnapshot.mockResolvedValue(null);
   mockedBridge.getComposerCatalog.mockResolvedValue({
     prompts: [],
     skills: [],
@@ -174,11 +176,14 @@ describe("ThreadConversation", () => {
     expect(screen.getByText("3 tests passed")).toBeInTheDocument();
   });
 
-  it("keeps the conversation shell visible while the thread is still connecting", async () => {
+  it("keeps the conversation shell visible without showing a loader while the runtime hydrates", async () => {
     const deferred = createDeferred<{
       snapshot: ReturnType<typeof makeConversationSnapshot>;
       capabilities: typeof capabilitiesFixture;
     }>();
+    mockedBridge.getThreadConversationSnapshot.mockResolvedValue(
+      makeConversationSnapshot({ items: [] }),
+    );
     mockedBridge.openThreadConversation.mockReturnValue(deferred.promise);
 
     const { container } = render(
@@ -189,7 +194,7 @@ describe("ThreadConversation", () => {
     );
 
     expect(container.querySelector(".tx-conversation")).not.toBeNull();
-    expect(container.querySelector(".tx-loading")).not.toBeNull();
+    expect(container.querySelector(".tx-loading")).toBeNull();
     expect(screen.queryByText("Connecting to Codex…")).toBeNull();
 
     deferred.resolve({
@@ -200,6 +205,30 @@ describe("ThreadConversation", () => {
     expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
   });
 
+  it("shows an empty transcript surface without a loader on a cold local miss", async () => {
+    const deferred = createDeferred<{
+      snapshot: ReturnType<typeof makeConversationSnapshot>;
+      capabilities: typeof capabilitiesFixture;
+    }>();
+    mockedBridge.getThreadConversationSnapshot.mockResolvedValue(null);
+    mockedBridge.openThreadConversation.mockReturnValue(deferred.promise);
+
+    const { container } = render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(await screen.findByText("Start a conversation")).toBeInTheDocument();
+    expect(container.querySelector(".tx-loading")).toBeNull();
+
+    deferred.resolve({
+      snapshot: makeConversationSnapshot(),
+      capabilities: capabilitiesFixture,
+    });
+  });
+
   it("offers a subtle reconnect action after a failed cold open", async () => {
     mockedBridge.openThreadConversation
       .mockRejectedValueOnce(new Error("runtime unavailable"))
@@ -207,6 +236,9 @@ describe("ThreadConversation", () => {
         snapshot: makeConversationSnapshot(),
         capabilities: capabilitiesFixture,
       });
+    mockedBridge.refreshThreadConversation.mockResolvedValue(
+      makeConversationSnapshot(),
+    );
 
     render(
       <ThreadConversation
@@ -224,6 +256,36 @@ describe("ThreadConversation", () => {
       expect(mockedBridge.openThreadConversation).toHaveBeenCalledTimes(2);
     });
     expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
+  });
+
+  it("offers reconnect when runtime hydration fails after rendering a local snapshot", async () => {
+    mockedBridge.getThreadConversationSnapshot.mockResolvedValue(
+      makeConversationSnapshot(),
+    );
+    mockedBridge.openThreadConversation
+      .mockRejectedValueOnce(new Error("runtime unavailable"))
+      .mockResolvedValueOnce({
+        snapshot: makeConversationSnapshot(),
+        capabilities: capabilitiesFixture,
+      });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Reconnect" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      expect(mockedBridge.refreshThreadConversation).toHaveBeenCalledWith(
+        "thread-1",
+      );
+    });
   });
 
   it("touches the runtime as soon as the transport becomes ready", async () => {
@@ -2601,7 +2663,7 @@ describe("ThreadConversation", () => {
     });
   });
 
-  it("shows a naming loader while the first managed worktree prompt is preparing", async () => {
+  it("keeps first managed worktree naming invisible while the send is pending", async () => {
     const deferred =
       createDeferred<ReturnType<typeof makeConversationSnapshot>>();
     const thread = makeThread({
@@ -2643,11 +2705,11 @@ describe("ThreadConversation", () => {
     });
     expect(await screen.findByText("Add theme support")).toBeInTheDocument();
     expect(
-      await screen.findByText("Naming the branch and worktree"),
-    ).toBeInTheDocument();
+      screen.queryByText("Naming the branch and worktree"),
+    ).not.toBeInTheDocument();
     expect(
-      screen.getByText(/Preparing a readable label before Codex starts/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/Preparing a readable label before Codex starts/i),
+    ).not.toBeInTheDocument();
 
     deferred.resolve(
       makeConversationSnapshot({
