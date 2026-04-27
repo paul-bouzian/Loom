@@ -1594,12 +1594,15 @@ describe("ThreadConversation", () => {
       />,
     );
 
-    expect(
-      await screen.findByText("Background agents"),
-    ).toBeInTheDocument();
+    const agentsToggle = await screen.findByRole("button", {
+      name: /Background agents/i,
+    });
+    expect(agentsToggle).toHaveAttribute("aria-expanded", "false");
     expect(
       screen.getByLabelText("Context window 0% used"),
     ).toBeInTheDocument();
+    expect(screen.queryByText("Scout")).toBeNull();
+    await userEvent.click(agentsToggle);
     expect(screen.getByText("Scout")).toBeInTheDocument();
     expect(screen.getByText("Atlas")).toBeInTheDocument();
   });
@@ -1632,7 +1635,11 @@ describe("ThreadConversation", () => {
       />,
     );
 
-    expect(await screen.findByText("Background agents")).toBeInTheDocument();
+    const agentsToggle = await screen.findByRole("button", {
+      name: /Background agents/i,
+    });
+    expect(agentsToggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(agentsToggle);
     expect(screen.getByText("Azur")).toBeInTheDocument();
     expect(screen.getByText("Cirrus")).toBeInTheDocument();
     expect(screen.getAllByText("Done")).not.toHaveLength(0);
@@ -1691,7 +1698,11 @@ describe("ThreadConversation", () => {
       await screen.findByText("Inspect the runtime layer"),
     ).toBeInTheDocument();
     expect(screen.getByText("Implement the task UI")).toBeInTheDocument();
-    expect(screen.getByText("Background agents")).toBeInTheDocument();
+    const agentsToggle = screen.getByRole("button", {
+      name: /Background agents/i,
+    });
+    expect(agentsToggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(agentsToggle);
     expect(screen.getByText("Scout")).toBeInTheDocument();
     expect(screen.getByText("Atlas")).toBeInTheDocument();
   });

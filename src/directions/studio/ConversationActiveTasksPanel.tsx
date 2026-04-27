@@ -23,7 +23,7 @@ export function ConversationActiveTasksPanel({
   activeTurnId,
 }: Props) {
   const [expanded, setExpanded] = useState(true);
-  const [agentsExpanded, setAgentsExpanded] = useState(true);
+  const [agentsExpanded, setAgentsExpanded] = useState(false);
 
   const isWorking =
     status === "running" || status === "waitingForExternalAction";
