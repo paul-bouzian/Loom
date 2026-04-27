@@ -130,6 +130,22 @@ export const INITIAL_CONVERSATION_STATE: ConversationStateData = {
   listenerReady: false,
 };
 
+function runtimeHydrationReadyPatch(
+  state: ConversationState,
+  threadId: string,
+): Pick<ConversationStateData, "runtimeHydrationByThreadId" | "errorByThreadId"> {
+  return {
+    runtimeHydrationByThreadId: {
+      ...state.runtimeHydrationByThreadId,
+      [threadId]: "ready",
+    },
+    errorByThreadId: {
+      ...state.errorByThreadId,
+      [threadId]: null,
+    },
+  };
+}
+
 let unlistenConversationEvents: null | (() => void) = null;
 let listenerInitialization: Promise<void> | null = null;
 let listenerGeneration = 0;
@@ -189,14 +205,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
             ...state.hydrationByThreadId,
             [payload.threadId]: "ready",
           },
-          runtimeHydrationByThreadId: {
-            ...state.runtimeHydrationByThreadId,
-            [payload.threadId]: "ready",
-          },
-          errorByThreadId: {
-            ...state.errorByThreadId,
-            [payload.threadId]: null,
-          },
+          ...runtimeHydrationReadyPatch(state, payload.threadId),
         }));
       })
       .then((unlisten) => {
@@ -283,7 +292,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           ...state.hydrationByThreadId,
           [threadId]: "ready",
         },
-        errorByThreadId: { ...state.errorByThreadId, [threadId]: null },
+        ...runtimeHydrationReadyPatch(state, threadId),
       }));
     } catch (cause: unknown) {
       const message =
@@ -416,6 +425,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
             [threadId]: storedSnapshot.composer,
           },
           draftByThreadId: removeDraftEntry(state.draftByThreadId, threadId),
+          ...runtimeHydrationReadyPatch(state, threadId),
         };
       });
       clearThreadDraftPersistence(threadId);
@@ -452,6 +462,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           ...state.snapshotsByThreadId,
           [threadId]: snapshot,
         },
+        ...runtimeHydrationReadyPatch(state, threadId),
       }));
     } catch (cause: unknown) {
       const message =
@@ -477,6 +488,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           ...state.snapshotsByThreadId,
           [threadId]: snapshot,
         },
+        ...runtimeHydrationReadyPatch(state, threadId),
       }));
     } catch (cause: unknown) {
       const message =
@@ -502,6 +514,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           ...state.snapshotsByThreadId,
           [threadId]: snapshot,
         },
+        ...runtimeHydrationReadyPatch(state, threadId),
       }));
     } catch (cause: unknown) {
       const message =
@@ -528,6 +541,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           [input.threadId]: snapshot.composer,
         },
         draftByThreadId: removeDraftEntry(state.draftByThreadId, input.threadId),
+        ...runtimeHydrationReadyPatch(state, input.threadId),
       }));
       clearThreadDraftPersistence(input.threadId);
       refreshWorkspaceSnapshotNonBlocking();
@@ -678,12 +692,6 @@ async function openThreadWithOptions(
               ...state.snapshotsByThreadId,
               [threadId]: reconciledSnapshot,
             },
-            composerByThreadId: state.composerByThreadId[threadId]
-              ? state.composerByThreadId
-              : {
-                  ...state.composerByThreadId,
-                  [threadId]: reconciledSnapshot.composer,
-                },
             hydrationByThreadId: {
               ...state.hydrationByThreadId,
               [threadId]: "ready",
@@ -738,11 +746,7 @@ async function openThreadWithOptions(
             ...state.hydrationByThreadId,
             [threadId]: "ready",
           },
-          runtimeHydrationByThreadId: {
-            ...state.runtimeHydrationByThreadId,
-            [threadId]: "ready",
-          },
-          errorByThreadId: { ...state.errorByThreadId, [threadId]: null },
+          ...runtimeHydrationReadyPatch(state, threadId),
         };
       });
 

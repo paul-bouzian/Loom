@@ -205,6 +205,30 @@ describe("ThreadConversation", () => {
     expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
   });
 
+  it("shows an empty transcript surface without a loader on a cold local miss", async () => {
+    const deferred = createDeferred<{
+      snapshot: ReturnType<typeof makeConversationSnapshot>;
+      capabilities: typeof capabilitiesFixture;
+    }>();
+    mockedBridge.getThreadConversationSnapshot.mockResolvedValue(null);
+    mockedBridge.openThreadConversation.mockReturnValue(deferred.promise);
+
+    const { container } = render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(await screen.findByText("Start a conversation")).toBeInTheDocument();
+    expect(container.querySelector(".tx-loading")).toBeNull();
+
+    deferred.resolve({
+      snapshot: makeConversationSnapshot(),
+      capabilities: capabilitiesFixture,
+    });
+  });
+
   it("offers a subtle reconnect action after a failed cold open", async () => {
     mockedBridge.openThreadConversation
       .mockRejectedValueOnce(new Error("runtime unavailable"))

@@ -276,6 +276,11 @@ export function ThreadConversation({
   const isConnectionError =
     hydration === "error" || runtimeHydration === "error";
   const transportReady = runtimeHydration === "ready";
+  const showEmptyTranscript =
+    timelineEntries.length === 0 &&
+    !shouldRenderPlanCard &&
+    !hasActiveTaskPlanContent &&
+    (hydration === "ready" || snapshot === null);
 
   useEffect(() => {
     if (!transportReady) {
@@ -535,12 +540,7 @@ export function ThreadConversation({
         className="tx-conversation__timeline"
         onScroll={handleTimelineScroll}
       >
-        {timelineEntries.length === 0 &&
-        !shouldRenderPlanCard &&
-        !hasActiveTaskPlanContent &&
-        hydration === "ready" ? (
-          <ConversationEmpty />
-        ) : null}
+        {showEmptyTranscript ? <ConversationEmpty /> : null}
         {isConnectionError ? (
           <div className="tx-conversation__reconnect" role="alert">
             {storeError ? (

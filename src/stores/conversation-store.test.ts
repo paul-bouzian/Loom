@@ -145,6 +145,7 @@ describe("conversation store", () => {
     expect(
       useConversationStore.getState().runtimeHydrationByThreadId["thread-1"],
     ).toBe("loading");
+    expect(useConversationStore.getState().composerByThreadId["thread-1"]).toBeUndefined();
 
     runtime.resolve({ snapshot: runtimeSnapshot, capabilities: capabilitiesFixture });
     await opened;
@@ -155,6 +156,9 @@ describe("conversation store", () => {
     expect(
       useConversationStore.getState().runtimeHydrationByThreadId["thread-1"],
     ).toBe("ready");
+    expect(useConversationStore.getState().composerByThreadId["thread-1"]).toEqual(
+      runtimeSnapshot.composer,
+    );
   });
 
   it("loads environment capabilities without opening a thread", async () => {
@@ -409,6 +413,8 @@ describe("conversation store", () => {
       composerByThreadId: {
         "thread-1": { ...initialSnapshot.composer, reasoningEffort: "xhigh" },
       },
+      runtimeHydrationByThreadId: { "thread-1": "error" },
+      errorByThreadId: { "thread-1": "runtime unavailable" },
     }));
 
     await useConversationStore.getState().sendMessage("thread-1", "Ship it");
@@ -421,6 +427,8 @@ describe("conversation store", () => {
     expect(useConversationStore.getState().snapshotsByThreadId["thread-1"]).toEqual(
       nextSnapshot,
     );
+    expect(useConversationStore.getState().runtimeHydrationByThreadId["thread-1"]).toBe("ready");
+    expect(useConversationStore.getState().errorByThreadId["thread-1"]).toBeNull();
   });
 
   it("sends the selected model and reasoning effort to the backend", async () => {
@@ -860,11 +868,18 @@ describe("conversation store", () => {
       ],
     });
     mockedBridge.refreshThreadConversation.mockResolvedValue(snapshot);
+    useConversationStore.setState((state) => ({
+      ...state,
+      runtimeHydrationByThreadId: { "thread-1": "error" },
+      errorByThreadId: { "thread-1": "runtime unavailable" },
+    }));
 
     await useConversationStore.getState().refreshThread("thread-1");
 
     expect(mockedBridge.refreshThreadConversation).toHaveBeenCalledWith("thread-1");
     expect(useConversationStore.getState().snapshotsByThreadId["thread-1"]).toEqual(snapshot);
+    expect(useConversationStore.getState().runtimeHydrationByThreadId["thread-1"]).toBe("ready");
+    expect(useConversationStore.getState().errorByThreadId["thread-1"]).toBeNull();
   });
 
   it("applies conversation events from the runtime stream", async () => {

@@ -1,7 +1,5 @@
-use std::sync::{
-    mpsc::{self, Sender},
-    OnceLock,
-};
+use std::collections::HashMap;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 
 use crate::domain::conversation::ThreadConversationSnapshot;
@@ -11,7 +9,12 @@ static SNAPSHOT_STORE: OnceLock<SnapshotStore> = OnceLock::new();
 
 struct SnapshotStore {
     database: AppDatabase,
-    sender: Sender<ThreadConversationSnapshot>,
+    queue: Arc<SnapshotQueue>,
+}
+
+struct SnapshotQueue {
+    pending: Mutex<HashMap<String, ThreadConversationSnapshot>>,
+    available: Condvar,
 }
 
 pub fn install(database: AppDatabase) {
@@ -19,12 +22,42 @@ pub fn install(database: AppDatabase) {
         return;
     }
 
-    let (sender, receiver) = mpsc::channel::<ThreadConversationSnapshot>();
+    let queue = Arc::new(SnapshotQueue {
+        pending: Mutex::new(HashMap::new()),
+        available: Condvar::new(),
+    });
+    let worker_queue = Arc::clone(&queue);
     let worker_database = database.clone();
     if let Err(error) = thread::Builder::new()
         .name("skein-snapshot-store".to_string())
-        .spawn(move || {
-            for snapshot in receiver {
+        .spawn(move || loop {
+            let snapshots = {
+                let mut pending = match worker_queue.pending.lock() {
+                    Ok(pending) => pending,
+                    Err(error) => {
+                        tracing::warn!(?error, "conversation snapshot persistence queue poisoned");
+                        return;
+                    }
+                };
+                while pending.is_empty() {
+                    pending = match worker_queue.available.wait(pending) {
+                        Ok(pending) => pending,
+                        Err(error) => {
+                            tracing::warn!(
+                                ?error,
+                                "conversation snapshot persistence queue poisoned"
+                            );
+                            return;
+                        }
+                    };
+                }
+                pending
+                    .drain()
+                    .map(|(_, snapshot)| snapshot)
+                    .collect::<Vec<_>>()
+            };
+
+            for snapshot in snapshots {
                 if let Err(error) = worker_database.save_conversation_snapshot(&snapshot) {
                     tracing::warn!(
                         thread_id = %snapshot.thread_id,
@@ -42,7 +75,7 @@ pub fn install(database: AppDatabase) {
         return;
     }
 
-    let _ = SNAPSHOT_STORE.set(SnapshotStore { database, sender });
+    let _ = SNAPSHOT_STORE.set(SnapshotStore { database, queue });
 }
 
 fn store() -> Option<&'static SnapshotStore> {
@@ -53,13 +86,19 @@ pub fn save(snapshot: &ThreadConversationSnapshot) {
     let Some(store) = store() else {
         return;
     };
-    if let Err(error) = store.sender.send(snapshot.clone()) {
-        tracing::warn!(
-            thread_id = %snapshot.thread_id,
-            ?error,
-            "failed to enqueue conversation snapshot persistence"
-        );
-    }
+    let mut pending = match store.queue.pending.lock() {
+        Ok(pending) => pending,
+        Err(error) => {
+            tracing::warn!(
+                thread_id = %snapshot.thread_id,
+                ?error,
+                "failed to enqueue conversation snapshot persistence"
+            );
+            return;
+        }
+    };
+    pending.insert(snapshot.thread_id.clone(), snapshot.clone());
+    store.queue.available.notify_one();
 }
 
 pub fn load(thread_id: &str) -> Option<ThreadConversationSnapshot> {
