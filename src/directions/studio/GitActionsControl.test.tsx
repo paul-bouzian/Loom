@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { makeGitReviewSnapshot } from "../../test/fixtures/conversation";
-import { resolveQuickGitAction } from "./GitActionsControl.logic";
+import { buildGitActionMenu, resolveQuickGitAction } from "./GitActionsControl.logic";
 
 function snapshotWithSummary(
   summary: Partial<ReturnType<typeof makeGitReviewSnapshot>["summary"]>,
@@ -153,5 +153,27 @@ describe("resolveQuickGitAction", () => {
       action: "push",
       disabled: false,
     });
+  });
+});
+
+describe("buildGitActionMenu", () => {
+  it("enables commit and push for dirty default branches", () => {
+    const snapshot = snapshotWithSummary({
+      branch: "main",
+      baseBranch: "origin/main",
+      dirty: true,
+      ahead: 0,
+      behind: 0,
+    });
+
+    expect(buildGitActionMenu(snapshot, true, false, false)).toContainEqual(
+      expect.objectContaining({
+        id: "push",
+        label: "Commit & push",
+        action: "commitPush",
+        disabled: false,
+        disabledReason: null,
+      }),
+    );
   });
 });
