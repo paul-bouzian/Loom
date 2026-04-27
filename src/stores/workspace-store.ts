@@ -1132,7 +1132,7 @@ function selectThreadInFocusedSlot(
   if (id === null) {
     const slots = {
       ...state.layout.slots,
-      [target]: { ...current, threadId: null },
+      [target]: null,
     };
     const nextDrafts = omitSlot(state.draftBySlot, target);
     return withLayoutAndDrafts(
@@ -1267,7 +1267,9 @@ function ensureRenderableLayout(
     const selection = slots[key];
     const hasDraft = drafts[key] !== undefined;
     const hasThread = selection?.threadId != null;
-    if (!selection || hasDraft || hasThread) {
+    const hasScope =
+      selection?.projectId != null || selection?.environmentId != null;
+    if (!selection || hasDraft || hasThread || hasScope) {
       continue;
     }
 

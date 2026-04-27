@@ -215,6 +215,7 @@ describe("conversation store", () => {
       ...state,
       snapshotsByThreadId: { "thread-1": snapshot },
       capabilitiesByEnvironmentId: { "env-1": capabilitiesFixture },
+      runtimeHydrationByThreadId: { "thread-1": "ready" },
     }));
 
     await useConversationStore.getState().openThread("thread-1");
@@ -248,6 +249,7 @@ describe("conversation store", () => {
       snapshotsByThreadId: { "thread-1": snapshot },
       capabilitiesByEnvironmentId: { "env-1": capabilitiesFixture },
       hydrationByThreadId: { "thread-1": "ready" },
+      runtimeHydrationByThreadId: { "thread-1": "ready" },
     }));
 
     await useConversationStore.getState().openThread("thread-1");
@@ -263,13 +265,36 @@ describe("conversation store", () => {
       snapshotsByThreadId: { "thread-1": snapshot },
       capabilitiesByEnvironmentId: { "env-1": capabilitiesFixture },
       hydrationByThreadId: { "thread-1": "error" },
-      errorByThreadId: { "thread-1": "runtime unavailable" },
+      runtimeHydrationByThreadId: { "thread-1": "ready" },
+      errorByThreadId: { "thread-1": null },
     }));
 
     await useConversationStore.getState().openThread("thread-1");
 
     expect(mockedBridge.openThreadConversation).not.toHaveBeenCalled();
     expect(useConversationStore.getState().hydrationByThreadId["thread-1"]).toBe("ready");
+    expect(useConversationStore.getState().errorByThreadId["thread-1"]).toBeNull();
+  });
+
+  it("retries runtime hydration instead of restoring a cached runtime error", async () => {
+    const snapshot = makeConversationSnapshot();
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot,
+      capabilities: capabilitiesFixture,
+    });
+    useConversationStore.setState((state) => ({
+      ...state,
+      snapshotsByThreadId: { "thread-1": snapshot },
+      capabilitiesByEnvironmentId: { "env-1": capabilitiesFixture },
+      hydrationByThreadId: { "thread-1": "ready" },
+      runtimeHydrationByThreadId: { "thread-1": "error" },
+      errorByThreadId: { "thread-1": "runtime unavailable" },
+    }));
+
+    await useConversationStore.getState().openThread("thread-1");
+
+    expect(mockedBridge.openThreadConversation).toHaveBeenCalledWith("thread-1");
+    expect(useConversationStore.getState().runtimeHydrationByThreadId["thread-1"]).toBe("ready");
     expect(useConversationStore.getState().errorByThreadId["thread-1"]).toBeNull();
   });
 

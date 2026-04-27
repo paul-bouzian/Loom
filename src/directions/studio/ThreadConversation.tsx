@@ -273,7 +273,8 @@ export function ThreadConversation({
   );
   const resolvedComposer = composer ?? snapshot?.composer ?? fallbackComposer;
   const approveComposer = snapshot ? resolvedComposer : null;
-  const isConnectionError = hydration === "error";
+  const isConnectionError =
+    hydration === "error" || runtimeHydration === "error";
   const transportReady = runtimeHydration === "ready";
 
   useEffect(() => {

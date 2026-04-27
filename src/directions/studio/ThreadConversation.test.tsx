@@ -212,6 +212,9 @@ describe("ThreadConversation", () => {
         snapshot: makeConversationSnapshot(),
         capabilities: capabilitiesFixture,
       });
+    mockedBridge.refreshThreadConversation.mockResolvedValue(
+      makeConversationSnapshot(),
+    );
 
     render(
       <ThreadConversation
@@ -229,6 +232,36 @@ describe("ThreadConversation", () => {
       expect(mockedBridge.openThreadConversation).toHaveBeenCalledTimes(2);
     });
     expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
+  });
+
+  it("offers reconnect when runtime hydration fails after rendering a local snapshot", async () => {
+    mockedBridge.getThreadConversationSnapshot.mockResolvedValue(
+      makeConversationSnapshot(),
+    );
+    mockedBridge.openThreadConversation
+      .mockRejectedValueOnce(new Error("runtime unavailable"))
+      .mockResolvedValueOnce({
+        snapshot: makeConversationSnapshot(),
+        capabilities: capabilitiesFixture,
+      });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(await screen.findByText("Inspect the repository")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Reconnect" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      expect(mockedBridge.refreshThreadConversation).toHaveBeenCalledWith(
+        "thread-1",
+      );
+    });
   });
 
   it("touches the runtime as soon as the transport becomes ready", async () => {

@@ -180,6 +180,39 @@ describe("workspace store", () => {
     expect(state.selectedThreadId).toBeNull();
   });
 
+  it("keeps project scope panes stable when no active thread exists", () => {
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      snapshot: makeWorkspaceSnapshot({
+        projects: [
+          makeProject({
+            id: "project-empty",
+            environments: [
+              makeEnvironment({
+                id: "env-empty",
+                projectId: "project-empty",
+                threads: [],
+              }),
+            ],
+          }),
+        ],
+      }),
+    }));
+
+    useWorkspaceStore.getState().selectProject("project-empty");
+
+    const state = useWorkspaceStore.getState();
+    expect(state.layout.slots.topLeft).toEqual({
+      projectId: "project-empty",
+      environmentId: "env-empty",
+      threadId: null,
+    });
+    expect(state.draftBySlot.topLeft).toBeUndefined();
+    expect(state.selectedProjectId).toBe("project-empty");
+    expect(state.selectedEnvironmentId).toBe("env-empty");
+    expect(state.selectedThreadId).toBeNull();
+  });
+
   it("closes panes whose selected worktree disappears on refresh", async () => {
     useTerminalStore.setState({
       knownEnvironmentIds: ["env-local", "env-worktree"],

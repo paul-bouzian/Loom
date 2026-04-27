@@ -356,6 +356,7 @@ impl AppDatabase {
             }
             7 => {}
             8 => {}
+            9 => {}
             CURRENT_SCHEMA_VERSION => {}
             other => {
                 return Err(AppError::Runtime(format!(
@@ -1284,6 +1285,96 @@ mod tests {
 
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
         assert_eq!(draft_thread_states_exists, "draft_thread_states");
+
+        drop(connection);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrate_v9_adds_conversation_snapshots_table() {
+        let root = std::env::temp_dir().join(format!("skein-db-test-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("test directory should exist");
+        let db_path = root.join("skein.sqlite3");
+        let connection = Connection::open(&db_path).expect("db should open");
+        connection
+            .execute_batch(
+                "
+                BEGIN;
+                CREATE TABLE projects (
+                  id TEXT PRIMARY KEY,
+                  kind TEXT NOT NULL DEFAULT 'repository',
+                  name TEXT NOT NULL,
+                  root_path TEXT NOT NULL UNIQUE,
+                  managed_worktree_dir TEXT,
+                  settings_json TEXT NOT NULL DEFAULT '{}',
+                  sort_order INTEGER NOT NULL DEFAULT 0,
+                  sidebar_collapsed INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  archived_at TEXT
+                );
+                CREATE TABLE environments (
+                  id TEXT PRIMARY KEY,
+                  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                  name TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  path TEXT NOT NULL UNIQUE,
+                  git_branch TEXT,
+                  base_branch TEXT,
+                  is_default INTEGER NOT NULL DEFAULT 0,
+                  sort_order INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                );
+                CREATE TABLE threads (
+                  id TEXT PRIMARY KEY,
+                  environment_id TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+                  title TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  codex_thread_id TEXT,
+                  provider TEXT NOT NULL DEFAULT 'codex',
+                  provider_thread_id TEXT,
+                  handoff_json TEXT,
+                  overrides_json TEXT NOT NULL,
+                  composer_draft_json TEXT,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  archived_at TEXT
+                );
+                CREATE TABLE conversation_items (
+                  id TEXT NOT NULL,
+                  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                  turn_id TEXT,
+                  payload_json TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  PRIMARY KEY (thread_id, id)
+                );
+                PRAGMA user_version = 9;
+                COMMIT;
+                ",
+            )
+            .expect("v9 schema should be created");
+        drop(connection);
+
+        let database = AppDatabase::for_test(db_path.clone()).expect("migration should succeed");
+        let connection = database.open().expect("db should reopen");
+        let version: i32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("schema version should be readable");
+        let snapshots_exists: String = connection
+            .query_row(
+                "
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'conversation_snapshots'
+                ",
+                [],
+                |row| row.get(0),
+            )
+            .expect("conversation_snapshots table should exist");
+
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(snapshots_exists, "conversation_snapshots");
 
         drop(connection);
         let _ = std::fs::remove_dir_all(root);

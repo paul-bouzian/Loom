@@ -915,28 +915,19 @@ function restoreHydratedThreadIfPresent(
     return false;
   }
 
-  if (
-    state.hydrationByThreadId[threadId] !== "ready" ||
-    state.runtimeHydrationByThreadId[threadId] !== "ready" ||
-    state.errorByThreadId[threadId] !== null
-  ) {
+  if (state.hydrationByThreadId[threadId] !== "ready") {
     set((currentState) => ({
       hydrationByThreadId: {
         ...currentState.hydrationByThreadId,
         [threadId]: "ready",
       },
-      runtimeHydrationByThreadId: {
-        ...currentState.runtimeHydrationByThreadId,
-        [threadId]: "ready",
-      },
-      errorByThreadId: {
-        ...currentState.errorByThreadId,
-        [threadId]: null,
-      },
     }));
   }
 
-  return true;
+  return (
+    state.runtimeHydrationByThreadId[threadId] === "ready" &&
+    (state.errorByThreadId[threadId] ?? null) === null
+  );
 }
 
 function enqueueProjectionBackfill(snapshot: WorkspaceSnapshot | null) {
