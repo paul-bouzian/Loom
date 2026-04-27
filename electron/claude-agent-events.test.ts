@@ -554,6 +554,46 @@ describe("Claude event normalizer", () => {
     ]);
   });
 
+  it("emits empty taskPlanUpdated when TodoWrite clears todos", () => {
+    const normalizer = createClaudeEventNormalizer("turn-1");
+
+    normalizer.processStreamMessage({
+      event: {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_todo",
+          name: "TodoWrite",
+          input: {
+            todos: [{ content: "Step A", status: "pending" }],
+          },
+        },
+      },
+    });
+
+    expect(
+      normalizer.processStreamMessage({
+        event: {
+          type: "content_block_start",
+          index: 1,
+          content_block: {
+            type: "tool_use",
+            id: "toolu_todo_clear",
+            name: "TodoWrite",
+            input: { todos: [] },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "taskPlanUpdated",
+        itemId: "toolu_todo_clear",
+        steps: [],
+      },
+    ]);
+  });
+
   it("streams taskPlanUpdated as the TodoWrite input becomes parseable", () => {
     const normalizer = createClaudeEventNormalizer("turn-1");
 

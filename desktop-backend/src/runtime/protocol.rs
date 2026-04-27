@@ -2533,7 +2533,7 @@ fn is_agent_path(value: &str) -> bool {
 }
 
 fn thread_spawn_source(source: &Value) -> Option<ThreadSpawnSourceWire> {
-    let subagent = source.get("subAgent")?;
+    let subagent = source.get("subAgent").or_else(|| source.get("sub_agent"))?;
     let thread_spawn = subagent
         .get("thread_spawn")
         .or_else(|| subagent.get("threadSpawn"))?;
@@ -2552,7 +2552,7 @@ pub(crate) fn subagent_status_from_thread_status(status: &ThreadStatusWire) -> S
 fn subagent_status_from_collab_state(status: &str) -> SubagentStatus {
     match status {
         "pendingInit" | "running" => SubagentStatus::Running,
-        "errored" | "notFound" => SubagentStatus::Failed,
+        "error" | "errored" | "failed" | "failure" | "notFound" => SubagentStatus::Failed,
         "interrupted" | "shutdown" | "completed" => SubagentStatus::Completed,
         _ => SubagentStatus::Completed,
     }

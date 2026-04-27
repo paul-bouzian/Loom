@@ -534,6 +534,35 @@ fn discovers_loaded_subagents_from_camel_case_spawn_fields() {
 }
 
 #[test]
+fn discovers_loaded_subagents_from_snake_case_spawn_source() {
+    let subagents = loaded_subagents_for_primary(
+        "thr-parent",
+        &["thr-child".to_string()],
+        vec![ThreadListEntryWire {
+            id: "thr-child".to_string(),
+            agent_nickname: None,
+            agent_role: Some("explorer".to_string()),
+            source: json!({
+                "sub_agent": {
+                    "thread_spawn": {
+                        "parent_thread_id": "thr-parent",
+                        "depth": 1,
+                        "agent_path": "/root/cirrus",
+                        "agent_role": "explorer"
+                    }
+                }
+            }),
+            status: ThreadStatusWire {
+                kind: "active".to_string(),
+            },
+        }],
+    );
+
+    assert_eq!(subagents.len(), 1);
+    assert_eq!(subagents[0].nickname.as_deref(), Some("cirrus"));
+}
+
+#[test]
 fn extracts_subagents_from_collab_agent_tool_items() {
     let subagents = subagents_from_collab_item(&json!({
         "id": "collab-1",
@@ -558,6 +587,27 @@ fn extracts_subagents_from_collab_agent_tool_items() {
     assert_eq!(
         subagents[1].status,
         crate::domain::conversation::SubagentStatus::Completed
+    );
+}
+
+#[test]
+fn maps_failed_collab_agent_state_to_failed_subagent_status() {
+    let subagents = subagents_from_collab_item(&json!({
+        "id": "collab-1",
+        "type": "collabAgentToolCall",
+        "tool": "spawnAgent",
+        "status": "completed",
+        "senderThreadId": "thr-parent",
+        "receiverThreadIds": ["thr-child"],
+        "agentsStates": {
+            "thr-child": { "status": "failed" }
+        }
+    }));
+
+    assert_eq!(subagents.len(), 1);
+    assert_eq!(
+        subagents[0].status,
+        crate::domain::conversation::SubagentStatus::Failed
     );
 }
 

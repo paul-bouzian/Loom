@@ -2413,6 +2413,77 @@ async fn thread_status_changed_updates_live_subagent_status_without_clearing_pan
 }
 
 #[tokio::test]
+async fn late_subagent_start_after_turn_completion_does_not_resurrect_active_state() {
+    let (session, harness) = FakeCodexHarness::new().await;
+
+    session
+        .send_message(
+            context(
+                "thread-local-7late",
+                None,
+                CollaborationMode::Build,
+                ApprovalPolicy::AskToEdit,
+            ),
+            "Spawn a helper".to_string(),
+            Vec::new(),
+        )
+        .await
+        .expect("message should send");
+
+    harness
+        .emit_notification(
+            "turn/completed",
+            json!({
+                "threadId": "thr-new",
+                "turn": {
+                    "id": "turn-live-1",
+                    "status": "completed",
+                    "error": null
+                }
+            }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    harness
+        .emit_notification(
+            "thread/started",
+            json!({
+                "thread": {
+                    "id": "subagent-late",
+                    "status": { "type": "active" },
+                    "source": {
+                        "subAgent": {
+                            "threadSpawn": {
+                                "parentThreadId": "thr-new",
+                                "depth": 1,
+                                "agentPath": "/root/late",
+                                "agentRole": "worker"
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let snapshot = session
+        .open_thread(context(
+            "thread-local-7late",
+            Some("thr-new"),
+            CollaborationMode::Build,
+            ApprovalPolicy::AskToEdit,
+        ))
+        .await
+        .expect("snapshot should reopen")
+        .snapshot;
+
+    assert!(snapshot.active_turn_id.is_none());
+    assert!(snapshot.subagents.is_empty());
+}
+
+#[tokio::test]
 async fn collab_agent_metadata_names_subagents_in_open_snapshot() {
     let (session, harness) = FakeCodexHarness::new().await;
 

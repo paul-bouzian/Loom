@@ -3018,8 +3018,10 @@ async fn record_subagent_thread_started(
                 .snapshots_by_thread
                 .get_mut(&local_parent_thread_id)
             {
-                apply_subagent_updates(snapshot, vec![subagent_start.snapshot.clone()]);
-                updated_snapshots.push(snapshot.clone());
+                if can_accept_late_subagent_update(snapshot) {
+                    apply_subagent_updates(snapshot, vec![subagent_start.snapshot.clone()]);
+                    updated_snapshots.push(snapshot.clone());
+                }
             }
         }
 
@@ -3099,10 +3101,11 @@ async fn update_subagent_thread_status(
                 .snapshots_by_thread
                 .get_mut(&local_parent_thread_id)
             {
-                if !snapshot
-                    .subagents
-                    .iter()
-                    .any(|subagent| subagent.thread_id == thread_id)
+                if can_accept_late_subagent_update(snapshot)
+                    && !snapshot
+                        .subagents
+                        .iter()
+                        .any(|subagent| subagent.thread_id == thread_id)
                 {
                     let subagent = crate::domain::conversation::SubagentThreadSnapshot {
                         thread_id: thread_id.to_string(),
@@ -3134,6 +3137,15 @@ async fn update_subagent_thread_status(
     for snapshot in updated_snapshots {
         emit_snapshot_from_handle(events, snapshot);
     }
+}
+
+fn can_accept_late_subagent_update(snapshot: &ThreadConversationSnapshot) -> bool {
+    snapshot.active_turn_id.is_some()
+        || matches!(
+            snapshot.status,
+            crate::domain::conversation::ConversationStatus::Running
+                | crate::domain::conversation::ConversationStatus::WaitingForExternalAction
+        )
 }
 
 async fn close_subagent_thread(

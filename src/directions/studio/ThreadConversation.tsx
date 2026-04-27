@@ -193,8 +193,7 @@ export function ThreadConversation({
     }
 
     const hasUnnamedSubagent = snapshot.subagents.some(
-      (subagent) =>
-        !subagent.nickname && !subagent.role,
+      (subagent) => !subagent.nickname,
     );
     const hasRunningSubagent = snapshot.subagents.some(
       (subagent) => subagent.status === "running",
@@ -202,7 +201,7 @@ export function ThreadConversation({
     const shouldPollSubagents = hasRunningSubagent || hasUnnamedSubagent;
     const hydrationKey = hasUnnamedSubagent
       ? snapshot.subagents
-          .filter((subagent) => !subagent.nickname && !subagent.role)
+          .filter((subagent) => !subagent.nickname)
           .map((subagent) => subagent.threadId)
           .join("|")
       : null;

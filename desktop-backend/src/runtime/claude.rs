@@ -2034,6 +2034,13 @@ fn apply_claude_task_plan(
     steps: Vec<ClaudeTaskStep>,
 ) {
     if steps.is_empty() {
+        if snapshot
+            .task_plan
+            .as_ref()
+            .is_some_and(|plan| plan.turn_id == turn_id)
+        {
+            snapshot.task_plan = None;
+        }
         return;
     }
     let mapped: Vec<ProposedPlanStep> = steps
@@ -2659,6 +2666,35 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                         && message.is_streaming
             )
         }));
+    }
+
+    #[test]
+    fn empty_claude_task_plan_update_clears_current_turn_plan() {
+        let mut snapshot = snapshot();
+        snapshot.active_turn_id = Some("turn-1".to_string());
+
+        apply_claude_event(
+            &mut snapshot,
+            "turn-1",
+            ClaudeRuntimeEvent::TaskPlanUpdated {
+                item_id: "todo-1".to_string(),
+                steps: vec![ClaudeTaskStep {
+                    content: "Inspect runtime".to_string(),
+                    status: ProposedPlanStepStatus::InProgress,
+                }],
+            },
+        );
+        assert!(snapshot.task_plan.is_some());
+
+        apply_claude_event(
+            &mut snapshot,
+            "turn-1",
+            ClaudeRuntimeEvent::TaskPlanUpdated {
+                item_id: "todo-1".to_string(),
+                steps: Vec::new(),
+            },
+        );
+        assert!(snapshot.task_plan.is_none());
     }
 
     #[test]

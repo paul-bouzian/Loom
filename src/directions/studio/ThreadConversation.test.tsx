@@ -2276,6 +2276,80 @@ describe("ThreadConversation", () => {
     expect(screen.queryByText("Codex is still shaping the plan…")).toBeNull();
   });
 
+  it("renders markdown-only task progress while waiting for external action", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "waitingForExternalAction",
+        activeTurnId: null,
+        composer: { ...baseComposer, collaborationMode: "build" },
+        taskPlan: makeTaskPlan({
+          turnId: "turn-live-1",
+          steps: [],
+          explanation: "Codex is waiting for approval before continuing.",
+          markdown: "## Tasks\n\n- Inspect runtime",
+          status: "running",
+        }),
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Codex is waiting for approval before continuing."),
+    ).toBeInTheDocument();
+  });
+
+  it("refreshes subagent metadata when a nickname is missing even if role exists", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        status: "running",
+        activeTurnId: "turn-live-1",
+        subagents: [
+          makeSubagent({
+            threadId: "subagent-role-only",
+            nickname: null,
+            role: "worker",
+            status: "running",
+          }),
+        ],
+      }),
+      capabilities: capabilitiesFixture,
+    });
+    mockedBridge.refreshThreadConversation.mockResolvedValue(
+      makeConversationSnapshot({
+        status: "running",
+        activeTurnId: "turn-live-1",
+        subagents: [
+          makeSubagent({
+            threadId: "subagent-role-only",
+            nickname: "Cirrus",
+            role: "worker",
+            status: "running",
+          }),
+        ],
+      }),
+    );
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockedBridge.refreshThreadConversation).toHaveBeenCalledWith(
+        "thread-1",
+      );
+    });
+  });
+
   it("hides the first-turn empty state when a task tracker is the only visible output", async () => {
     setCompactWorkActivity(false);
     mockedBridge.openThreadConversation.mockResolvedValue({

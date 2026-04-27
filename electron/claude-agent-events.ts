@@ -634,7 +634,6 @@ function emitTodoWritePlanIfChanged(
   input: Record<string, unknown>,
 ): ClaudeEvent[] {
   const steps = stepsFromTodoWriteInput(input);
-  if (steps.length === 0) return [];
   const fingerprint = compactJson(steps);
   if (!fingerprint) return [];
   if (state.todoWriteFingerprints.get(itemId) === fingerprint) return [];

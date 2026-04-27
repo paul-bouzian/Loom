@@ -115,9 +115,17 @@
   width: 9px;
   height: 9px;
   border-radius: 999px;
-  border: 1.5px solid currentColor;
+  border: 1.5px solid currentcolor;
   border-right-color: transparent;
   animation: tx-spin 0.85s linear infinite;
+}
+
+.tx-active-tasks__summary {
+  margin: 0;
+  padding: 0 var(--tx-space-xs);
+  color: var(--tx-text-secondary);
+  font-size: var(--tx-text-sm);
+  line-height: 1.45;
 }
 
 @media (prefers-reduced-motion: reduce) {

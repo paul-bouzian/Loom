@@ -26,13 +26,17 @@ export function ConversationActiveTasksPanel({
   const [agentsExpanded, setAgentsExpanded] = useState(true);
 
   const isWorking =
-    activeTurnId !== null &&
-    (status === "running" || status === "waitingForExternalAction");
-  const steps = taskPlan?.steps ?? [];
+    status === "running" || status === "waitingForExternalAction";
+  const hasActiveTaskPlan =
+    taskPlan?.status === "running" &&
+    (activeTurnId === null || taskPlan.turnId === activeTurnId);
+  const steps = hasActiveTaskPlan ? taskPlan.steps : [];
+  const fallbackTaskText = hasActiveTaskPlan ? taskPlanFallbackText(taskPlan) : null;
   const hasTasks = steps.length > 0;
+  const hasTaskContent = hasTasks || fallbackTaskText !== null;
   const hasSubagents = subagents.length > 0;
 
-  if (!isWorking || (!hasTasks && !hasSubagents)) {
+  if (!isWorking || (!hasTaskContent && !hasSubagents)) {
     return null;
   }
 
@@ -78,6 +82,8 @@ export function ConversationActiveTasksPanel({
                 </li>
               ))}
             </ol>
+          ) : fallbackTaskText ? (
+            <p className="tx-active-tasks__summary">{fallbackTaskText}</p>
           ) : null}
           {hasSubagents ? (
             <BackgroundAgentsSection
@@ -90,6 +96,13 @@ export function ConversationActiveTasksPanel({
       ) : null}
     </aside>
   );
+}
+
+function taskPlanFallbackText(taskPlan: ConversationTaskSnapshot) {
+  const explanation = taskPlan.explanation.trim();
+  if (explanation) return explanation;
+  const markdown = taskPlan.markdown.trim();
+  return markdown || null;
 }
 
 function StepMarker({
