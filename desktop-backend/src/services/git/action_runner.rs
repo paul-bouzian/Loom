@@ -24,6 +24,7 @@ pub fn run_action(
     let mut push_result = None;
     let mut pull_result = None;
     let mut pr_result = None;
+    let mut action_error = None;
 
     match action {
         GitAction::Pull => {
@@ -64,7 +65,10 @@ pub fn run_action(
                     push(repo_root)?;
                     push_result = Some(push_result_snapshot(repo_root)?);
                 }
-                pr_result = Some(create_pull_request(context, repo_root, None)?);
+                match create_pull_request(context, repo_root, None) {
+                    Ok(pr) => pr_result = Some(pr),
+                    Err(error) => action_error = Some(error.to_string()),
+                }
             }
         }
         GitAction::CommitPushCreatePr => {
@@ -79,11 +83,10 @@ pub fn run_action(
                     push(repo_root)?;
                     push_result = Some(push_result_snapshot(repo_root)?);
                 }
-                pr_result = Some(create_pull_request(
-                    context,
-                    repo_root,
-                    commit_result.as_ref(),
-                )?);
+                match create_pull_request(context, repo_root, commit_result.as_ref()) {
+                    Ok(pr) => pr_result = Some(pr),
+                    Err(error) => action_error = Some(error.to_string()),
+                }
             }
         }
     }
@@ -97,6 +100,7 @@ pub fn run_action(
         push: push_result,
         pull: pull_result,
         pr: pr_result,
+        error: action_error,
     })
 }
 
@@ -158,7 +162,7 @@ fn validate_can_create_pr(context: &GitEnvironmentContext, repo_root: &Path) -> 
                 "No base branch is available for creating a pull request.".to_string(),
             )
         })?;
-    let base_branch = short_branch_name(&base);
+    let base_branch = short_branch_name(repo_root, &base);
     if branch == base_branch || branch == base {
         return Err(AppError::Validation(format!(
             "Cannot create a pull request from '{branch}' into itself."
@@ -167,7 +171,7 @@ fn validate_can_create_pr(context: &GitEnvironmentContext, repo_root: &Path) -> 
     Ok(())
 }
 
-fn short_branch_name(reference: &str) -> String {
+fn short_branch_name(repo_root: &Path, reference: &str) -> String {
     let trimmed = reference.trim();
     if let Some(remote_reference) = trimmed.strip_prefix("refs/remotes/") {
         return remote_reference
@@ -177,10 +181,19 @@ fn short_branch_name(reference: &str) -> String {
             .to_string();
     }
 
-    trimmed
-        .strip_prefix("origin/")
-        .unwrap_or(trimmed)
-        .to_string()
+    if let Ok(remotes) = read_command_stdout(repo_root, ["remote"]) {
+        for remote in remotes
+            .lines()
+            .map(str::trim)
+            .filter(|remote| !remote.is_empty())
+        {
+            if let Some(branch) = trimmed.strip_prefix(&format!("{remote}/")) {
+                return branch.to_string();
+            }
+        }
+    }
+
+    trimmed.to_string()
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -239,7 +252,7 @@ fn create_pull_request(
                 "No base branch is available for creating a pull request.".to_string(),
             )
         })?;
-    let base_branch = short_branch_name(&base);
+    let base_branch = short_branch_name(repo_root, &base);
     let title = commit_result
         .map(|commit| commit.subject.clone())
         .or_else(|| run_git_for_output(repo_root, ["log", "-1", "--pretty=%s"]).ok())
@@ -403,7 +416,7 @@ mod tests {
     use crate::error::AppResult;
     use crate::services::git::GitEnvironmentContext;
 
-    use super::run_action;
+    use super::{run_action, short_branch_name};
 
     #[test]
     fn run_action_commit_rejects_empty_work_tree() -> AppResult<()> {
@@ -429,6 +442,23 @@ mod tests {
 
         assert!(error.to_string().contains("Commit local changes"));
         assert!(repo.stdout(["rev-parse", "--verify", "HEAD"]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn short_branch_name_strips_configured_remote_prefixes() -> AppResult<()> {
+        let repo = TestRepo::new()?;
+        repo.run(["remote", "add", "upstream", "https://example.com/repo.git"])?;
+
+        assert_eq!(short_branch_name(&repo.path, "upstream/main"), "main");
+        assert_eq!(
+            short_branch_name(&repo.path, "refs/remotes/upstream/main"),
+            "main"
+        );
+        assert_eq!(
+            short_branch_name(&repo.path, "feature/main"),
+            "feature/main"
+        );
         Ok(())
     }
 

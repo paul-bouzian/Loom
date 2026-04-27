@@ -388,6 +388,7 @@ async function runGitActionMutation(
     action,
     operation: (scope) => bridge.runGitAction({ environmentId, scope, action }),
     snapshotFromResult: (result) => result.snapshot,
+    errorFromResult: (result) => result.error ?? null,
     successFromResult: (result) => result,
     failureResult: null,
     set,
@@ -400,6 +401,7 @@ async function runSnapshotMutation<TResult, TReturn>({
   action,
   operation,
   snapshotFromResult,
+  errorFromResult,
   successFromResult,
   failureResult,
   set,
@@ -409,6 +411,7 @@ async function runSnapshotMutation<TResult, TReturn>({
   action: string;
   operation: (scope: GitReviewScope) => Promise<TResult>;
   snapshotFromResult: (result: TResult) => GitReviewSnapshot;
+  errorFromResult?: (result: TResult) => string | null;
   successFromResult: (result: TResult) => TReturn;
   failureResult: TReturn;
   set: GitReviewSetter;
@@ -435,10 +438,25 @@ async function runSnapshotMutation<TResult, TReturn>({
   try {
     const result = await operation(scope);
     await applySnapshot(snapshotFromResult(result), contextKey, requestId, set, get);
+    const resultError = errorFromResult?.(result) ?? null;
+    if (resultError && get().reviewRequestIdByContext[contextKey] === requestId) {
+      set((state) => ({
+        errorByContext: {
+          ...state.errorByContext,
+          [contextKey]: resultError,
+        },
+      }));
+    }
     return successFromResult(result);
   } catch (cause: unknown) {
     const message =
       cause instanceof Error ? cause.message : "Git action failed";
+    try {
+      const snapshot = await bridge.getGitReviewSnapshot({ environmentId, scope });
+      await applySnapshot(snapshot, contextKey, requestId, set, get);
+    } catch {
+      // Preserve the original action error if the follow-up refresh also fails.
+    }
     set((state) => ({
       ...(state.reviewRequestIdByContext[contextKey] === requestId
         ? {

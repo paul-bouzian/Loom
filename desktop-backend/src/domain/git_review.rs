@@ -168,4 +168,5 @@ pub struct GitActionResult {
     pub push: Option<GitActionPushResult>,
     pub pull: Option<GitActionPullResult>,
     pub pr: Option<GitActionPullRequestResult>,
+    pub error: Option<String>,
 }

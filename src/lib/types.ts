@@ -546,6 +546,7 @@ export type GitActionResult = {
   push?: GitActionPushResult | null;
   pull?: GitActionPullResult | null;
   pr?: GitActionPullRequestResult | null;
+  error?: string | null;
 };
 
 /* ── Bootstrap ── */

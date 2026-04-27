@@ -8,8 +8,8 @@ use crate::domain::git_review::{
 use crate::error::{AppError, AppResult};
 
 use super::{
-    command_output, current_branch, resolve_base_reference, stderr_message, stdout_message,
-    upstream_branch, GitEnvironmentContext,
+    command_output, current_branch, resolve_base_reference, stderr_message, upstream_branch,
+    GitEnvironmentContext,
 };
 
 pub(super) fn read_review_snapshot(
@@ -206,6 +206,7 @@ fn read_branch_sections(
             "diff",
             "--name-status",
             "--find-renames=50%",
+            "-z",
             &format!("{base_branch}...HEAD"),
         ],
     )?;
@@ -222,9 +223,8 @@ fn read_branch_sections(
             format!("{base_branch}...HEAD"),
         ],
     )?;
-    let mut files = stdout_message(&output.stdout)
-        .lines()
-        .filter_map(parse_branch_name_status_line)
+    let mut files = parse_branch_name_status_output(&output.stdout)
+        .into_iter()
         .map(|mut file| {
             let stats = stats_by_path.get(&file.path).copied();
             apply_stats(&mut file, stats);
@@ -247,11 +247,52 @@ fn compact_sections(sections: Vec<GitChangeSectionSnapshot>) -> Vec<GitChangeSec
         .collect()
 }
 
+fn parse_branch_name_status_output(output: &[u8]) -> Vec<GitFileChange> {
+    let mut files = Vec::new();
+    let mut records = output.split(|byte| *byte == 0);
+
+    while let Some(status_record) = records.next() {
+        if status_record.is_empty() {
+            continue;
+        }
+        let status = String::from_utf8_lossy(status_record);
+        let Some(first_path) = records
+            .next()
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).to_string())
+        else {
+            continue;
+        };
+        let kind = parse_diff_status(&status);
+        let second_path = if matches!(kind, GitChangeKind::Renamed | GitChangeKind::Copied) {
+            records
+                .next()
+                .filter(|path| !path.is_empty())
+                .map(|path| String::from_utf8_lossy(path).to_string())
+        } else {
+            None
+        };
+
+        files.push(make_branch_change(&status, first_path, second_path));
+    }
+
+    files
+}
+
+#[cfg(test)]
 fn parse_branch_name_status_line(line: &str) -> Option<GitFileChange> {
     let mut parts = line.split('\t');
     let status = parts.next()?;
     let first_path = parts.next()?.to_string();
     let second_path = parts.next().map(ToString::to_string);
+    Some(make_branch_change(status, first_path, second_path))
+}
+
+fn make_branch_change(
+    status: &str,
+    first_path: String,
+    second_path: Option<String>,
+) -> GitFileChange {
     let kind = parse_diff_status(status);
     let (path, old_path) = if matches!(kind, GitChangeKind::Renamed | GitChangeKind::Copied) {
         (second_path.unwrap_or(first_path.clone()), Some(first_path))
@@ -259,13 +300,7 @@ fn parse_branch_name_status_line(line: &str) -> Option<GitFileChange> {
         (first_path, second_path)
     };
 
-    Some(make_change(
-        path,
-        old_path,
-        GitChangeSection::Branch,
-        kind,
-        None,
-    ))
+    make_change(path, old_path, GitChangeSection::Branch, kind, None)
 }
 
 fn make_change(
@@ -333,25 +368,23 @@ fn parse_numstat_output(output: &[u8]) -> HashMap<String, ChangeStats> {
         }
 
         let line = String::from_utf8_lossy(record);
-        if line.ends_with('\t') {
-            let Some((stats_value, _)) = parse_numstat_record_prefix(&line) else {
-                continue;
-            };
+        let Some((stats_value, path)) = parse_numstat_record_prefix(&line) else {
+            continue;
+        };
+        if path.is_empty() {
             let _old_path = records.next();
             if let Some(new_path) = records.next().filter(|path| !path.is_empty()) {
                 stats.insert(String::from_utf8_lossy(new_path).to_string(), stats_value);
             }
             continue;
         }
-
-        if let Some((path, stats_value)) = parse_numstat_line(&line) {
-            stats.insert(path, stats_value);
-        }
+        stats.insert(normalize_numstat_path(path), stats_value);
     }
 
     stats
 }
 
+#[cfg(test)]
 fn parse_numstat_line(line: &str) -> Option<(String, ChangeStats)> {
     let (stats, path) = parse_numstat_record_prefix(line)?;
     Some((normalize_numstat_path(path), stats))
@@ -555,8 +588,8 @@ struct ParsedStatusEntry {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_numstat_path, parse_branch_name_status_line, parse_numstat_line,
-        parse_numstat_output, parse_xy,
+        normalize_numstat_path, parse_branch_name_status_line, parse_branch_name_status_output,
+        parse_numstat_line, parse_numstat_output, parse_xy,
     };
     use crate::domain::git_review::GitChangeKind;
 
@@ -572,6 +605,25 @@ mod tests {
         assert_eq!(change.path, "src/new.ts");
         assert_eq!(change.old_path.as_deref(), Some("src/old.ts"));
         assert_eq!(change.kind, GitChangeKind::Renamed);
+    }
+
+    #[test]
+    fn parses_nul_delimited_branch_name_status_records() {
+        let changes = parse_branch_name_status_output(b"A\0src/file \"quoted\".ts\0");
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "src/file \"quoted\".ts");
+        assert_eq!(changes[0].kind, GitChangeKind::Added);
+    }
+
+    #[test]
+    fn parses_nul_delimited_branch_renames_to_the_new_path() {
+        let changes = parse_branch_name_status_output(b"R100\0src/old name.ts\0src/new name.ts\0");
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "src/new name.ts");
+        assert_eq!(changes[0].old_path.as_deref(), Some("src/old name.ts"));
+        assert_eq!(changes[0].kind, GitChangeKind::Renamed);
     }
 
     #[test]
@@ -614,5 +666,13 @@ mod tests {
         assert_eq!(stats["src/new name.ts"].additions, 5);
         assert_eq!(stats["src/new name.ts"].deletions, 2);
         assert!(!stats.contains_key("src/old name.ts"));
+    }
+
+    #[test]
+    fn parses_nul_delimited_numstat_paths_ending_with_tab() {
+        let stats = parse_numstat_output(b"1\t2\tsrc/name\t\0");
+
+        assert_eq!(stats["src/name\t"].additions, 1);
+        assert_eq!(stats["src/name\t"].deletions, 2);
     }
 }

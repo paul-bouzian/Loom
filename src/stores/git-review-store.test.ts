@@ -17,6 +17,7 @@ vi.mock("../lib/bridge", () => ({
   fetchGit: vi.fn(),
   pullGit: vi.fn(),
   pushGit: vi.fn(),
+  runGitAction: vi.fn(),
   generateGitCommitMessage: vi.fn(),
 }));
 
@@ -195,6 +196,7 @@ describe("git-review-store", () => {
 
   it("keeps the commit message when commit fails", async () => {
     mockedBridge.commitGit.mockRejectedValue(new Error("push rejected"));
+    mockedBridge.getGitReviewSnapshot.mockRejectedValue(new Error("refresh rejected"));
     useGitReviewStore.setState({
       scopeByEnvironmentId: { "env-1": "uncommitted" },
       commitMessageByEnvironmentId: { "env-1": "feat: keep me" },
@@ -204,6 +206,68 @@ describe("git-review-store", () => {
 
     const state = useGitReviewStore.getState();
     expect(state.commitMessageByEnvironmentId["env-1"]).toBe("feat: keep me");
+    expect(state.errorByContext["env-1:uncommitted"]).toBe("push rejected");
+  });
+
+  it("applies returned snapshots when stacked git actions report structured errors", async () => {
+    mockedBridge.runGitAction.mockResolvedValue({
+      environmentId: "env-1",
+      action: "commitPushCreatePr",
+      snapshot: makeGitReviewSnapshot({
+        summary: {
+          environmentId: "env-1",
+          repoPath: "/tmp/env-1",
+          branch: "feature/review",
+          baseBranch: "origin/main",
+          dirty: false,
+          ahead: 1,
+          behind: 0,
+          hasStagedChanges: false,
+          hasUnstagedChanges: false,
+          hasUntrackedChanges: false,
+        },
+      }),
+      commit: null,
+      push: { branch: "feature/review", upstreamBranch: "origin/feature/review" },
+      pull: null,
+      pr: null,
+      error: "gh pr create failed",
+    });
+
+    await useGitReviewStore.getState().runAction("env-1", "commitPushCreatePr");
+
+    const state = useGitReviewStore.getState();
+    expect(state.snapshotsByContext["env-1:uncommitted"].summary.ahead).toBe(1);
+    expect(state.errorByContext["env-1:uncommitted"]).toBe("gh pr create failed");
+  });
+
+  it("refreshes the review snapshot when a git action throws", async () => {
+    mockedBridge.runGitAction.mockRejectedValue(new Error("push rejected"));
+    mockedBridge.getGitReviewSnapshot.mockResolvedValue(
+      makeGitReviewSnapshot({
+        summary: {
+          environmentId: "env-1",
+          repoPath: "/tmp/env-1",
+          branch: "feature/review",
+          baseBranch: "origin/main",
+          dirty: false,
+          ahead: 1,
+          behind: 0,
+          hasStagedChanges: false,
+          hasUnstagedChanges: false,
+          hasUntrackedChanges: false,
+        },
+      }),
+    );
+
+    await useGitReviewStore.getState().runAction("env-1", "push");
+
+    const state = useGitReviewStore.getState();
+    expect(mockedBridge.getGitReviewSnapshot).toHaveBeenCalledWith({
+      environmentId: "env-1",
+      scope: "uncommitted",
+    });
+    expect(state.snapshotsByContext["env-1:uncommitted"].summary.ahead).toBe(1);
     expect(state.errorByContext["env-1:uncommitted"]).toBe("push rejected");
   });
 
