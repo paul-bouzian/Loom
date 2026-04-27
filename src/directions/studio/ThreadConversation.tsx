@@ -27,6 +27,7 @@ import {
   selectConversationDraft,
   selectConversationError,
   selectConversationHydration,
+  selectConversationRuntimeHydration,
   selectConversationSnapshot,
   selectPendingFirstMessage,
   useConversationStore,
@@ -68,6 +69,9 @@ export function ThreadConversation({
     selectConversationCapabilities(environment.id),
   );
   const hydration = useConversationStore(selectConversationHydration(thread.id));
+  const runtimeHydration = useConversationStore(
+    selectConversationRuntimeHydration(thread.id),
+  );
   const storeError = useConversationStore(selectConversationError(thread.id));
   const settings = useWorkspaceStore(selectSettings);
   const openThread = useConversationStore((state) => state.openThread);
@@ -94,7 +98,6 @@ export function ThreadConversation({
     (state) => state.enqueuePendingFirstMessage,
   );
   const pendingFirstMessageRetryRef = useRef(false);
-  const [isPreparingWorktreeName, setIsPreparingWorktreeName] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPending, startTransition] = useTransition();
   const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -119,7 +122,6 @@ export function ThreadConversation({
     submitInFlightRef.current = false;
     pendingFirstMessageRetryRef.current = false;
     timelineFollowBottomRef.current = true;
-    setIsPreparingWorktreeName(false);
     setIsSubmitting(false);
   }, [thread.id]);
 
@@ -171,7 +173,6 @@ export function ThreadConversation({
     snapshot?.taskPlan?.markdown,
     snapshot?.taskPlan?.explanation,
     snapshot?.taskPlan?.status,
-    isPreparingWorktreeName,
   ]);
 
   useEffect(() => {
@@ -272,9 +273,8 @@ export function ThreadConversation({
   );
   const resolvedComposer = composer ?? snapshot?.composer ?? fallbackComposer;
   const approveComposer = snapshot ? resolvedComposer : null;
-  const isConnecting = hydration === "cold" || hydration === "loading";
   const isConnectionError = hydration === "error";
-  const transportReady = hydration === "ready";
+  const transportReady = runtimeHydration === "ready";
 
   useEffect(() => {
     if (!transportReady) {
@@ -315,7 +315,6 @@ export function ThreadConversation({
       return;
     }
     submitInFlightRef.current = false;
-    setIsPreparingWorktreeName(false);
     setIsSubmitting(false);
   }
 
@@ -409,10 +408,9 @@ export function ThreadConversation({
 
   // When the pane switches from a draft composer to a freshly-created
   // thread, `sendThreadDraft` stashes the user's first message in the
-  // conversation store. Once this thread is fully hydrated we replay it
-  // through the same path a normal first-message send would take — this
-  // seeds the optimistic user message and lights up the "Naming the
-  // branch and worktree" spinner for auto-renamed worktrees.
+  // conversation store. Once this thread is ready to send we replay it
+  // through the same path a normal first-message send would take, which
+  // seeds the optimistic user message while background naming stays hidden.
   useEffect(() => {
     if (!transportReady) return;
     if (!pendingFirstMessage) return;
@@ -422,9 +420,6 @@ export function ThreadConversation({
     if (!payload) return;
 
     const submitGeneration = beginSubmitCycle();
-    if (shouldShowFirstPromptNamingNotice(environment, thread, payload.text)) {
-      setIsPreparingWorktreeName(true);
-    }
     resetComposerState();
     void sendMessage(
       thread.id,
@@ -462,8 +457,8 @@ export function ThreadConversation({
       });
     }
     // `environment` and `thread` are read snapshots of props; we only need
-    // their identity (id). `beginSubmitCycle` / `finishSubmitCycle` /
-    // `setIsPreparingWorktreeName` are stable on the component instance.
+    // their identity (id). `beginSubmitCycle` and `finishSubmitCycle` are
+    // stable on the component instance.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     transportReady,
@@ -513,14 +508,6 @@ export function ThreadConversation({
       }
       const nextImages = [...images];
       const nextMentionBindings = [...draftMentionBindings];
-      const shouldPrepareWorktreeName = shouldShowFirstPromptNamingNotice(
-        environment,
-        thread,
-        message,
-      );
-      if (shouldPrepareWorktreeName) {
-        setIsPreparingWorktreeName(true);
-      }
       const sendPromise = sendMessage(
         thread.id,
         message,
@@ -547,14 +534,10 @@ export function ThreadConversation({
         className="tx-conversation__timeline"
         onScroll={handleTimelineScroll}
       >
-        {isConnecting ? (
-          <div className="tx-loading">
-            <div className="tx-loading__bar" />
-          </div>
-        ) : timelineEntries.length === 0 &&
+        {timelineEntries.length === 0 &&
         !shouldRenderPlanCard &&
         !hasActiveTaskPlanContent &&
-        transportReady ? (
+        hydration === "ready" ? (
           <ConversationEmpty />
         ) : null}
         {isConnectionError ? (
@@ -596,7 +579,6 @@ export function ThreadConversation({
             />
           ),
         )}
-        {isPreparingWorktreeName ? <FirstPromptNamingNotice /> : null}
         {shouldRenderPlanCard && activePlan ? (
           <ConversationPlanCard
             plan={activePlan}
@@ -724,54 +706,6 @@ function ConversationEmpty() {
       <p>Type a message below to begin</p>
     </div>
   );
-}
-
-function FirstPromptNamingNotice() {
-  return (
-    <div className="tx-rename-notice" role="status" aria-live="polite">
-      <span className="tx-rename-notice__spinner" aria-hidden="true" />
-      <span className="tx-rename-notice__label">Naming the branch and worktree</span>
-      <span className="tx-rename-notice__separator" aria-hidden="true">
-        ·
-      </span>
-      <span className="tx-rename-notice__detail">
-        Preparing a readable label before Codex starts
-      </span>
-    </div>
-  );
-}
-
-function shouldShowFirstPromptNamingNotice(
-  environment: EnvironmentRecord,
-  thread: ThreadRecord,
-  message: string,
-) {
-  if (message.trim().length === 0) {
-    return false;
-  }
-  if (environment.kind !== "managedWorktree") {
-    return false;
-  }
-  if (!isAutoGeneratedWorktreeName(environment.name)) {
-    return false;
-  }
-  if (environment.threads.some((candidate) => Boolean(candidate.codexThreadId))) {
-    return false;
-  }
-
-  const firstThread = [...environment.threads].sort((left, right) => {
-    const createdAtOrder = left.createdAt.localeCompare(right.createdAt);
-    if (createdAtOrder !== 0) {
-      return createdAtOrder;
-    }
-    return left.id.localeCompare(right.id);
-  })[0];
-
-  return firstThread?.id === thread.id;
-}
-
-function isAutoGeneratedWorktreeName(name: string) {
-  return /^[a-z]+-[a-z]+(?:-\d+)?$/.test(name.trim());
 }
 
 function resolveFallbackComposer(

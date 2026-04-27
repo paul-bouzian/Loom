@@ -8,12 +8,12 @@ use crate::app_identity::{
 };
 use crate::domain::conversation::{
     ComposerDraftMentionBinding, ConversationComposerDraft, ConversationImageAttachment,
-    ConversationItem,
+    ConversationItem, ThreadConversationSnapshot,
 };
 use crate::domain::workspace::SavedDraftThreadState;
 use crate::error::{AppError, AppResult};
 
-const CURRENT_SCHEMA_VERSION: i32 = 9;
+const CURRENT_SCHEMA_VERSION: i32 = 10;
 
 #[derive(Debug, Clone)]
 pub struct AppDatabase {
@@ -370,6 +370,9 @@ impl AppDatabase {
         if version < 9 {
             migrate_to_v9(&connection)?;
         }
+        if version < 10 {
+            migrate_to_v10(&connection)?;
+        }
 
         Ok(())
     }
@@ -558,6 +561,46 @@ impl AppDatabase {
         )?;
         Ok(())
     }
+
+    pub fn save_conversation_snapshot(
+        &self,
+        snapshot: &ThreadConversationSnapshot,
+    ) -> AppResult<()> {
+        let connection = self.open()?;
+        let payload = serde_json::to_string(snapshot)
+            .map_err(|error| AppError::Runtime(error.to_string()))?;
+        let now = Utc::now().to_rfc3339();
+        connection.execute(
+            "
+            INSERT INTO conversation_snapshots (thread_id, payload_json, updated_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(thread_id) DO UPDATE SET
+              payload_json = excluded.payload_json,
+              updated_at = excluded.updated_at
+            ",
+            params![&snapshot.thread_id, payload, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_conversation_snapshot(
+        &self,
+        thread_id: &str,
+    ) -> AppResult<Option<ThreadConversationSnapshot>> {
+        let connection = self.open()?;
+        let payload = match connection.query_row(
+            "SELECT payload_json FROM conversation_snapshots WHERE thread_id = ?1",
+            [thread_id],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(payload) => payload,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let snapshot = serde_json::from_str::<ThreadConversationSnapshot>(&payload)
+            .map_err(|error| AppError::Runtime(error.to_string()))?;
+        Ok(Some(snapshot))
+    }
 }
 
 fn migrate_to_v8(connection: &Connection) -> AppResult<()> {
@@ -593,6 +636,22 @@ fn migrate_to_v9(connection: &Connection) -> AppResult<()> {
         );
         CREATE INDEX conversation_items_thread_idx ON conversation_items(thread_id);
         PRAGMA user_version = 9;
+        COMMIT;
+        ",
+    )?;
+    Ok(())
+}
+
+fn migrate_to_v10(connection: &Connection) -> AppResult<()> {
+    connection.execute_batch(
+        "
+        BEGIN;
+        CREATE TABLE conversation_snapshots (
+          thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+          payload_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        PRAGMA user_version = 10;
         COMMIT;
         ",
     )?;
@@ -718,7 +777,11 @@ mod tests {
     use super::{migrate_legacy_database_file, AppDatabase, CURRENT_SCHEMA_VERSION};
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
-        ConversationImageAttachment, ConversationItem, ConversationMessageItem, ConversationRole,
+        ConversationComposerSettings, ConversationImageAttachment, ConversationItem,
+        ConversationMessageItem, ConversationRole, ThreadConversationSnapshot,
+    };
+    use crate::domain::settings::{
+        ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort,
     };
     use rusqlite::Connection;
     use std::path::Path;
@@ -1559,5 +1622,93 @@ mod tests {
         ));
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn saves_and_loads_full_conversation_snapshot() {
+        let root = std::env::temp_dir().join(format!("skein-db-snapshot-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("test directory should exist");
+        let db_path = root.join("skein.sqlite3");
+        let database = AppDatabase::for_test(db_path).expect("db should initialize");
+        seed_thread(&database, "thread-1");
+
+        let mut snapshot = ThreadConversationSnapshot::new_for_provider(
+            "thread-1".to_string(),
+            "env-1".to_string(),
+            ProviderKind::Codex,
+            Some("codex-thread-1".to_string()),
+            Some("codex-thread-1".to_string()),
+            test_composer(),
+        );
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "user-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                role: ConversationRole::User,
+                text: "Show instantly".to_string(),
+                images: None,
+                is_streaming: false,
+            }));
+
+        database
+            .save_conversation_snapshot(&snapshot)
+            .expect("snapshot should save");
+
+        let loaded = database
+            .load_conversation_snapshot("thread-1")
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+        assert_eq!(loaded, snapshot);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn seed_thread(database: &AppDatabase, thread_id: &str) {
+        let connection = database.open().expect("db should open");
+        connection
+            .execute(
+                "
+                INSERT OR IGNORE INTO projects (
+                  id, name, root_path, settings_json, created_at, updated_at
+                )
+                VALUES ('project-1', 'Skein', '/tmp/skein-db-snapshot', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ",
+                [],
+            )
+            .expect("project should insert");
+        connection
+            .execute(
+                "
+                INSERT OR IGNORE INTO environments (
+                  id, project_id, name, kind, path, is_default, created_at, updated_at
+                )
+                VALUES ('env-1', 'project-1', 'main', 'repository', '/tmp/skein-db-snapshot', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ",
+                [],
+            )
+            .expect("environment should insert");
+        connection
+            .execute(
+                "
+                INSERT INTO threads (
+                  id, environment_id, title, status, codex_thread_id, overrides_json, created_at, updated_at
+                )
+                VALUES (?1, 'env-1', 'Thread', 'active', NULL, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ",
+                [thread_id],
+            )
+            .expect("thread should insert");
+    }
+
+    fn test_composer() -> ConversationComposerSettings {
+        ConversationComposerSettings {
+            provider: ProviderKind::Codex,
+            model: "gpt-5.3-codex".to_string(),
+            reasoning_effort: ReasoningEffort::High,
+            collaboration_mode: CollaborationMode::Build,
+            approval_policy: ApprovalPolicy::AskToEdit,
+            service_tier: None,
+        }
     }
 }

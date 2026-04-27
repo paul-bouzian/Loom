@@ -1,13 +1,13 @@
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::app_identity::{FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME, WORKSPACE_EVENT_NAME};
+use crate::app_identity::WORKSPACE_EVENT_NAME;
 use crate::domain::conversation::{
     ComposerFileSearchResult, ComposerMentionBindingInput, ComposerTarget,
     ConversationComposerDraft, ConversationComposerSettings, ConversationImageAttachment,
-    ConversationStatus, RespondToApprovalRequestInput, RespondToUserInputRequestInput,
-    SubmitPlanDecisionInput, ThreadComposerCatalog, ThreadConversationOpenResponse,
-    ThreadConversationSnapshot,
+    ConversationItem, ConversationMessageItem, ConversationStatus, RespondToApprovalRequestInput,
+    RespondToUserInputRequestInput, SubmitPlanDecisionInput, ThreadComposerCatalog,
+    ThreadConversationOpenResponse, ThreadConversationSnapshot,
 };
 use crate::domain::settings::ProviderKind;
 use crate::domain::workspace::{
@@ -16,8 +16,9 @@ use crate::domain::workspace::{
 use crate::domain::workspace::{WorkspaceEvent, WorkspaceEventKind};
 use crate::error::{AppError, CommandError};
 use crate::events::EventSink;
+use crate::runtime::snapshot_store;
 use crate::services::workspace::{
-    AutoRenameFirstPromptRequest, CreateThreadHandoffRequest, WorkspaceService,
+    AutoRenameFirstPromptRequest, CreateThreadHandoffRequest, ThreadRuntimeContext,
 };
 use crate::state::AppState;
 
@@ -58,6 +59,21 @@ pub async fn open_thread_conversation_impl(
     Ok(response)
 }
 
+pub async fn get_thread_conversation_snapshot_impl(
+    state: &AppState,
+    thread_id: String,
+) -> Result<ThreadConversationSnapshot, CommandError> {
+    validate_non_blank_thread_id(&thread_id)?;
+    let context = state.workspace.thread_runtime_context(&thread_id)?;
+    if let Some(snapshot) = state.runtime.cached_thread_snapshot(&context).await {
+        return Ok(snapshot);
+    }
+    if let Some(snapshot) = snapshot_store::load(&thread_id) {
+        return Ok(reconcile_snapshot_for_context(snapshot, &context));
+    }
+    Ok(empty_snapshot_for_context(&context))
+}
+
 pub fn save_thread_composer_draft_impl(
     state: &AppState,
     input: PersistThreadComposerDraftInput,
@@ -68,6 +84,51 @@ pub fn save_thread_composer_draft_impl(
         .workspace
         .persist_thread_composer_draft(&input.thread_id, input.draft.as_ref())?;
     Ok(())
+}
+
+fn reconcile_snapshot_for_context(
+    mut snapshot: ThreadConversationSnapshot,
+    context: &ThreadRuntimeContext,
+) -> ThreadConversationSnapshot {
+    snapshot.thread_id = context.thread_id.clone();
+    snapshot.environment_id = context.environment_id.clone();
+    snapshot.provider = context.provider;
+    snapshot.provider_thread_id = context.provider_thread_id.clone();
+    snapshot.codex_thread_id = context.codex_thread_id.clone();
+    snapshot.composer = context.composer.clone();
+    snapshot
+}
+
+fn empty_snapshot_for_context(context: &ThreadRuntimeContext) -> ThreadConversationSnapshot {
+    let mut snapshot = ThreadConversationSnapshot::new_for_provider(
+        context.thread_id.clone(),
+        context.environment_id.clone(),
+        context.provider,
+        context.provider_thread_id.clone(),
+        context.codex_thread_id.clone(),
+        context.composer.clone(),
+    );
+    snapshot.items = context
+        .handoff
+        .as_ref()
+        .map(|handoff| {
+            handoff
+                .imported_messages
+                .iter()
+                .map(|message| {
+                    ConversationItem::Message(ConversationMessageItem {
+                        id: message.id.clone(),
+                        turn_id: None,
+                        role: message.role,
+                        text: message.text.clone(),
+                        images: message.images.clone(),
+                        is_streaming: false,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    snapshot
 }
 
 pub async fn refresh_thread_conversation_impl(
@@ -113,75 +174,18 @@ pub async fn send_thread_message_impl(
         validate_thread_provider_lock(context.provider, composer.provider)?;
         context.composer = composer;
     }
-    let rename_result = if !message_text.trim().is_empty() {
-        let workspace = state.workspace.clone();
-        let rename_request = AutoRenameFirstPromptRequest {
-            thread_id: input.thread_id.clone(),
-            message: message_text.clone(),
-            codex_binary_path: context.codex_binary_path.clone(),
-        };
-        match spawn_blocking(move || {
-            workspace.maybe_auto_rename_first_prompt_environment(rename_request)
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(error) => {
-                let message = error.message.clone();
-                let thread_id = input.thread_id.clone();
-                warn!(
-                    thread_id,
-                    "failed to auto-rename first prompt environment: {message}"
-                );
-                emit_first_prompt_rename_failure_event(
-                    &state.events,
-                    &state.workspace,
-                    &thread_id,
-                    message,
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    if let Some(rename) = rename_result.as_ref() {
-        if rename.environment_renamed {
-            state.pull_requests.clear_snapshot(&rename.environment_id);
-            emit_workspace_event(
-                &state.events,
-                WorkspaceEvent {
-                    kind: WorkspaceEventKind::EnvironmentRenamed,
-                    project_id: Some(rename.project_id.clone()),
-                    environment_id: Some(rename.environment_id.clone()),
-                    thread_id: Some(rename.thread_id.clone()),
-                },
-            );
-            state.pull_requests.refresh_now();
-            if let Err(error) = state.runtime.stop(&rename.environment_id).await {
-                warn!(
-                    environment_id = rename.environment_id,
-                    "failed to stop runtime after first prompt rename: {error}"
-                );
-            }
-            context = state.workspace.thread_runtime_context(&input.thread_id)?;
-            if let Some(composer) = requested_composer.clone() {
-                validate_thread_provider_lock(context.provider, composer.provider)?;
-                context.composer = composer;
-            }
-        }
-        if rename.thread_renamed && !rename.environment_renamed {
-            emit_workspace_event(
-                &state.events,
-                WorkspaceEvent {
-                    kind: WorkspaceEventKind::ThreadAutoRenamed,
-                    project_id: Some(rename.project_id.clone()),
-                    environment_id: Some(rename.environment_id.clone()),
-                    thread_id: Some(rename.thread_id.clone()),
-                },
-            );
-        }
+    let auto_rename_timing = first_prompt_auto_rename_timing(&context, &message_text);
+    let auto_rename_context = context.clone();
+    if matches!(
+        auto_rename_timing,
+        Some(FirstPromptAutoRenameTiming::BeforeSend)
+    ) {
+        spawn_first_prompt_auto_rename(
+            state,
+            &context,
+            input.thread_id.clone(),
+            message_text.clone(),
+        );
     }
 
     let had_pending_handoff = context.handoff.as_ref().is_some_and(|handoff| {
@@ -207,10 +211,9 @@ pub async fn send_thread_message_impl(
         )
         .await?;
 
+    let provider_thread_id_started =
+        result.new_provider_thread_id.is_some() || result.new_codex_thread_id.is_some();
     if should_auto_rename
-        && !rename_result
-            .as_ref()
-            .is_some_and(|rename| rename.thread_renamed)
         && state
             .workspace
             .auto_rename_thread_from_message(&input.thread_id, &message_text)?
@@ -241,6 +244,19 @@ pub async fn send_thread_message_impl(
             .complete_thread_handoff_bootstrap(&input.thread_id)?;
     }
 
+    if matches!(
+        auto_rename_timing,
+        Some(FirstPromptAutoRenameTiming::AfterProviderStart)
+    ) && provider_thread_id_started
+    {
+        spawn_first_prompt_auto_rename(
+            state,
+            &auto_rename_context,
+            input.thread_id.clone(),
+            message_text.clone(),
+        );
+    }
+
     Ok(result.snapshot)
 }
 
@@ -253,6 +269,95 @@ fn handoff_bootstrap_status_is_complete(status: ConversationStatus) -> bool {
         status,
         ConversationStatus::Interrupted | ConversationStatus::Failed
     )
+}
+
+fn should_schedule_first_prompt_auto_rename(
+    context: &ThreadRuntimeContext,
+    message_text: &str,
+) -> bool {
+    !message_text.trim().is_empty()
+        && context.provider_thread_id.is_none()
+        && context.codex_thread_id.is_none()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FirstPromptAutoRenameTiming {
+    BeforeSend,
+    AfterProviderStart,
+}
+
+fn first_prompt_auto_rename_timing(
+    context: &ThreadRuntimeContext,
+    message_text: &str,
+) -> Option<FirstPromptAutoRenameTiming> {
+    if !should_schedule_first_prompt_auto_rename(context, message_text) {
+        return None;
+    }
+    Some(if matches!(context.provider, ProviderKind::Claude) {
+        FirstPromptAutoRenameTiming::BeforeSend
+    } else {
+        FirstPromptAutoRenameTiming::AfterProviderStart
+    })
+}
+
+fn spawn_first_prompt_auto_rename(
+    state: &AppState,
+    context: &ThreadRuntimeContext,
+    thread_id: String,
+    message: String,
+) {
+    let workspace = state.workspace.clone();
+    let events = state.events.clone();
+    let pull_requests = state.pull_requests.clone();
+    let rename_request = AutoRenameFirstPromptRequest {
+        thread_id: thread_id.clone(),
+        message,
+        codex_binary_path: context.codex_binary_path.clone(),
+        preserve_worktree_path: true,
+        require_unstarted_environment: false,
+    };
+
+    tokio::spawn(async move {
+        match spawn_blocking(move || {
+            workspace.maybe_auto_rename_first_prompt_environment(rename_request)
+        })
+        .await
+        {
+            Ok(Some(rename)) => {
+                if rename.environment_renamed {
+                    pull_requests.clear_snapshot(&rename.environment_id);
+                    emit_workspace_event(
+                        &events,
+                        WorkspaceEvent {
+                            kind: WorkspaceEventKind::EnvironmentRenamed,
+                            project_id: Some(rename.project_id.clone()),
+                            environment_id: Some(rename.environment_id.clone()),
+                            thread_id: Some(rename.thread_id.clone()),
+                        },
+                    );
+                    pull_requests.refresh_now();
+                } else if rename.thread_renamed {
+                    emit_workspace_event(
+                        &events,
+                        WorkspaceEvent {
+                            kind: WorkspaceEventKind::ThreadAutoRenamed,
+                            project_id: Some(rename.project_id.clone()),
+                            environment_id: Some(rename.environment_id.clone()),
+                            thread_id: Some(rename.thread_id.clone()),
+                        },
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let message = error.message.clone();
+                warn!(
+                    thread_id,
+                    "failed to auto-rename first prompt environment: {message}"
+                );
+            }
+        }
+    });
 }
 
 pub async fn create_thread_handoff_impl(
@@ -568,25 +673,6 @@ fn emit_workspace_event(events: &EventSink, payload: WorkspaceEvent) {
     events.emit(WORKSPACE_EVENT_NAME, payload);
 }
 
-fn emit_first_prompt_rename_failure_event(
-    events: &EventSink,
-    workspace: &WorkspaceService,
-    thread_id: &str,
-    message: String,
-) {
-    match workspace.first_prompt_rename_failure_event(thread_id, message) {
-        Ok(payload) => {
-            events.emit(FIRST_PROMPT_RENAME_FAILURE_EVENT_NAME, payload);
-        }
-        Err(error) => {
-            warn!(
-                thread_id,
-                "failed to build first prompt rename failure event: {error}"
-            );
-        }
-    }
-}
-
 async fn spawn_blocking<T, F>(operation: F) -> Result<T, CommandError>
 where
     T: Send + 'static,
@@ -601,14 +687,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        handoff_bootstrap_status_is_complete, validate_composer_target,
-        validate_non_blank_request_key, validate_non_blank_thread_id,
-        validate_thread_composer_draft,
+        first_prompt_auto_rename_timing, handoff_bootstrap_status_is_complete,
+        validate_composer_target, validate_non_blank_request_key, validate_non_blank_thread_id,
+        validate_thread_composer_draft, FirstPromptAutoRenameTiming,
     };
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ComposerTarget,
         ConversationComposerDraft, ConversationImageAttachment, ConversationStatus,
     };
+    use crate::domain::settings::{
+        ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort,
+    };
+    use crate::services::workspace::ThreadRuntimeContext;
 
     #[test]
     fn save_thread_composer_draft_rejects_blank_thread_ids() {
@@ -675,5 +765,61 @@ mod tests {
         assert!(handoff_bootstrap_status_is_complete(
             ConversationStatus::WaitingForExternalAction
         ));
+    }
+
+    #[test]
+    fn first_prompt_auto_rename_waits_for_codex_provider_start() {
+        let mut context = test_runtime_context(ProviderKind::Codex);
+
+        assert_eq!(
+            first_prompt_auto_rename_timing(&context, "Add theme support"),
+            Some(FirstPromptAutoRenameTiming::AfterProviderStart)
+        );
+
+        context.provider_thread_id = Some("provider-thread".to_string());
+        assert_eq!(
+            first_prompt_auto_rename_timing(&context, "Add theme support"),
+            None
+        );
+    }
+
+    #[test]
+    fn first_prompt_auto_rename_can_run_before_claude_send() {
+        let context = test_runtime_context(ProviderKind::Claude);
+
+        assert_eq!(
+            first_prompt_auto_rename_timing(&context, "Add theme support"),
+            Some(FirstPromptAutoRenameTiming::BeforeSend)
+        );
+    }
+
+    fn test_runtime_context(provider: ProviderKind) -> ThreadRuntimeContext {
+        ThreadRuntimeContext {
+            thread_id: "thread-1".to_string(),
+            environment_id: "environment-1".to_string(),
+            environment_path: "/tmp/worktree".to_string(),
+            provider,
+            provider_thread_id: None,
+            codex_thread_id: None,
+            composer: crate::domain::conversation::ConversationComposerSettings {
+                provider,
+                model: match provider {
+                    ProviderKind::Claude => "claude-sonnet-4-6",
+                    ProviderKind::Codex => "gpt-5.4",
+                }
+                .to_string(),
+                reasoning_effort: ReasoningEffort::Medium,
+                collaboration_mode: CollaborationMode::Build,
+                approval_policy: ApprovalPolicy::AskToEdit,
+                service_tier: None,
+            },
+            codex_binary_path: None,
+            claude_binary_path: None,
+            handoff: None,
+            handoff_bootstrap_context: None,
+            stream_assistant_responses: true,
+            multi_agent_nudge_enabled: true,
+            multi_agent_nudge_max_subagents: 6,
+        }
     }
 }

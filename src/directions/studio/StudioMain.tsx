@@ -43,7 +43,7 @@ import { GitActionsControl } from "./GitActionsControl";
 import { OpenEnvironmentControl } from "./OpenEnvironmentControl";
 import { PaneDropOverlay, ThreadDragGhost } from "./PaneDropOverlay";
 import { PaneSplitter } from "./PaneSplitter";
-import { DefaultStudioView, StudioPane } from "./StudioPane";
+import { StudioPane } from "./StudioPane";
 import { TerminalPanel } from "./TerminalPanel";
 import { createThreadHandoff } from "./studioActions";
 import type { Theme } from "./StudioShell";
@@ -232,11 +232,11 @@ export function StudioMain({
             onSplitDragChange={setSplitDragging}
           />
         ) : (
-          <div className="studio-main__pane studio-main__pane--default">
-            <div className="studio-main__pane-scroll">
-              <DefaultStudioView />
-            </div>
-          </div>
+          <StudioPane
+            paneId="topLeft"
+            composerFocusKey={composerFocusKey}
+            approveOrSubmitKey={approveOrSubmitKey}
+          />
         )}
         <PaneDropOverlay />
       </div>

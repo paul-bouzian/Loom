@@ -4,8 +4,8 @@ use crate::app_identity::AppStoragePaths;
 use crate::error::AppResult;
 use crate::events::EventSink;
 use crate::infrastructure::database::AppDatabase;
-use crate::runtime::item_store;
 use crate::runtime::supervisor::RuntimeSupervisor;
+use crate::runtime::{item_store, snapshot_store};
 use crate::services::provider_usage::ProviderUsageService;
 use crate::services::pull_requests::PullRequestMonitorService;
 use crate::services::terminal::TerminalService;
@@ -33,6 +33,7 @@ impl AppState {
         std::fs::create_dir_all(storage_paths.app_home_dir.join("chats"))?;
         let database = AppDatabase::new(&storage_paths)?;
         item_store::install(database.clone());
+        snapshot_store::install(database.clone());
         let workspace = WorkspaceService::new(
             database,
             storage_paths.app_home_dir.join("worktrees"),

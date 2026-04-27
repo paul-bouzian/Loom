@@ -1,17 +1,14 @@
 import { CloseIcon } from "../../shared/Icons";
 import { Tooltip } from "../../shared/Tooltip";
-import type { ProjectRecord } from "../../lib/types";
 import {
   selectFocusedSlot,
   selectIsSplitOpen,
   selectPaneDraft,
   selectPaneEnvironment,
   selectPaneThread,
-  selectProjects,
   useWorkspaceStore,
   type SlotKey,
 } from "../../stores/workspace-store";
-import { StudioWelcome } from "./StudioWelcome";
 import { ThreadDraftComposer } from "./draft/ThreadDraftComposer";
 import { ThreadConversation } from "./ThreadConversation";
 
@@ -57,7 +54,13 @@ export function StudioPane({
       />
     );
   } else {
-    content = <WorkspaceHomeView />;
+    isDraftView = true;
+    content = (
+      <ThreadDraftComposer
+        draft={{ kind: "chat" }}
+        paneId={paneId}
+      />
+    );
   }
 
   const modifierClasses = [
@@ -104,10 +107,6 @@ export function StudioPane({
   );
 }
 
-export function DefaultStudioView() {
-  return <WorkspaceHomeView />;
-}
-
 // Skip focus capture when the event targets a close affordance — otherwise
 // we'd retarget focus onto the pane for a single frame before it gets closed.
 function shouldSkipFocusCapture(
@@ -117,64 +116,4 @@ function shouldSkipFocusCapture(
   if (isFocused) return true;
   if (!(event.target instanceof Element)) return false;
   return Boolean(event.target.closest(".studio-main__pane-close"));
-}
-
-function OverviewView({ projects }: { projects: ProjectRecord[] }) {
-  const selectProject = useWorkspaceStore((s) => s.selectProject);
-
-  return (
-    <div className="studio-overview">
-      <h2 className="studio-overview__title">Workspace</h2>
-      <p className="studio-overview__subtitle">
-        {projects.length} project{projects.length !== 1 ? "s" : ""}
-      </p>
-      <div className="studio-overview__grid">
-        {projects.map((p) => {
-          const envCount = p.environments.length;
-          const threadCount = p.environments.reduce(
-            (sum, e) =>
-              sum + e.threads.filter((t) => t.status === "active").length,
-            0,
-          );
-          const runningCount = p.environments.filter(
-            (e) => e.runtime.state === "running",
-          ).length;
-
-          return (
-            <button
-              key={p.id}
-              className="studio-overview__card"
-              onClick={() => selectProject(p.id)}
-            >
-              <h3 className="studio-overview__card-name">{p.name}</h3>
-              <span className="studio-overview__card-path">{p.rootPath}</span>
-              <div className="studio-overview__card-meta">
-                <span>
-                  {envCount} env{envCount !== 1 ? "s" : ""}
-                </span>
-                <span>
-                  {threadCount} thread{threadCount !== 1 ? "s" : ""}
-                </span>
-                {runningCount > 0 && (
-                  <span className="studio-overview__card-running">
-                    {runningCount} running
-                  </span>
-                )}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function WorkspaceHomeView() {
-  const projects = useWorkspaceStore(selectProjects);
-
-  return projects.length === 0 ? (
-    <StudioWelcome />
-  ) : (
-    <OverviewView projects={projects} />
-  );
 }

@@ -186,8 +186,8 @@ export async function sendThreadDraft(
   }));
 
   // Hand the message off to ThreadConversation: it consumes the pending
-  // first message on mount and runs its own handleSend, which already wires
-  // up the optimistic user message and the FirstPromptNamingNotice spinner.
+  // first message on mount and runs its own handleSend, which wires up the
+  // optimistic user message while background naming stays hidden.
   useConversationStore.getState().enqueuePendingFirstMessage(thread.id, {
     text: text.trim(),
     images,

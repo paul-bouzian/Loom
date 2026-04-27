@@ -5,6 +5,7 @@ pub mod item_store;
 pub mod proposed_plan_markup;
 pub mod protocol;
 pub mod session;
+pub mod snapshot_store;
 pub mod supervisor;
 
 #[cfg(test)]

@@ -30,7 +30,6 @@ use crate::error::{AppError, AppResult};
 use crate::events::EventSink;
 use crate::runtime::claude::append_claude_provider;
 use crate::runtime::codex_paths::build_codex_process_path;
-use crate::runtime::item_store;
 use crate::runtime::proposed_plan_markup::{
     extract_proposed_plan_text, strip_proposed_plan_blocks,
 };
@@ -59,6 +58,7 @@ use crate::runtime::protocol::{
     TurnStartedNotification, AGENT_MESSAGE_DELTA_METHOD, CONVERSATION_EVENT_NAME,
 };
 use crate::runtime::supervisor::RuntimeUsageUpdate;
+use crate::runtime::{item_store, snapshot_store};
 use crate::services::composer::{
     build_thread_catalog, connector_mention_slug, load_prompt_definitions, resolve_composer_text,
     trim_file_search_results, AppBinding, SkillBinding,
@@ -586,6 +586,26 @@ impl RuntimeSession {
             capabilities,
             composer_draft: None,
         })
+    }
+
+    pub async fn cached_thread_snapshot(
+        &self,
+        context: &ThreadRuntimeContext,
+    ) -> Option<ThreadConversationSnapshot> {
+        self.state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .get(&context.thread_id)
+            .cloned()
+            .map(|mut snapshot| {
+                snapshot.environment_id = context.environment_id.clone();
+                snapshot.provider = context.provider;
+                snapshot.provider_thread_id = context.provider_thread_id.clone();
+                snapshot.codex_thread_id = context.codex_thread_id.clone();
+                snapshot.composer = context.composer.clone();
+                snapshot
+            })
     }
 
     pub async fn read_capabilities(&self) -> AppResult<EnvironmentCapabilitiesSnapshot> {
@@ -3381,6 +3401,7 @@ fn emit_snapshot_from_handle(events: &EventSink, snapshot: ThreadConversationSna
 }
 
 fn queue_snapshot_emit(events: EventSink, snapshot: ThreadConversationSnapshot) {
+    snapshot_store::save(&snapshot);
     tokio::spawn(async move {
         let signature = SnapshotEmitSignature::from_snapshot(&snapshot);
         let thread_id = snapshot.thread_id.clone();

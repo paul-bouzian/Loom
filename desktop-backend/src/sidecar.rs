@@ -292,6 +292,12 @@ async fn dispatch_request(
                 conversation::open_thread_conversation_impl(state, payload.thread_id).await,
             )
         }
+        "get_thread_conversation_snapshot" => {
+            let payload: ThreadIdEnvelope = decode_params(params)?;
+            encode_result(
+                conversation::get_thread_conversation_snapshot_impl(state, payload.thread_id).await,
+            )
+        }
         "save_thread_composer_draft" => {
             let payload: InputEnvelope<PersistThreadComposerDraftInput> = decode_params(params)?;
             encode_result(conversation::save_thread_composer_draft_impl(
