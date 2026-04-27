@@ -73,7 +73,7 @@ export function resolveQuickGitAction(
       : { label: "Create PR", action: "createPr", disabled: false, disabledReason: null };
   }
   if (!defaultBranch) {
-    return { label: "Create PR", action: "createPr", disabled: false, disabledReason: null };
+    return disabledQuickAction("Create PR", "No branch commits to create a PR.");
   }
   return disabledQuickAction("Commit", "Branch is clean and up to date.");
 }
@@ -101,7 +101,7 @@ export function buildGitActionMenu(
     (defaultBranch ? dirty || ahead > 0 : !dirty && ahead > 0);
   const canCreateOrViewPr = hasOpenPr
     ? !unavailable
-    : !unavailable && hasBranch && behind === 0 && !defaultBranch;
+    : !unavailable && hasBranch && ahead > 0 && behind === 0 && !defaultBranch;
 
   return [
     {

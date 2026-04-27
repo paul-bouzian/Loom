@@ -139,6 +139,22 @@ describe("resolveQuickGitAction", () => {
     });
   });
 
+  it("does not create a PR from a clean feature branch without commits", () => {
+    const snapshot = snapshotWithSummary({
+      branch: "feature/right-panel",
+      baseBranch: "origin/main",
+      dirty: false,
+      ahead: 0,
+      behind: 0,
+    });
+
+    expect(resolveQuickGitAction(snapshot, true, false, false)).toMatchObject({
+      label: "Create PR",
+      action: null,
+      disabled: true,
+    });
+  });
+
   it("pushes clean local commits on the default branch", () => {
     const snapshot = snapshotWithSummary({
       branch: "main",
@@ -209,6 +225,25 @@ describe("buildGitActionMenu", () => {
         action: "viewPr",
         disabled: false,
         disabledReason: null,
+      }),
+    );
+  });
+
+  it("disables create PR for clean feature branches without local commits", () => {
+    const snapshot = snapshotWithSummary({
+      branch: "feature/review",
+      baseBranch: "origin/main",
+      dirty: false,
+      ahead: 0,
+      behind: 0,
+    });
+
+    expect(buildGitActionMenu(snapshot, true, false, false)).toContainEqual(
+      expect.objectContaining({
+        id: "pr",
+        label: "Create PR",
+        action: "createPr",
+        disabled: true,
       }),
     );
   });
