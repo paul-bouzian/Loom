@@ -1,7 +1,10 @@
 import { app } from "electron";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+
+const PACKAGED_ELECTRON_EXECUTABLE_SUFFIX = "-electron";
 
 type BackendRequest = {
   type: "request";
@@ -37,6 +40,11 @@ type BackendClientOptions = {
   onEvent(eventName: string, payload: unknown): void;
 };
 
+export type NodeExecutableResolutionOptions = {
+  readonly isPackaged?: boolean;
+  readonly executablePath?: string;
+};
+
 function resolveBackendBinaryPath() {
   if (process.env.SKEIN_BACKEND_BIN?.trim()) {
     return process.env.SKEIN_BACKEND_BIN.trim();
@@ -52,6 +60,26 @@ function resolveBackendBinaryPath() {
 
 function resolveClaudeWorkerPath() {
   return join(__dirname, "claude-agent-worker.mjs");
+}
+
+export function resolveNodeExecutablePath({
+  isPackaged = app.isPackaged,
+  executablePath = process.execPath,
+}: NodeExecutableResolutionOptions = {}): string {
+  if (!isPackaged) {
+    return executablePath;
+  }
+
+  const packagedElectronPath = join(
+    dirname(executablePath),
+    `${basename(executablePath)}${PACKAGED_ELECTRON_EXECUTABLE_SUFFIX}`,
+  );
+
+  if (existsSync(packagedElectronPath)) {
+    return packagedElectronPath;
+  }
+
+  return executablePath;
 }
 
 function describeBackendExit(code: number | null, signal: NodeJS.Signals | null) {
@@ -92,7 +120,7 @@ export class BackendClient {
         stdio: "pipe",
         env: {
           ...process.env,
-          SKEIN_NODE_EXECUTABLE: process.execPath,
+          SKEIN_NODE_EXECUTABLE: resolveNodeExecutablePath(),
           SKEIN_CLAUDE_WORKER_PATH: resolveClaudeWorkerPath(),
         },
       },
