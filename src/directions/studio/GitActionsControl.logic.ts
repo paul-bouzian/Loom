@@ -99,8 +99,9 @@ export function buildGitActionMenu(
     hasBranch &&
     behind === 0 &&
     (defaultBranch ? dirty || ahead > 0 : !dirty && ahead > 0);
-  const canCreateOrViewPr =
-    !unavailable && hasBranch && behind === 0 && (hasOpenPr || !defaultBranch);
+  const canCreateOrViewPr = hasOpenPr
+    ? !unavailable
+    : !unavailable && hasBranch && behind === 0 && !defaultBranch;
 
   return [
     {
@@ -199,8 +200,9 @@ function resolvePrDisabledReason(
   behind: number,
 ) {
   if (unavailable) return "Git status is unavailable.";
+  if (hasOpenPr) return null;
   if (!hasBranch) return "Checkout a branch before running Git actions.";
-  if (behind > 0) return hasOpenPr ? "Pull/rebase before opening the PR." : "Pull/rebase before creating a PR.";
+  if (behind > 0) return "Pull/rebase before creating a PR.";
   if (defaultBranch && !hasOpenPr) return "Create a feature branch before opening a PR.";
   return null;
 }

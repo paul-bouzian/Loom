@@ -176,4 +176,24 @@ describe("buildGitActionMenu", () => {
       }),
     );
   });
+
+  it("keeps view PR enabled when an existing PR branch is behind", () => {
+    const snapshot = snapshotWithSummary({
+      branch: "feature/review",
+      baseBranch: "origin/main",
+      dirty: false,
+      ahead: 0,
+      behind: 2,
+    });
+
+    expect(buildGitActionMenu(snapshot, true, false, true)).toContainEqual(
+      expect.objectContaining({
+        id: "pr",
+        label: "View PR",
+        action: "viewPr",
+        disabled: false,
+        disabledReason: null,
+      }),
+    );
+  });
 });
