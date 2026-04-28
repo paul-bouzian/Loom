@@ -479,11 +479,10 @@ impl ClaudeRuntimeSession {
         context: ThreadRuntimeContext,
         text: String,
         images: Vec<ConversationImageAttachment>,
-        mention_bindings: Vec<crate::domain::conversation::ComposerMentionBindingInput>,
+        _mention_bindings: Vec<crate::domain::conversation::ComposerMentionBindingInput>,
         show_user_message: bool,
         accept_plan_markdown: bool,
     ) -> AppResult<SendMessageResult> {
-        validate_claude_mention_bindings(&mention_bindings)?;
         let visible_text = text.trim();
         validate_claude_message_content(visible_text, &images)?;
 
@@ -1260,23 +1259,18 @@ fn resolve_text_for_claude(
     context: &ThreadRuntimeContext,
     visible_text: &str,
 ) -> AppResult<String> {
-    resolve_claude_composer_text(&context.environment_path, visible_text)
-}
-
-fn validate_claude_mention_bindings(
-    bindings: &[crate::domain::conversation::ComposerMentionBindingInput],
-) -> AppResult<()> {
-    if bindings.iter().any(|binding| {
-        matches!(
-            binding.kind,
-            crate::domain::conversation::ComposerMentionBindingKind::App
-        )
-    }) {
-        return Err(AppError::Validation(
-            "Claude threads do not support app mentions.".to_string(),
-        ));
+    match resolve_claude_composer_text(&context.environment_path, visible_text) {
+        Ok(text) => Ok(text),
+        Err(AppError::Io(error)) => {
+            tracing::warn!(
+                environment_path = %context.environment_path,
+                %error,
+                "falling back to visible Claude text after composer catalog resolution failed"
+            );
+            Ok(visible_text.to_string())
+        }
+        Err(error) => Err(error),
     }
-    Ok(())
 }
 
 fn validate_claude_message_content(
@@ -2525,6 +2519,43 @@ mod tests {
             .expect_err("empty prompt without images should fail");
 
         assert!(error.to_string().contains("text or an image"));
+    }
+
+    #[tokio::test]
+    async fn claude_send_ignores_unsupported_app_mention_bindings() {
+        let _guard = claude_worker_env_lock().lock().await;
+        let worker_path =
+            std::env::temp_dir().join(format!("skein-claude-send-worker-{}.sh", Uuid::now_v7()));
+        std::fs::write(
+            &worker_path,
+            r#"read line
+printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-sent","messages":[],"messagesAuthoritative":false,"planMarkdown":null}}'
+"#,
+        )
+        .expect("fake Claude worker should be written");
+        let _worker_path = EnvVarOverride::set(CLAUDE_WORKER_PATH_ENV, &worker_path);
+        let _node_executable = EnvVarOverride::set(NODE_EXECUTABLE_ENV, "/bin/sh");
+        let session = ClaudeRuntimeSession::new(EventSink::noop(), "test".to_string());
+
+        let result = session
+            .send_message(
+                context(),
+                "Please use $github".to_string(),
+                Vec::new(),
+                vec![crate::domain::conversation::ComposerMentionBindingInput {
+                    mention: "github".to_string(),
+                    kind: crate::domain::conversation::ComposerMentionBindingKind::App,
+                    path: "app://github".to_string(),
+                }],
+            )
+            .await
+            .expect("Claude send should ignore unsupported app mention bindings");
+
+        assert_eq!(
+            result.new_provider_thread_id.as_deref(),
+            Some("provider-sent")
+        );
+        assert_eq!(result.snapshot.status, ConversationStatus::Completed);
     }
 
     #[test]

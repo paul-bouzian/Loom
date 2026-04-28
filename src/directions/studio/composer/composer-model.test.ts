@@ -98,8 +98,8 @@ describe("composer-model", () => {
     ]);
   });
 
-  it("builds Claude slash suggestions from commands and skills", () => {
-    const token = findActiveComposerToken("/rev", 4, 4);
+  it("builds Claude slash suggestions from commands only", () => {
+    const token = findActiveComposerToken("/re", 3, 3);
     const items = buildAutocompleteItems(
       token,
       {
@@ -128,10 +128,51 @@ describe("composer-model", () => {
 
     expect(items).toEqual([
       expect.objectContaining({
-        group: "Skills",
-        label: "/review",
-        insertText: "/review",
+        group: "Commands",
+        label: "/release-notes",
+        insertText: "/release-notes",
       }),
+    ]);
+  });
+
+  it("decorates Claude slash commands and dollar skills separately", () => {
+    const segments = decorateComposerText(
+      "Run /release-notes and $review but keep /review raw",
+      {
+        prompts: [
+          {
+            name: "release-notes",
+            description: "Draft release notes",
+            argumentMode: "positional",
+            argumentNames: [],
+            positionalCount: 0,
+            argumentHint: "<version>",
+          },
+        ],
+        skills: [
+          {
+            name: "review",
+            description: "Review the current diff",
+            path: "/tmp/.claude/skills/review/SKILL.md",
+          },
+        ],
+        apps: [],
+      },
+      "claude",
+    );
+
+    expect(segments).toEqual([
+      { kind: "text", text: "Run " },
+      {
+        kind: "prompt",
+        text: "/release-notes",
+        parts: [{ text: "/release-notes", tone: "base" }],
+        start: 4,
+        end: 18,
+      },
+      { kind: "text", text: " and " },
+      { kind: "skill", text: "$review", start: 23, end: 30 },
+      { kind: "text", text: " but keep /review raw" },
     ]);
   });
 

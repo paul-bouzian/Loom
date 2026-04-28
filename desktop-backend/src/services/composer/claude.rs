@@ -1,11 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::domain::conversation::{
     ComposerPromptArgumentMode, ComposerPromptOption, ComposerSkillOption, ThreadComposerCatalog,
 };
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeCommandDefinition {
@@ -23,7 +23,13 @@ pub fn load_claude_command_definitions(
 ) -> AppResult<Vec<ClaudeCommandDefinition>> {
     let mut commands = HashMap::<String, ClaudeCommandDefinition>::new();
     for root in claude_command_roots(environment_path) {
-        load_claude_commands_from_root(&root, &mut commands)?;
+        if let Err(error) = load_claude_commands_from_root(&root, &mut commands) {
+            tracing::warn!(
+                path = %root.display(),
+                %error,
+                "skipping unreadable Claude command root"
+            );
+        }
     }
     let mut commands = commands
         .into_values()
@@ -38,7 +44,13 @@ pub fn load_claude_skill_definitions(
 ) -> AppResult<Vec<ClaudeCommandDefinition>> {
     let mut skills = HashMap::<String, ClaudeCommandDefinition>::new();
     for root in claude_skill_roots(environment_path) {
-        load_claude_skills_from_root(&root, &mut skills)?;
+        if let Err(error) = load_claude_skills_from_root(&root, &mut skills) {
+            tracing::warn!(
+                path = %root.display(),
+                %error,
+                "skipping unreadable Claude skill root"
+            );
+        }
     }
     let mut skills = skills
         .into_values()
@@ -52,14 +64,9 @@ pub fn build_claude_thread_catalog(
     commands: &[ClaudeCommandDefinition],
     skills: &[ClaudeCommandDefinition],
 ) -> ThreadComposerCatalog {
-    let skill_names = skills
-        .iter()
-        .map(|skill| skill.name.to_ascii_lowercase())
-        .collect::<HashSet<_>>();
     ThreadComposerCatalog {
         prompts: commands
             .iter()
-            .filter(|command| !skill_names.contains(&command.name.to_ascii_lowercase()))
             .map(|command| ComposerPromptOption {
                 name: command.name.clone(),
                 description: command.description.clone(),
@@ -101,9 +108,6 @@ pub fn resolve_claude_composer_text(
     let mut slash_map = HashMap::<String, &ClaudeCommandDefinition>::new();
     for command in &commands {
         slash_map.insert(command.name.to_ascii_lowercase(), command);
-    }
-    for skill in &skills {
-        slash_map.insert(skill.name.to_ascii_lowercase(), skill);
     }
     let skill_map = skills
         .iter()
@@ -167,7 +171,7 @@ pub fn resolve_claude_composer_text(
         } else {
             ("", name_end)
         };
-        output.push_str(&render_claude_definition(definition, arguments));
+        output.push_str(&render_claude_definition(definition, arguments)?);
         cursor = end;
     }
 
@@ -218,7 +222,17 @@ fn load_claude_commands_from_root(
         else {
             continue;
         };
-        let raw = fs::read_to_string(&path)?;
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    %error,
+                    "skipping unreadable Claude command file"
+                );
+                continue;
+            }
+        };
         let parsed =
             parse_claude_definition_file(&raw, fallback_name, path.to_string_lossy().as_ref());
         commands.insert(parsed.name.to_ascii_lowercase(), parsed);
@@ -230,14 +244,46 @@ fn load_claude_skills_from_root(
     root: &Path,
     skills: &mut HashMap<String, ClaudeCommandDefinition>,
 ) -> AppResult<()> {
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let directory = entry.path();
-        if !directory.is_dir() {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::warn!(
+                path = %root.display(),
+                %error,
+                "skipping unreadable Claude skill root"
+            );
+            return Ok(());
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!(
+                    path = %root.display(),
+                    %error,
+                    "skipping unreadable Claude skill directory entry"
+                );
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                tracing::warn!(
+                    path = %entry.path().display(),
+                    %error,
+                    "skipping unreadable Claude skill directory entry"
+                );
+                continue;
+            }
+        };
+        if file_type.is_symlink() || !file_type.is_dir() {
             continue;
         }
+        let directory = entry.path();
         let path = directory.join("SKILL.md");
-        if !path.is_file() {
+        if !is_regular_file(&path) {
             continue;
         }
         let Some(fallback_name) = directory
@@ -248,7 +294,17 @@ fn load_claude_skills_from_root(
         else {
             continue;
         };
-        let raw = fs::read_to_string(&path)?;
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    %error,
+                    "skipping unreadable Claude skill file"
+                );
+                continue;
+            }
+        };
         let parsed =
             parse_claude_definition_file(&raw, fallback_name, path.to_string_lossy().as_ref());
         skills.insert(parsed.name.to_ascii_lowercase(), parsed);
@@ -264,18 +320,59 @@ fn markdown_files_recursively(root: &Path) -> AppResult<Vec<PathBuf>> {
 }
 
 fn collect_markdown_files(root: &Path, files: &mut Vec<PathBuf>) -> AppResult<()> {
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::warn!(
+                path = %root.display(),
+                %error,
+                "skipping unreadable Claude command directory"
+            );
+            return Ok(());
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!(
+                    path = %root.display(),
+                    %error,
+                    "skipping unreadable Claude command directory entry"
+                );
+                continue;
+            }
+        };
         let path = entry.path();
-        if path.is_dir() {
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    %error,
+                    "skipping unreadable Claude command path"
+                );
+                continue;
+            }
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             collect_markdown_files(&path, files)?;
             continue;
         }
-        if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+        if file_type.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("md") {
             files.push(path);
         }
     }
     Ok(())
+}
+
+fn is_regular_file(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
 }
 
 fn parse_claude_definition_file(
@@ -405,8 +502,12 @@ fn is_valid_claude_definition_name(value: &str) -> bool {
         })
 }
 
-fn render_claude_definition(definition: &ClaudeCommandDefinition, arguments: &str) -> String {
-    let parsed_arguments = split_shell_arguments(arguments);
+fn render_claude_definition(
+    definition: &ClaudeCommandDefinition,
+    arguments: &str,
+) -> AppResult<String> {
+    let parsed_arguments = split_shell_arguments(arguments)?;
+    let argument_text = parsed_arguments.join(" ");
     let mut rendered = definition.content.clone();
     rendered = rendered.replace(
         "${CLAUDE_SKILL_DIR}",
@@ -421,7 +522,7 @@ fn render_claude_definition(definition: &ClaudeCommandDefinition, arguments: &st
         rendered = rendered.replace(&format!("$ARGUMENTS[{position}]"), value);
         rendered = rendered.replace(&format!("${position}"), value);
     }
-    rendered = rendered.replace("$ARGUMENTS", arguments);
+    rendered = rendered.replace("$ARGUMENTS", &argument_text);
     for (index, name) in definition.argument_names.iter().enumerate() {
         if let Some(value) = parsed_arguments.get(index) {
             rendered = rendered.replace(&format!("${name}"), value);
@@ -435,34 +536,51 @@ fn render_claude_definition(definition: &ClaudeCommandDefinition, arguments: &st
             .argument_names
             .iter()
             .any(|name| definition.content.contains(&format!("${name}")));
-    if !arguments.is_empty() && !has_argument_placeholder {
-        rendered = format!("{}\n\nARGUMENTS: {}", rendered.trim_end(), arguments);
+    if !argument_text.is_empty() && !has_argument_placeholder {
+        rendered = format!("{}\n\nARGUMENTS: {}", rendered.trim_end(), argument_text);
     }
-    rendered
+    Ok(rendered)
 }
 
-fn split_shell_arguments(source: &str) -> Vec<String> {
+fn split_shell_arguments(source: &str) -> AppResult<Vec<String>> {
     let mut arguments = Vec::new();
     let mut current = String::new();
     let mut quote = None::<char>;
     let mut escaped = false;
 
     for character in source.chars() {
+        if character.is_control() && character != '\t' {
+            return Err(AppError::Validation(
+                "Claude command arguments cannot contain control characters.".to_string(),
+            ));
+        }
         if escaped {
             current.push(character);
             escaped = false;
             continue;
         }
-        if character == '\\' {
-            escaped = true;
-            continue;
-        }
         if let Some(active_quote) = quote {
+            if active_quote == '\'' {
+                if character == active_quote {
+                    quote = None;
+                } else {
+                    current.push(character);
+                }
+                continue;
+            }
+            if character == '\\' {
+                escaped = true;
+                continue;
+            }
             if character == active_quote {
                 quote = None;
             } else {
                 current.push(character);
             }
+            continue;
+        }
+        if character == '\\' {
+            escaped = true;
             continue;
         }
         if character == '"' || character == '\'' {
@@ -478,10 +596,20 @@ fn split_shell_arguments(source: &str) -> Vec<String> {
         current.push(character);
     }
 
+    if escaped {
+        return Err(AppError::Validation(
+            "Claude command arguments cannot end with an escape character.".to_string(),
+        ));
+    }
+    if quote.is_some() {
+        return Err(AppError::Validation(
+            "Claude command arguments must close quoted values.".to_string(),
+        ));
+    }
     if !current.is_empty() {
         arguments.push(current);
     }
-    arguments
+    Ok(arguments)
 }
 
 fn is_identifier_char(character: char) -> bool {
@@ -588,5 +716,115 @@ mod tests {
 
         assert!(resolved.contains("Deploy to production as canary"));
         assert!(resolved.contains("Use Review the current task too"));
+    }
+
+    #[test]
+    fn keeps_claude_skills_exclusive_to_dollar_mentions() {
+        let test_dir = TestDir::new();
+        let shared_name = unique_claude_name("shared");
+        let command_root = test_dir.path.join(".claude").join("commands");
+        let skill_root = test_dir
+            .path
+            .join(".claude")
+            .join("skills")
+            .join(&shared_name);
+        fs::create_dir_all(&command_root).expect("command root should be created");
+        fs::create_dir_all(&skill_root).expect("skill root should be created");
+        fs::write(
+            command_root.join(format!("{shared_name}.md")),
+            "Command content",
+        )
+        .expect("command should be written");
+        fs::write(
+            skill_root.join("SKILL.md"),
+            format!("---\nname: {shared_name}\n---\nSkill content"),
+        )
+        .expect("skill should be written");
+
+        let commands =
+            load_claude_command_definitions(&test_dir.path.to_string_lossy()).expect("commands");
+        let skills =
+            load_claude_skill_definitions(&test_dir.path.to_string_lossy()).expect("skills");
+        let catalog = build_claude_thread_catalog(&commands, &skills);
+        let slash = resolve_claude_composer_text(
+            &test_dir.path.to_string_lossy(),
+            &format!("/{shared_name}"),
+        )
+        .expect("slash command should resolve");
+        let dollar = resolve_claude_composer_text(
+            &test_dir.path.to_string_lossy(),
+            &format!("${shared_name}"),
+        )
+        .expect("dollar skill should resolve");
+
+        assert!(catalog
+            .prompts
+            .iter()
+            .any(|prompt| prompt.name == shared_name));
+        assert!(catalog.skills.iter().any(|skill| skill.name == shared_name));
+        assert_eq!(slash, "Command content");
+        assert_eq!(dollar, "Skill content");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skips_symlinked_claude_command_directories() {
+        use std::os::unix::fs::symlink;
+
+        let test_dir = TestDir::new();
+        let outside_dir = TestDir::new();
+        let command_name = unique_claude_name("outside");
+        let command_root = test_dir.path.join(".claude").join("commands");
+        fs::create_dir_all(&command_root).expect("command root should be created");
+        fs::write(
+            outside_dir.path.join(format!("{command_name}.md")),
+            "Outside command",
+        )
+        .expect("outside command should be written");
+        symlink(&outside_dir.path, command_root.join("linked"))
+            .expect("symlinked command directory should be created");
+
+        let commands =
+            load_claude_command_definitions(&test_dir.path.to_string_lossy()).expect("commands");
+
+        assert!(!commands.iter().any(|command| command.name == command_name));
+    }
+
+    #[test]
+    fn preserves_single_quoted_backslashes_in_claude_arguments() {
+        let test_dir = TestDir::new();
+        let command_name = unique_claude_name("path");
+        let command_root = test_dir.path.join(".claude").join("commands");
+        fs::create_dir_all(&command_root).expect("command root should be created");
+        fs::write(command_root.join(format!("{command_name}.md")), "Path: $1")
+            .expect("command should be written");
+
+        let resolved = resolve_claude_composer_text(
+            &test_dir.path.to_string_lossy(),
+            &format!("/{command_name} 'C:\\tmp\\foo'"),
+        )
+        .expect("argument should resolve");
+
+        assert_eq!(resolved, "Path: C:\\tmp\\foo");
+    }
+
+    #[test]
+    fn rejects_malformed_claude_command_arguments() {
+        let test_dir = TestDir::new();
+        let command_name = unique_claude_name("deploy");
+        let command_root = test_dir.path.join(".claude").join("commands");
+        fs::create_dir_all(&command_root).expect("command root should be created");
+        fs::write(command_root.join(format!("{command_name}.md")), "Deploy $1")
+            .expect("command should be written");
+
+        let error = resolve_claude_composer_text(
+            &test_dir.path.to_string_lossy(),
+            &format!("/{command_name} \"unterminated"),
+        )
+        .expect_err("unterminated quote should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("Claude command arguments must close quoted values"));
     }
 }

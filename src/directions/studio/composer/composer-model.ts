@@ -269,10 +269,7 @@ function buildClaudeSlashAutocompleteItems(
   catalog: ThreadComposerCatalog | null,
 ) {
   const query = token.query.toLowerCase();
-  const skills = catalog?.skills ?? [];
-  const skillNames = new Set(skills.map((skill) => skill.name.toLowerCase()));
-  const commands = (catalog?.prompts ?? [])
-    .filter((command) => !skillNames.has(command.name.toLowerCase()))
+  return (catalog?.prompts ?? [])
     .filter((command) => matchesClaudeCommandQuery(command.name, query))
     .map<ComposerAutocompleteItem>((command) => ({
       id: `claude-command:${command.name}`,
@@ -283,17 +280,6 @@ function buildClaudeSlashAutocompleteItems(
       insertText: `/${command.name}`,
       appendSpace: true,
     }));
-  const skillItems = skills
-    .filter((skill) => matchesClaudeCommandQuery(skill.name, query))
-    .map<ComposerAutocompleteItem>((skill) => ({
-      id: `claude-skill:${skill.name}`,
-      group: "Skills",
-      label: `/${skill.name}`,
-      description: skill.description,
-      insertText: `/${skill.name}`,
-      appendSpace: true,
-    }));
-  return [...commands, ...skillItems];
 }
 
 function buildClaudeMentionAutocompleteItems(
@@ -384,15 +370,6 @@ export function decorateComposerText(
   if (provider === "claude") {
     for (const token of collectSpecialTokens(text, "/", occupied)) {
       const normalized = token.text.slice(1).toLowerCase();
-      if (skillMap.has(normalized)) {
-        mentionTokens.push({
-          kind: "skill",
-          text: token.text,
-          start: token.start,
-          end: token.end,
-        });
-        continue;
-      }
       if (promptMap.has(normalized)) {
         mentionTokens.push({
           kind: "prompt",
