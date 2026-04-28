@@ -22,9 +22,15 @@ export type DraftThreadHydrationEntries = Record<
 export type DraftThreadPersistenceMode = "debounced" | "immediate";
 
 type DraftThreadPersistenceController = {
+  afterPersistCallbacks: Array<{
+    callback: () => void;
+    minPersistGeneration: number;
+  }>;
   epoch: number;
   inflight: Promise<void> | null;
+  inflightGeneration: number | null;
   lastPersistedKey: string | null | undefined;
+  persistGeneration: number;
   queued: SavedDraftThreadState | null | undefined;
   timeoutId: ReturnType<typeof setTimeout> | null;
 };
@@ -33,7 +39,6 @@ type DraftThreadMovePersistenceController = {
   destinationKey: string;
   epoch: number;
   sourceKey: string;
-  timeoutId: ReturnType<typeof setTimeout> | null;
 };
 
 const draftThreadPersistenceByKey = new Map<
@@ -44,6 +49,7 @@ const draftThreadMovePersistenceByKey = new Map<
   string,
   DraftThreadMovePersistenceController
 >();
+const draftThreadMoveEpochByKey = new Map<string, number>();
 
 export function draftThreadTargetKey(target: DraftThreadTarget) {
   return target.kind === "chat" ? "chat" : `project:${target.projectId}`;
@@ -125,7 +131,7 @@ export function scheduleDraftThreadPersistence(
   mode: DraftThreadPersistenceMode,
 ) {
   const key = draftThreadTargetKey(target);
-  clearDraftThreadMovePersistenceForTargetKey(key);
+  clearDraftThreadMovePersistenceForSourceKey(key);
   const controller = ensureDraftThreadPersistenceController(key);
   controller.queued = state == null ? null : normalizeDraftThreadState(target, state);
 
@@ -159,24 +165,24 @@ export function scheduleDraftThreadMovePersistence(
 
   clearDraftThreadPersistenceByKey(sourceKey);
   clearDraftThreadPersistenceByKey(destinationKey);
-  clearDraftThreadMovePersistenceForTargetKey(sourceKey);
-  clearDraftThreadMovePersistenceForTargetKey(destinationKey);
+  clearDraftThreadMovePersistenceForSourceKey(sourceKey);
+  clearDraftThreadMovePersistenceForSourceKey(destinationKey);
 
   const moveKey = draftThreadMovePersistenceKey(sourceKey, destinationKey);
+  const epoch = nextDraftThreadMoveEpoch(moveKey);
   const controller: DraftThreadMovePersistenceController = {
     destinationKey,
-    epoch: 0,
+    epoch,
     sourceKey,
-    timeoutId: null,
   };
   draftThreadMovePersistenceByKey.set(moveKey, controller);
-  void flushDraftThreadMovePersistence(
-    source,
-    destination,
-    destinationState,
-    moveKey,
-    controller.epoch,
-  );
+  enqueueDraftThreadPersistenceCallback(destinationKey, () => {
+    if (!isActiveDraftThreadMovePersistence(moveKey, epoch)) {
+      return;
+    }
+    scheduleDraftThreadPersistence(source, null, "immediate");
+  });
+  scheduleDraftThreadPersistence(destination, destinationState, "immediate");
 }
 
 export function clearDraftThreadPersistenceControllers() {
@@ -185,19 +191,15 @@ export function clearDraftThreadPersistenceControllers() {
       clearTimeout(controller.timeoutId);
     }
   }
-  for (const controller of draftThreadMovePersistenceByKey.values()) {
-    if (controller.timeoutId) {
-      clearTimeout(controller.timeoutId);
-    }
-  }
   draftThreadPersistenceByKey.clear();
   draftThreadMovePersistenceByKey.clear();
+  draftThreadMoveEpochByKey.clear();
 }
 
 export function clearDraftThreadPersistence(target: DraftThreadTarget) {
   const key = draftThreadTargetKey(target);
   clearDraftThreadPersistenceByKey(key);
-  clearDraftThreadMovePersistenceForTargetKey(key);
+  clearDraftThreadMovePersistenceForSourceKey(key);
 }
 
 export function clearInvalidDraftThreadPersistenceControllers(
@@ -228,9 +230,12 @@ function ensureDraftThreadPersistenceController(key: string) {
   }
 
   const controller: DraftThreadPersistenceController = {
+    afterPersistCallbacks: [],
     epoch: 0,
     inflight: null,
+    inflightGeneration: null,
     lastPersistedKey: undefined,
+    persistGeneration: 0,
     queued: undefined,
     timeoutId: null,
   };
@@ -246,10 +251,25 @@ function maybeDisposeDraftThreadPersistenceController(key: string) {
   if (
     controller.inflight === null &&
     controller.timeoutId === null &&
+    controller.afterPersistCallbacks.length === 0 &&
     controller.queued === undefined
   ) {
     draftThreadPersistenceByKey.delete(key);
   }
+}
+
+function enqueueDraftThreadPersistenceCallback(
+  key: string,
+  callback: () => void,
+) {
+  const controller = ensureDraftThreadPersistenceController(key);
+  controller.afterPersistCallbacks.push({
+    callback,
+    minPersistGeneration:
+      controller.inflightGeneration == null
+        ? controller.persistGeneration + 1
+        : controller.inflightGeneration + 1,
+  });
 }
 
 async function flushDraftThreadPersistence(target: DraftThreadTarget) {
@@ -264,10 +284,17 @@ async function flushDraftThreadPersistence(target: DraftThreadTarget) {
   const epoch = controller.epoch;
   if (controller.lastPersistedKey === nextKey) {
     controller.queued = undefined;
+    runDraftThreadPersistenceCallbacks(
+      controller,
+      Number.POSITIVE_INFINITY,
+    );
     maybeDisposeDraftThreadPersistenceController(key);
     return;
   }
 
+  const persistGeneration = controller.persistGeneration + 1;
+  controller.persistGeneration = persistGeneration;
+  controller.inflightGeneration = persistGeneration;
   controller.queued = undefined;
   controller.inflight = (async () => {
     try {
@@ -277,6 +304,7 @@ async function flushDraftThreadPersistence(target: DraftThreadTarget) {
       });
       if (epoch === controller.epoch) {
         controller.lastPersistedKey = nextKey;
+        runDraftThreadPersistenceCallbacks(controller, persistGeneration);
       }
     } catch {
       if (epoch !== controller.epoch) {
@@ -289,6 +317,7 @@ async function flushDraftThreadPersistence(target: DraftThreadTarget) {
       return;
     } finally {
       controller.inflight = null;
+      controller.inflightGeneration = null;
     }
 
     if (
@@ -317,56 +346,27 @@ function scheduleDraftThreadRetry(
   }, DRAFT_THREAD_PERSIST_RETRY_MS);
 }
 
-async function flushDraftThreadMovePersistence(
-  source: DraftThreadTarget,
-  destination: DraftThreadTarget,
-  destinationState: SavedDraftThreadState | null,
-  moveKey: string,
-  epoch: number,
-) {
-  if (!isActiveDraftThreadMovePersistence(moveKey, epoch)) {
-    return;
-  }
-
-  try {
-    await bridge.saveDraftThreadState({
-      target: destination,
-      state: destinationState,
-    });
-    if (!isActiveDraftThreadMovePersistence(moveKey, epoch)) {
-      return;
-    }
-
-    await bridge.saveDraftThreadState({
-      target: source,
-      state: null,
-    });
-    if (!isActiveDraftThreadMovePersistence(moveKey, epoch)) {
-      return;
-    }
-
-    draftThreadMovePersistenceByKey.delete(moveKey);
-  } catch {
-    const controller = draftThreadMovePersistenceByKey.get(moveKey);
-    if (!controller || controller.epoch !== epoch || controller.timeoutId) {
-      return;
-    }
-    controller.timeoutId = setTimeout(() => {
-      controller.timeoutId = null;
-      void flushDraftThreadMovePersistence(
-        source,
-        destination,
-        destinationState,
-        moveKey,
-        epoch,
-      );
-    }, DRAFT_THREAD_PERSIST_RETRY_MS);
-  }
-}
-
 function isActiveDraftThreadMovePersistence(moveKey: string, epoch: number) {
   const controller = draftThreadMovePersistenceByKey.get(moveKey);
   return controller !== undefined && controller.epoch === epoch;
+}
+
+function runDraftThreadPersistenceCallbacks(
+  controller: DraftThreadPersistenceController,
+  persistGeneration: number,
+) {
+  if (controller.afterPersistCallbacks.length === 0) {
+    return;
+  }
+  const callbacksToRun = controller.afterPersistCallbacks.filter(
+    ({ minPersistGeneration }) => minPersistGeneration <= persistGeneration,
+  );
+  controller.afterPersistCallbacks = controller.afterPersistCallbacks.filter(
+    ({ minPersistGeneration }) => minPersistGeneration > persistGeneration,
+  );
+  for (const { callback } of callbacksToRun) {
+    callback();
+  }
 }
 
 function clearDraftThreadPersistenceByKey(key: string) {
@@ -377,6 +377,7 @@ function clearDraftThreadPersistenceByKey(key: string) {
 
   controller.epoch += 1;
   controller.queued = undefined;
+  controller.afterPersistCallbacks = [];
   if (controller.timeoutId) {
     clearTimeout(controller.timeoutId);
     controller.timeoutId = null;
@@ -388,15 +389,18 @@ function draftThreadMovePersistenceKey(sourceKey: string, destinationKey: string
   return `${sourceKey}\n${destinationKey}`;
 }
 
-function clearDraftThreadMovePersistenceForTargetKey(targetKey: string) {
+function nextDraftThreadMoveEpoch(moveKey: string) {
+  const epoch = (draftThreadMoveEpochByKey.get(moveKey) ?? 0) + 1;
+  draftThreadMoveEpochByKey.set(moveKey, epoch);
+  return epoch;
+}
+
+function clearDraftThreadMovePersistenceForSourceKey(sourceKey: string) {
   for (const [
     key,
     controller,
   ] of draftThreadMovePersistenceByKey.entries()) {
-    if (
-      controller.sourceKey === targetKey ||
-      controller.destinationKey === targetKey
-    ) {
+    if (controller.sourceKey === sourceKey) {
       clearDraftThreadMovePersistenceByKey(key);
     }
   }
@@ -408,11 +412,10 @@ function clearDraftThreadMovePersistenceByKey(key: string) {
     return;
   }
 
-  controller.epoch += 1;
-  if (controller.timeoutId) {
-    clearTimeout(controller.timeoutId);
-    controller.timeoutId = null;
-  }
+  draftThreadMoveEpochByKey.set(
+    key,
+    Math.max(draftThreadMoveEpochByKey.get(key) ?? 0, controller.epoch) + 1,
+  );
   draftThreadMovePersistenceByKey.delete(key);
 }
 

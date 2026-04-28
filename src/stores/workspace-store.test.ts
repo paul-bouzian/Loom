@@ -1254,6 +1254,14 @@ describe("workspace store — grid 2x2 panes", () => {
       };
     }
 
+    function deferred<T>() {
+      let resolve: (value: T) => void = () => {};
+      const promise = new Promise<T>((nextResolve) => {
+        resolve = nextResolve;
+      });
+      return { promise, resolve };
+    }
+
     it("openThreadDraft seeds topLeft when the layout is empty", () => {
       seedTwoThreadWorkspace();
 
@@ -1603,6 +1611,46 @@ describe("workspace store — grid 2x2 panes", () => {
         state: null,
       });
       vi.useRealTimers();
+    });
+
+    it("still clears the source after destination edits queue behind the move save", async () => {
+      seedTwoThreadWorkspace();
+      const chatTarget = { kind: "chat" } as const;
+      const projectTarget = { kind: "project", projectId: "project-a" } as const;
+      const movedState = makeSavedDraftState("Moved draft");
+      const editedState = makeSavedDraftState("Destination edit");
+      const firstDestinationSave = deferred<void>();
+      mockedBridge.saveDraftThreadState.mockReturnValueOnce(
+        firstDestinationSave.promise,
+      );
+
+      useWorkspaceStore
+        .getState()
+        .moveDraftThreadState(chatTarget, projectTarget, movedState);
+      expect(mockedBridge.saveDraftThreadState).toHaveBeenCalledTimes(1);
+
+      useWorkspaceStore
+        .getState()
+        .updateDraftThreadState(projectTarget, editedState);
+
+      await act(async () => {
+        firstDestinationSave.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockedBridge.saveDraftThreadState).toHaveBeenCalledWith({
+        target: projectTarget,
+        state: movedState,
+      });
+      expect(mockedBridge.saveDraftThreadState).toHaveBeenCalledWith({
+        target: projectTarget,
+        state: editedState,
+      });
+      expect(mockedBridge.saveDraftThreadState).toHaveBeenCalledWith({
+        target: chatTarget,
+        state: null,
+      });
     });
 
     it("keeps newer local draft edits when hydration resolves late", async () => {
