@@ -344,6 +344,9 @@ impl ClaudeRuntimeSession {
             .hidden_provider_message_markers_for_thread(&context.thread_id)
             .await;
         let persisted_items = item_store::load(&context.thread_id);
+        let has_plan_approval_system_item = self
+            .plan_approval_system_item_exists_for_thread(&context.thread_id, &persisted_items)
+            .await;
         if let Some(provider_thread_id) = context.provider_thread_id.clone() {
             let result = run_claude_worker::<_, ClaudeOpenResult>(
                 None,
@@ -358,7 +361,7 @@ impl ClaudeRuntimeSession {
             promote_legacy_hidden_plan_approval_message(
                 &mut hidden_provider_markers,
                 &result.messages,
-                &persisted_items,
+                has_plan_approval_system_item,
             );
             let mut snapshot = snapshot_from_claude_messages(
                 context,
@@ -393,7 +396,7 @@ impl ClaudeRuntimeSession {
             promote_legacy_hidden_plan_approval_message(
                 &mut hidden_provider_markers,
                 &messages,
-                &persisted_items,
+                has_plan_approval_system_item,
             );
             let mut snapshot = snapshot_from_claude_messages(
                 context,
@@ -422,6 +425,27 @@ impl ClaudeRuntimeSession {
             .get(thread_id)
             .map(hidden_provider_message_markers_from_snapshot);
         live_markers.unwrap_or_else(|| load_hidden_provider_message_markers(thread_id))
+    }
+
+    async fn plan_approval_system_item_exists_for_thread(
+        &self,
+        thread_id: &str,
+        persisted_items: &[ConversationItem],
+    ) -> bool {
+        if persisted_items_contain_plan_approval(persisted_items) {
+            return true;
+        }
+        let live_has_plan_approval = self
+            .state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .get(thread_id)
+            .map(|snapshot| persisted_items_contain_plan_approval(&snapshot.items));
+        live_has_plan_approval.unwrap_or_else(|| {
+            snapshot_store::load(thread_id)
+                .is_some_and(|snapshot| persisted_items_contain_plan_approval(&snapshot.items))
+        })
     }
 
     pub async fn send_message(
@@ -1711,12 +1735,9 @@ fn promote_hidden_provider_message_texts(
 fn promote_legacy_hidden_plan_approval_message(
     markers: &mut HiddenProviderMessageMarkers,
     messages: &[ClaudeSimpleMessage],
-    persisted_items: &[ConversationItem],
+    has_plan_approval_system_item: bool,
 ) {
-    if !markers.ids.is_empty()
-        || !markers.texts.is_empty()
-        || !persisted_items_contain_plan_approval(persisted_items)
-    {
+    if !markers.ids.is_empty() || !markers.texts.is_empty() || !has_plan_approval_system_item {
         return;
     }
     if let Some(id) = latest_user_message_id_with_text(messages, plan_approval_message()) {
@@ -3807,10 +3828,10 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
         }];
         let mut markers = HiddenProviderMessageMarkers::default();
 
-        promote_legacy_hidden_plan_approval_message(&mut markers, &messages, &[]);
+        promote_legacy_hidden_plan_approval_message(&mut markers, &messages, false);
         assert!(markers.ids.is_empty());
 
-        let persisted_items = vec![ConversationItem::System(
+        let snapshot_items = vec![ConversationItem::System(
             crate::domain::conversation::ConversationSystemItem {
                 id: "system-plan-approved".to_string(),
                 turn_id: None,
@@ -3821,7 +3842,8 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
             },
         )];
 
-        promote_legacy_hidden_plan_approval_message(&mut markers, &messages, &persisted_items);
+        assert!(persisted_items_contain_plan_approval(&snapshot_items));
+        promote_legacy_hidden_plan_approval_message(&mut markers, &messages, true);
         assert_eq!(markers.ids, ["user-hidden"]);
     }
 
