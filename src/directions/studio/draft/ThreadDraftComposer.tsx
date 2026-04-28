@@ -557,6 +557,14 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
       setError(null);
       await hydrateDraftThreadState(sourceTarget);
       const workspaceState = useWorkspaceStore.getState();
+      const currentSlotDraft = workspaceState.draftBySlot[paneId] ?? null;
+      if (
+        !currentSlotDraft ||
+        draftThreadTargetKey(currentSlotDraft) !== sourceKey
+      ) {
+        setIsRetargeting(false);
+        return;
+      }
       latestSourceState =
         selectDraftThreadState(sourceTarget)(workspaceState) ?? null;
       if (
@@ -568,6 +576,14 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
         return;
       }
       setIsRetargeting(false);
+    }
+
+    const currentSlotDraft = useWorkspaceStore.getState().draftBySlot[paneId] ?? null;
+    if (
+      !currentSlotDraft ||
+      draftThreadTargetKey(currentSlotDraft) !== sourceKey
+    ) {
+      return;
     }
 
     const sourceState = latestSourceState ?? fallbackSourceState;

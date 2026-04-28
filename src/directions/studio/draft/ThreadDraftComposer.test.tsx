@@ -539,6 +539,51 @@ describe("ThreadDraftComposer", () => {
     });
   });
 
+  it("does not retarget the pane when chat hydration resolves after the slot changed", async () => {
+    const loadedChatDraft = deferred<SavedDraftThreadState | null>();
+    mockedBridge.getDraftThreadState.mockReturnValueOnce(loadedChatDraft.promise);
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      draftBySlot: {
+        topLeft: { kind: "chat" },
+      },
+    }));
+
+    render(<ThreadDraftComposer draft={{ kind: "chat" }} paneId="topLeft" />);
+
+    await waitFor(() => {
+      expect(latestEnvironmentSelectorProps).not.toBeNull();
+    });
+
+    act(() => {
+      latestEnvironmentSelectorProps?.onChange({
+        kind: "project",
+        projectId: "project-1",
+        target: { kind: "local" },
+      });
+      useWorkspaceStore.setState((state) => ({
+        ...state,
+        draftBySlot: {
+          topLeft: { kind: "project", projectId: "project-1" },
+        },
+      }));
+    });
+
+    await act(async () => {
+      loadedChatDraft.resolve(makeDraftThreadState({ text: "Too late" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(useWorkspaceStore.getState().draftStateByTargetKey.chat).toEqual(
+      makeDraftThreadState({ text: "Too late" }),
+    );
+    expect(
+      useWorkspaceStore.getState().draftStateByTargetKey["project:project-1"],
+    ).toBeUndefined();
+    expect(mockedBridge.saveDraftThreadState).not.toHaveBeenCalled();
+  });
+
   it("replaces the previous project target when moving a chat draft into that project", async () => {
     const { rerender } = render(
       <ThreadDraftComposer

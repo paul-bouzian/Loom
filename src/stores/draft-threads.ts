@@ -38,7 +38,8 @@ type DraftThreadPersistenceController = {
 type DraftThreadMovePersistenceController = {
   destinationKey: string;
   epoch: number;
-  sourceKey: string;
+  sourceKeys: string[];
+  sources: DraftThreadTarget[];
 };
 
 const draftThreadPersistenceByKey = new Map<
@@ -164,6 +165,10 @@ export function scheduleDraftThreadMovePersistence(
   }
 
   clearDraftThreadPersistenceByKey(sourceKey);
+  const sources = uniqueDraftThreadTargets([
+    ...takeDraftThreadMoveSourcesForDestinationKey(sourceKey),
+    source,
+  ]);
   clearDraftThreadMovePersistenceForSourceKey(sourceKey);
   clearDraftThreadMovePersistenceForSourceKey(destinationKey);
 
@@ -172,14 +177,17 @@ export function scheduleDraftThreadMovePersistence(
   const controller: DraftThreadMovePersistenceController = {
     destinationKey,
     epoch,
-    sourceKey,
+    sourceKeys: sources.map(draftThreadTargetKey),
+    sources,
   };
   draftThreadMovePersistenceByKey.set(moveKey, controller);
   enqueueDraftThreadPersistenceCallback(destinationKey, () => {
     if (!isActiveDraftThreadMovePersistence(moveKey, epoch)) {
       return;
     }
-    scheduleDraftThreadPersistence(source, null, "immediate");
+    for (const sourceTarget of sources) {
+      scheduleDraftThreadPersistence(sourceTarget, null, "immediate");
+    }
   });
   scheduleDraftThreadPersistence(destination, destinationState, "immediate");
 }
@@ -214,7 +222,7 @@ export function clearInvalidDraftThreadPersistenceControllers(
     controller,
   ] of draftThreadMovePersistenceByKey.entries()) {
     if (
-      !validKeys.has(controller.sourceKey) ||
+      controller.sourceKeys.some((sourceKey) => !validKeys.has(sourceKey)) ||
       !validKeys.has(controller.destinationKey)
     ) {
       clearDraftThreadMovePersistenceByKey(key);
@@ -388,10 +396,32 @@ function draftThreadMovePersistenceKey(sourceKey: string, destinationKey: string
   return `${sourceKey}\n${destinationKey}`;
 }
 
+function uniqueDraftThreadTargets(targets: DraftThreadTarget[]) {
+  const byKey = new Map<string, DraftThreadTarget>();
+  for (const target of targets) {
+    byKey.set(draftThreadTargetKey(target), target);
+  }
+  return [...byKey.values()];
+}
+
 function nextDraftThreadMoveEpoch(moveKey: string) {
   const epoch = (draftThreadMoveEpochByKey.get(moveKey) ?? 0) + 1;
   draftThreadMoveEpochByKey.set(moveKey, epoch);
   return epoch;
+}
+
+function takeDraftThreadMoveSourcesForDestinationKey(destinationKey: string) {
+  const sources: DraftThreadTarget[] = [];
+  for (const [
+    key,
+    controller,
+  ] of draftThreadMovePersistenceByKey.entries()) {
+    if (controller.destinationKey === destinationKey) {
+      sources.push(...controller.sources);
+      clearDraftThreadMovePersistenceByKey(key);
+    }
+  }
+  return sources;
 }
 
 function clearDraftThreadMovePersistenceForSourceKey(sourceKey: string) {
@@ -399,7 +429,7 @@ function clearDraftThreadMovePersistenceForSourceKey(sourceKey: string) {
     key,
     controller,
   ] of draftThreadMovePersistenceByKey.entries()) {
-    if (controller.sourceKey === sourceKey) {
+    if (controller.sourceKeys.includes(sourceKey)) {
       clearDraftThreadMovePersistenceByKey(key);
     }
   }
