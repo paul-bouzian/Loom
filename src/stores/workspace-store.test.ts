@@ -1791,6 +1791,46 @@ describe("workspace store — grid 2x2 panes", () => {
       });
     });
 
+    it("does not reuse a cleared destination move as an upstream source", async () => {
+      seedTwoThreadWorkspace();
+      const chatTarget = { kind: "chat" } as const;
+      const projectATarget = { kind: "project", projectId: "project-a" } as const;
+      const projectBTarget = { kind: "project", projectId: "project-b" } as const;
+      const projectAState = makeSavedDraftState("Abandoned project A move");
+      const projectBState = makeSavedDraftState("Move project A to B");
+      const projectASave = deferred<void>();
+      mockedBridge.saveDraftThreadState.mockReturnValueOnce(projectASave.promise);
+
+      useWorkspaceStore
+        .getState()
+        .moveDraftThreadState(chatTarget, projectATarget, projectAState);
+      expect(mockedBridge.saveDraftThreadState).toHaveBeenCalledTimes(1);
+
+      useWorkspaceStore.getState().clearDraftThreadState(projectATarget);
+      useWorkspaceStore
+        .getState()
+        .moveDraftThreadState(projectATarget, projectBTarget, projectBState);
+
+      await act(async () => {
+        projectASave.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockedBridge.saveDraftThreadState).toHaveBeenCalledWith({
+        target: projectBTarget,
+        state: projectBState,
+      });
+      expect(mockedBridge.saveDraftThreadState).toHaveBeenCalledWith({
+        target: projectATarget,
+        state: null,
+      });
+      expect(mockedBridge.saveDraftThreadState).not.toHaveBeenCalledWith({
+        target: chatTarget,
+        state: null,
+      });
+    });
+
     it("keeps newer local draft edits when hydration resolves late", async () => {
       seedTwoThreadWorkspace();
       let resolvePersisted: ((state: SavedDraftThreadState | null) => void) | null =

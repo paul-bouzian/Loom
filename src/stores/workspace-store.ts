@@ -22,6 +22,7 @@ import type {
   WorkspaceSnapshot,
 } from "../lib/types";
 import {
+  clearDraftThreadPersistence,
   clearInvalidDraftThreadPersistenceControllers,
   clearDraftThreadPersistenceControllers,
   defaultDraftThreadState,
@@ -880,6 +881,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         },
       };
     });
+    clearDraftThreadPersistence(target);
     scheduleDraftThreadPersistence(target, null, "immediate");
   },
 }));

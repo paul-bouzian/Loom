@@ -33,7 +33,9 @@ let latestInlineComposerProps: {
     provider?: string;
   }>;
   catalogTarget?: unknown;
+  disabled?: boolean;
   fileSearchTarget?: unknown;
+  isBusy?: boolean;
   transportEnabled?: boolean;
   onSend: (
     text: string,
@@ -57,8 +59,10 @@ vi.mock("../composer/InlineComposer", () => ({
     draft,
     images,
     catalogTarget,
+    disabled,
     modelOptions,
     fileSearchTarget,
+    isBusy,
     transportEnabled,
     onSend,
   }: {
@@ -66,6 +70,7 @@ vi.mock("../composer/InlineComposer", () => ({
     draft: string;
     images: Array<{ type: string }>;
     catalogTarget?: unknown;
+    disabled?: boolean;
     modelOptions: Array<{
       id: string;
       displayName: string;
@@ -73,6 +78,7 @@ vi.mock("../composer/InlineComposer", () => ({
       provider?: string;
     }>;
     fileSearchTarget?: unknown;
+    isBusy?: boolean;
     transportEnabled?: boolean;
     onSend: (
       text: string,
@@ -87,7 +93,9 @@ vi.mock("../composer/InlineComposer", () => ({
       images,
       modelOptions,
       catalogTarget,
+      disabled,
       fileSearchTarget,
+      isBusy,
       transportEnabled,
       onSend,
     };
@@ -582,6 +590,50 @@ describe("ThreadDraftComposer", () => {
       useWorkspaceStore.getState().draftStateByTargetKey["project:project-1"],
     ).toBeUndefined();
     expect(mockedBridge.saveDraftThreadState).not.toHaveBeenCalled();
+  });
+
+  it("blocks sends while chat draft retargeting is hydrating", async () => {
+    const loadedChatDraft = deferred<SavedDraftThreadState | null>();
+    mockedBridge.getDraftThreadState.mockReturnValueOnce(loadedChatDraft.promise);
+    useWorkspaceStore.setState((state) => ({
+      ...state,
+      draftBySlot: {
+        topLeft: { kind: "chat" },
+      },
+    }));
+
+    render(<ThreadDraftComposer draft={{ kind: "chat" }} paneId="topLeft" />);
+
+    await waitFor(() => {
+      expect(latestEnvironmentSelectorProps).not.toBeNull();
+    });
+
+    act(() => {
+      latestEnvironmentSelectorProps?.onChange({
+        kind: "project",
+        projectId: "project-1",
+        target: { kind: "local" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(latestInlineComposerProps).toMatchObject({
+        disabled: true,
+        isBusy: true,
+      });
+    });
+
+    act(() => {
+      latestInlineComposerProps?.onSend("Do not send yet", [], [], []);
+    });
+
+    expect(mockedSendThreadDraft).not.toHaveBeenCalled();
+
+    await act(async () => {
+      loadedChatDraft.resolve(makeDraftThreadState({ text: "Move after load" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
   });
 
   it("replaces the previous project target when moving a chat draft into that project", async () => {

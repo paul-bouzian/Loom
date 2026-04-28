@@ -207,6 +207,7 @@ export function clearDraftThreadPersistence(target: DraftThreadTarget) {
   const key = draftThreadTargetKey(target);
   clearDraftThreadPersistenceByKey(key);
   clearDraftThreadMovePersistenceForSourceKey(key);
+  clearDraftThreadMovePersistenceForDestinationKey(key);
 }
 
 export function clearInvalidDraftThreadPersistenceControllers(
@@ -435,6 +436,17 @@ function clearDraftThreadMovePersistenceForSourceKey(sourceKey: string) {
     controller,
   ] of draftThreadMovePersistenceByKey.entries()) {
     if (controller.sourceKeys.includes(sourceKey)) {
+      clearDraftThreadMovePersistenceByKey(key);
+    }
+  }
+}
+
+function clearDraftThreadMovePersistenceForDestinationKey(destinationKey: string) {
+  for (const [
+    key,
+    controller,
+  ] of draftThreadMovePersistenceByKey.entries()) {
+    if (controller.destinationKey === destinationKey) {
       clearDraftThreadMovePersistenceByKey(key);
     }
   }

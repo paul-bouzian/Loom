@@ -601,7 +601,7 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
     sendMentionBindings: ComposerMentionBindingInput[],
     draftMentionBindings: ComposerDraftMentionBinding[],
   ) {
-    if (isSending) return;
+    if (isSending || isRetargeting) return;
     const previousComposerDraft = cloneComposerDraft(composerDraft);
     const optimisticUserMessage = buildOptimisticUserMessage(
       sendText,
@@ -707,12 +707,12 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
         threadId={`draft:${paneId}`}
         composer={composer}
         collaborationModes={collaborationModes}
-        disabled={false}
+        disabled={isRetargeting}
         draft={composerDraft.text}
         effortOptions={effortOptions}
         focusKey={`draft:${paneId}`}
         images={composerDraft.images}
-        isBusy={false}
+        isBusy={isRetargeting}
         isSending={isSending}
         isRefiningPlan={false}
         mentionBindings={composerDraft.mentionBindings}
