@@ -1013,6 +1013,7 @@ impl ClaudeRuntimeSession {
             if !apply_claude_event(snapshot, turn_id, event) {
                 return;
             }
+            reconcile_snapshot_status(snapshot);
             snapshot.clone()
         };
         let item_to_persist = event_item_id.and_then(|item_id| {
@@ -3000,6 +3001,73 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                         question.header == "Scope" && question.is_other
                     })
         ));
+    }
+
+    #[tokio::test]
+    async fn claude_events_keep_pending_user_input_waiting_for_action() {
+        let session = ClaudeRuntimeSession::new(EventSink::noop(), "test".to_string());
+        let mut snapshot = snapshot();
+        snapshot.active_turn_id = Some("turn-1".to_string());
+        snapshot.status = ConversationStatus::Running;
+        session
+            .state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .insert("thread-1".to_string(), snapshot);
+
+        session
+            .apply_runtime_event(
+                "thread-1",
+                "turn-1",
+                ClaudeRuntimeEvent::UserInputRequest {
+                    interaction_id: "input-1".to_string(),
+                    item_id: "tool-ask".to_string(),
+                    questions: vec![ClaudeUserInputQuestion {
+                        id: "scope".to_string(),
+                        header: "Scope".to_string(),
+                        question: "Which option?".to_string(),
+                        options: vec![ClaudeUserInputOption {
+                            label: "A".to_string(),
+                            description: "Use A".to_string(),
+                        }],
+                    }],
+                },
+            )
+            .await;
+        let usage = TokenUsageBreakdown {
+            total_tokens: 1,
+            input_tokens: 1,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+        };
+        session
+            .apply_runtime_event(
+                "thread-1",
+                "turn-1",
+                ClaudeRuntimeEvent::TokenUsage {
+                    total: usage.clone(),
+                    last: usage,
+                    model_context_window: Some(200_000),
+                },
+            )
+            .await;
+
+        let snapshot = session
+            .state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .get("thread-1")
+            .cloned()
+            .expect("snapshot should remain open");
+
+        assert_eq!(
+            snapshot.status,
+            ConversationStatus::WaitingForExternalAction
+        );
+        assert_eq!(snapshot.pending_interactions.len(), 1);
     }
 
     #[test]
