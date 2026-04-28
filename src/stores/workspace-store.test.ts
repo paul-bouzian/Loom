@@ -1655,6 +1655,45 @@ describe("workspace store — grid 2x2 panes", () => {
       });
     });
 
+    it("clears the source when the move matches an inflight destination save", async () => {
+      seedTwoThreadWorkspace();
+      const chatTarget = { kind: "chat" } as const;
+      const projectTarget = { kind: "project", projectId: "project-a" } as const;
+      const baseMovedState = makeSavedDraftState("Already saving destination");
+      const movedState = {
+        ...baseMovedState,
+        composer: {
+          ...baseMovedState.composer,
+          model: "gpt-5.4-mini",
+        },
+      };
+      const destinationSave = deferred<void>();
+      mockedBridge.saveDraftThreadState.mockReturnValueOnce(
+        destinationSave.promise,
+      );
+
+      useWorkspaceStore
+        .getState()
+        .updateDraftThreadState(projectTarget, movedState);
+      expect(mockedBridge.saveDraftThreadState).toHaveBeenCalledTimes(1);
+
+      useWorkspaceStore
+        .getState()
+        .moveDraftThreadState(chatTarget, projectTarget, movedState);
+
+      await act(async () => {
+        destinationSave.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockedBridge.saveDraftThreadState).toHaveBeenCalledTimes(2);
+      expect(mockedBridge.saveDraftThreadState).toHaveBeenNthCalledWith(2, {
+        target: chatTarget,
+        state: null,
+      });
+    });
+
     it("reflushes a moved destination draft after a previous inflight save fails", async () => {
       vi.useFakeTimers();
       seedTwoThreadWorkspace();

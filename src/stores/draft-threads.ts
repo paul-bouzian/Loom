@@ -327,12 +327,17 @@ async function flushDraftThreadPersistence(target: DraftThreadTarget) {
       controller.inflightGeneration = null;
     }
 
-    if (
-      controller.queued !== undefined &&
-      JSON.stringify(controller.queued) !== controller.lastPersistedKey
-    ) {
-      void flushDraftThreadPersistence(target);
-      return;
+    if (controller.queued !== undefined) {
+      if (JSON.stringify(controller.queued) !== controller.lastPersistedKey) {
+        void flushDraftThreadPersistence(target);
+        return;
+      }
+
+      controller.queued = undefined;
+      runDraftThreadPersistenceCallbacks(
+        controller,
+        Number.POSITIVE_INFINITY,
+      );
     }
 
     maybeDisposeDraftThreadPersistenceController(key);
