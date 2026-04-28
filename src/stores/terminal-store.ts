@@ -502,7 +502,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => {
     }
     updateSlot(environmentId, (existing) => ({
       ...existing,
-      visible: true,
+      visible: options.clearPendingHideOnShow ? true : existing.visible,
       tabs: [
         ...existing.tabs,
         {

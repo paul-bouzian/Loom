@@ -388,6 +388,7 @@ describe("terminal-store", () => {
   });
 
   it("keeps the terminal hidden when setVisible closes during the first shell spawn", async () => {
+    const setItemSpy = vi.spyOn(globalThis.localStorage, "setItem");
     let resolveSpawn: (value: { ptyId: string; cwd: string }) => void = () => {};
     const pendingSpawn = new Promise<{ ptyId: string; cwd: string }>((resolve) => {
       resolveSpawn = resolve;
@@ -399,12 +400,20 @@ describe("terminal-store", () => {
 
     useTerminalStore.getState().setVisible(ENV_A, false);
     expect(slotForA().visible).toBe(false);
+    const layoutWritesAfterHide = setItemSpy.mock.calls.filter(
+      ([key]) => key === TERMINAL_LAYOUTS_STORAGE_KEY,
+    ).length;
 
     resolveSpawn({ ptyId: "pty-pending", cwd: `/path/to/${ENV_A}` });
     await flushAsyncWork();
 
     expect(slotForA().tabs).toHaveLength(1);
     expect(slotForA().visible).toBe(false);
+    expect(
+      setItemSpy.mock.calls.filter(
+        ([key]) => key === TERMINAL_LAYOUTS_STORAGE_KEY,
+      ),
+    ).toHaveLength(layoutWritesAfterHide);
   });
 
   it("keeps the terminal visible when a new shell tab opens before the first shell spawn resolves", async () => {
