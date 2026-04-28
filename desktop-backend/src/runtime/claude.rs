@@ -334,7 +334,9 @@ impl ClaudeRuntimeSession {
         &self,
         context: &ThreadRuntimeContext,
     ) -> AppResult<ThreadConversationSnapshot> {
-        let hidden_provider_message_ids = load_hidden_provider_message_ids(&context.thread_id);
+        let hidden_provider_message_ids = self
+            .hidden_provider_message_ids_for_thread(&context.thread_id)
+            .await;
         if let Some(provider_thread_id) = context.provider_thread_id.clone() {
             let result = run_claude_worker::<_, ClaudeOpenResult>(
                 None,
@@ -385,6 +387,17 @@ impl ClaudeRuntimeSession {
             merge_persisted_claude_items(&mut snapshot, &context.thread_id);
             Ok(snapshot)
         }
+    }
+
+    async fn hidden_provider_message_ids_for_thread(&self, thread_id: &str) -> Vec<String> {
+        let live_ids = self
+            .state
+            .lock()
+            .await
+            .snapshots_by_thread
+            .get(thread_id)
+            .map(|snapshot| snapshot.hidden_provider_message_ids.clone());
+        live_ids.unwrap_or_else(|| load_hidden_provider_message_ids(thread_id))
     }
 
     pub async fn send_message(
@@ -2710,7 +2723,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-sent","m
         std::fs::write(
             &worker_path,
             r#"read line
-printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshed","messages":[{"id":"assistant-refreshed","role":"assistant","text":"fresh from worker"}]}}'
+printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshed","messages":[{"id":"user-hidden","role":"user","text":"Plan approved. Begin implementing the changes now. Do not re-explain the plan — start writing code."},{"id":"assistant-refreshed","role":"assistant","text":"fresh from worker"}]}}'
 "#,
         )
         .expect("fake Claude worker should be written");
@@ -2720,6 +2733,9 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
         let session = ClaudeRuntimeSession::new(EventSink::noop(), "test".to_string());
         let mut cached = snapshot();
         cached.provider_thread_id = Some("provider-cached".to_string());
+        cached
+            .hidden_provider_message_ids
+            .push("user-hidden".to_string());
         cached
             .items
             .push(ConversationItem::Message(ConversationMessageItem {
@@ -2752,6 +2768,11 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                 if message.role == ConversationRole::Assistant
                     && message.text == "fresh from worker"
         )));
+        assert!(!refreshed.items.iter().any(|item| matches!(
+            item,
+            ConversationItem::Message(message) if message.id == "user-hidden"
+        )));
+        assert_eq!(refreshed.hidden_provider_message_ids, ["user-hidden"]);
         assert!(!refreshed.items.iter().any(|item| matches!(
             item,
             ConversationItem::Message(message) if message.text == "stale cached answer"
