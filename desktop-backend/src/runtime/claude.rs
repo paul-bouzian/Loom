@@ -504,6 +504,7 @@ impl ClaudeRuntimeSession {
                 format!("{prefix}\n\n{resolved_text}")
             };
         }
+        let outgoing_text = resolved_text.clone();
 
         let open = self.open_thread(context.clone()).await?;
         let active_turn_id = format!("claude-turn-{}", Uuid::now_v7());
@@ -623,15 +624,13 @@ impl ClaudeRuntimeSession {
         snapshot.status = ConversationStatus::Completed;
         snapshot.pending_interactions.clear();
         if result.messages_authoritative.unwrap_or(true) {
-            let messages = if show_user_message {
-                strip_hidden_handoff_context_from_messages(
-                    result.messages,
-                    hidden_handoff_context.as_deref(),
-                    visible_text,
-                )
-            } else {
-                filter_hidden_user_message(result.messages, visible_text)
-            };
+            let messages = normalize_claude_history_messages(
+                result.messages,
+                hidden_handoff_context.as_deref(),
+                visible_text,
+                &outgoing_text,
+                show_user_message,
+            );
             merge_claude_messages(&mut snapshot, messages);
         }
         if accept_plan_markdown {
@@ -1311,6 +1310,7 @@ fn snapshot_from_claude_messages(
     snapshot.items = messages
         .into_iter()
         .filter(claude_message_has_visible_content)
+        .filter(|message| !is_internal_claude_user_message(message))
         .map(|message| {
             ConversationItem::Message(ConversationMessageItem {
                 id: message.id,
@@ -1435,41 +1435,72 @@ fn is_current_turn_provisional_message(
     }
 }
 
-fn filter_hidden_user_message(
+fn normalize_claude_history_messages(
     messages: Vec<ClaudeSimpleMessage>,
-    hidden_text: &str,
+    hidden_context: Option<&str>,
+    visible_text: &str,
+    outgoing_text: &str,
+    show_user_message: bool,
 ) -> Vec<ClaudeSimpleMessage> {
-    let hidden_text = hidden_text.trim();
+    let visible_text = visible_text.trim();
+    let outgoing_text = outgoing_text.trim();
     messages
         .into_iter()
-        .filter(|message| {
-            !(matches!(&message.role, ConversationRole::User) && message.text.trim() == hidden_text)
+        .filter_map(|mut message| {
+            if matches!(message.role, ConversationRole::User) {
+                let message_text = message.text.trim();
+                if is_internal_claude_user_message(&message) {
+                    return None;
+                }
+                if !show_user_message {
+                    return should_keep_hidden_turn_user_message(
+                        message_text,
+                        visible_text,
+                        outgoing_text,
+                    )
+                    .then_some(message);
+                }
+                if should_project_visible_user_text(
+                    message_text,
+                    hidden_context,
+                    visible_text,
+                    outgoing_text,
+                ) {
+                    message.text = visible_text.to_string();
+                }
+            }
+            Some(message)
         })
         .collect()
 }
 
-fn strip_hidden_handoff_context_from_messages(
-    messages: Vec<ClaudeSimpleMessage>,
+fn is_internal_claude_user_message(message: &ClaudeSimpleMessage) -> bool {
+    matches!(message.role, ConversationRole::User)
+        && message.text.trim() == plan_approval_message().trim()
+}
+
+fn should_keep_hidden_turn_user_message(
+    message_text: &str,
+    visible_text: &str,
+    outgoing_text: &str,
+) -> bool {
+    (visible_text.is_empty() || message_text != visible_text)
+        && (outgoing_text.is_empty() || message_text != outgoing_text)
+}
+
+fn should_project_visible_user_text(
+    message_text: &str,
     hidden_context: Option<&str>,
     visible_text: &str,
-) -> Vec<ClaudeSimpleMessage> {
-    let Some(hidden_context) = hidden_context
+    outgoing_text: &str,
+) -> bool {
+    hidden_context
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    else {
-        return messages;
-    };
-    messages
-        .into_iter()
-        .map(|mut message| {
-            if matches!(message.role, ConversationRole::User)
-                && claude_text_starts_with_hidden_context(&message.text, hidden_context)
-            {
-                message.text = visible_text.to_string();
-            }
-            message
-        })
-        .collect()
+        .is_some_and(|hidden| claude_text_starts_with_hidden_context(message_text, hidden))
+        || (!outgoing_text.is_empty()
+            && message_text == outgoing_text
+            && message_text != visible_text)
 }
 
 fn claude_text_starts_with_hidden_context(text: &str, hidden_context: &str) -> bool {
@@ -3321,7 +3352,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
     }
 
     #[test]
-    fn hidden_user_message_filter_removes_internal_plan_approval_prompt() {
+    fn claude_history_normalizer_removes_internal_plan_approval_prompt() {
         let messages = vec![
             ClaudeSimpleMessage {
                 id: "user-internal".to_string(),
@@ -3337,7 +3368,132 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
             },
         ];
 
-        let visible = filter_hidden_user_message(messages, plan_approval_message());
+        let visible = normalize_claude_history_messages(messages, None, "Thanks", "Thanks", true);
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, "assistant-final");
+    }
+
+    #[test]
+    fn opened_claude_history_removes_internal_plan_approval_prompt() {
+        let snapshot = snapshot_from_claude_messages(
+            &context(),
+            Some("provider-thread".to_string()),
+            vec![
+                ClaudeSimpleMessage {
+                    id: "user-internal".to_string(),
+                    role: ConversationRole::User,
+                    text: plan_approval_message().to_string(),
+                    images: None,
+                },
+                ClaudeSimpleMessage {
+                    id: "assistant-final".to_string(),
+                    role: ConversationRole::Assistant,
+                    text: "Done.".to_string(),
+                    images: None,
+                },
+            ],
+            ConversationStatus::Idle,
+            None,
+        );
+
+        assert_eq!(snapshot.items.len(), 1);
+        assert!(matches!(
+            &snapshot.items[0],
+            ConversationItem::Message(message) if message.id == "assistant-final"
+        ));
+    }
+
+    #[test]
+    fn claude_history_normalizer_projects_resolved_current_user_message() {
+        let visible_text = "C'est super tu peux /code-simplifier puis /git:create-pr";
+        let outgoing_text = "C'est super tu peux You are an expert code simplification specialist.";
+        let messages = vec![
+            ClaudeSimpleMessage {
+                id: "provider-user".to_string(),
+                role: ConversationRole::User,
+                text: outgoing_text.to_string(),
+                images: None,
+            },
+            ClaudeSimpleMessage {
+                id: "provider-assistant".to_string(),
+                role: ConversationRole::Assistant,
+                text: "PR créée.".to_string(),
+                images: None,
+            },
+        ];
+
+        let visible =
+            normalize_claude_history_messages(messages, None, visible_text, outgoing_text, true);
+
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].id, "provider-user");
+        assert_eq!(visible[0].text, visible_text);
+    }
+
+    #[test]
+    fn normalized_claude_history_replaces_current_visible_user_message() {
+        let visible_text = "C'est super tu peux /code-simplifier puis /git:create-pr";
+        let outgoing_text = "C'est super tu peux You are an expert code simplification specialist.";
+        let mut snapshot = snapshot();
+        snapshot.active_turn_id = Some("turn-current".to_string());
+        snapshot
+            .items
+            .push(ConversationItem::Message(ConversationMessageItem {
+                id: "local-user-temp".to_string(),
+                turn_id: None,
+                role: ConversationRole::User,
+                text: visible_text.to_string(),
+                images: None,
+                is_streaming: false,
+            }));
+
+        let messages = normalize_claude_history_messages(
+            vec![ClaudeSimpleMessage {
+                id: "provider-user".to_string(),
+                role: ConversationRole::User,
+                text: outgoing_text.to_string(),
+                images: None,
+            }],
+            None,
+            visible_text,
+            outgoing_text,
+            true,
+        );
+        merge_claude_messages(&mut snapshot, messages);
+
+        assert_eq!(snapshot.items.len(), 1);
+        assert!(matches!(
+            &snapshot.items[0],
+            ConversationItem::Message(message)
+                if message.id == "provider-user" && message.text == visible_text
+        ));
+    }
+
+    #[test]
+    fn claude_history_normalizer_hides_current_hidden_user_message() {
+        let messages = vec![
+            ClaudeSimpleMessage {
+                id: "user-internal".to_string(),
+                role: ConversationRole::User,
+                text: plan_approval_message().to_string(),
+                images: None,
+            },
+            ClaudeSimpleMessage {
+                id: "assistant-final".to_string(),
+                role: ConversationRole::Assistant,
+                text: "Done.".to_string(),
+                images: None,
+            },
+        ];
+
+        let visible = normalize_claude_history_messages(
+            messages,
+            None,
+            plan_approval_message(),
+            plan_approval_message(),
+            false,
+        );
 
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].id, "assistant-final");
@@ -3361,10 +3517,12 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
             },
         ];
 
-        let visible = strip_hidden_handoff_context_from_messages(
+        let visible = normalize_claude_history_messages(
             messages,
             Some(hidden),
             "Merci, et pour Paris ?",
+            &format!("{hidden}\n\nMerci, et pour Paris ?"),
+            true,
         );
 
         assert_eq!(visible.len(), 2);
@@ -3384,7 +3542,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
             }]),
         }];
 
-        let visible = strip_hidden_handoff_context_from_messages(messages, Some(hidden), "");
+        let visible = normalize_claude_history_messages(messages, Some(hidden), "", hidden, true);
 
         assert_eq!(visible.len(), 1);
         assert!(visible[0].text.is_empty());
