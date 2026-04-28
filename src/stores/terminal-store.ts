@@ -26,6 +26,8 @@ import {
 const DEFAULT_HEIGHT = 280;
 const MIN_HEIGHT = 120;
 export const MAX_TABS = 10;
+const pendingShellTabOpens = new Map<string, Promise<string | null>>();
+const hiddenDuringPendingShellOpens = new Set<string>();
 const pendingActionTabOpens = new Map<string, Promise<string | null>>();
 const pendingProjectActionStates = new Map<string, ProjectActionStateEventPayload>();
 let terminalEventSubscriptionsPromise: Promise<void> | null = null;
@@ -396,6 +398,8 @@ function ensureTerminalEventSubscriptionsReady(): Promise<void> {
 
 export function __resetTerminalEventSubscriptions(): void {
   clearTerminalEventSubscriptions();
+  pendingShellTabOpens.clear();
+  hiddenDuringPendingShellOpens.clear();
   pendingProjectActionStates.clear();
   terminalEventSubscriptionsPromise = null;
 }
@@ -408,6 +412,7 @@ type TerminalState = {
   knownEnvironmentIds: string[];
 
   toggleVisible: (environmentId: string) => void;
+  ensureVisible: (environmentId: string) => Promise<string | null>;
   setVisible: (environmentId: string, visible: boolean) => void;
   setHeight: (environmentId: string, value: number) => void;
   reconcileEnvironments: (environmentIds: string[]) => void;
@@ -455,10 +460,75 @@ export const useTerminalStore = create<TerminalState>((set, get) => {
     knownEnvironmentIds: [],
 
     toggleVisible: (environmentId) => {
-      updateSlot(environmentId, (slot) => ({
-        ...slot,
-        visible: !slot.visible,
+      const slot = slotForEnvironment(get().byEnv, environmentId);
+      if (slot.visible) {
+        if (pendingShellTabOpens.has(environmentId)) {
+          hiddenDuringPendingShellOpens.add(environmentId);
+        }
+        updateSlot(environmentId, (existing) => ({
+          ...existing,
+          visible: false,
+        }));
+        return;
+      }
+
+      void get()
+        .ensureVisible(environmentId)
+        .catch((error) => console.error("Failed to open terminal:", error));
+    },
+
+    ensureVisible: async (environmentId) => {
+      const slot = slotForEnvironment(get().byEnv, environmentId);
+      const activeTabId = slot.activeTabId ?? slot.tabs[slot.tabs.length - 1]?.id ?? null;
+      if (slot.tabs.length > 0) {
+        updateSlot(environmentId, (existing) => ({
+          ...existing,
+          visible: true,
+          activeTabId: existing.activeTabId ?? existing.tabs[existing.tabs.length - 1]?.id ?? null,
+        }));
+        return activeTabId;
+      }
+
+      hiddenDuringPendingShellOpens.delete(environmentId);
+      updateSlot(environmentId, (existing) => ({
+        ...existing,
+        visible: true,
       }));
+
+      const pendingOpen = pendingShellTabOpens.get(environmentId);
+      if (pendingOpen) {
+        return pendingOpen;
+      }
+
+      const openPromise = (async () => {
+        try {
+          const tabId = await get().openTab(environmentId);
+          const shouldHideAfterOpen =
+            hiddenDuringPendingShellOpens.delete(environmentId);
+          if (
+            tabId !== null &&
+            shouldHideAfterOpen &&
+            isKnownEnvironment(get().knownEnvironmentIds, environmentId)
+          ) {
+            updateSlot(environmentId, (existing) => ({
+              ...existing,
+              visible: false,
+            }));
+          }
+          return tabId;
+        } catch (error) {
+          hiddenDuringPendingShellOpens.delete(environmentId);
+          throw error;
+        }
+      })();
+      pendingShellTabOpens.set(environmentId, openPromise);
+      try {
+        return await openPromise;
+      } finally {
+        if (pendingShellTabOpens.get(environmentId) === openPromise) {
+          pendingShellTabOpens.delete(environmentId);
+        }
+      }
     },
 
     setVisible: (environmentId, visible) => {

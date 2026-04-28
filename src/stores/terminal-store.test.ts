@@ -115,6 +115,10 @@ function readPersistedLayouts() {
   return raw ? (JSON.parse(raw) as Record<string, { visible: boolean; height: number }>) : {};
 }
 
+function flushAsyncWork() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function emitProjectActionState(payload: {
   ptyId: string;
   actionId: string;
@@ -320,6 +324,27 @@ describe("terminal-store", () => {
   });
 
   it("toggleVisible flips visibility per environment and persists to localStorage", () => {
+    useTerminalStore.setState({
+      byEnv: {
+        [ENV_A]: {
+          tabs: [
+            {
+              id: "tab-a",
+              ptyId: "pty-a",
+              cwd: `/path/to/${ENV_A}`,
+              title: ENV_A,
+              exited: false,
+              kind: "shell",
+            },
+          ],
+          activeTabId: "tab-a",
+          visible: false,
+          height: 280,
+        },
+      },
+      knownEnvironmentIds: [ENV_A, ENV_B],
+    });
+
     expect(slotForA().visible).toBe(false);
     useTerminalStore.getState().toggleVisible(ENV_A);
     expect(slotForA().visible).toBe(true);
@@ -327,6 +352,51 @@ describe("terminal-store", () => {
     useTerminalStore.getState().toggleVisible(ENV_A);
     expect(slotForA().visible).toBe(false);
     expect(readPersistedLayouts()[ENV_A]).toMatchObject({ visible: false });
+  });
+
+  it("toggleVisible opens the first shell tab when showing an empty environment", async () => {
+    expect(slotForA().tabs).toEqual([]);
+
+    useTerminalStore.getState().toggleVisible(ENV_A);
+
+    expect(slotForA().visible).toBe(true);
+    await flushAsyncWork();
+
+    expect(mockedBridge.spawnTerminal).toHaveBeenCalledTimes(1);
+    expect(slotForA().tabs).toHaveLength(1);
+    expect(slotForA().activeTabId).toBe(slotForA().tabs[0]?.id);
+  });
+
+  it("keeps the terminal hidden when toggled closed during the first shell spawn", async () => {
+    let resolveSpawn: (value: { ptyId: string; cwd: string }) => void = () => {};
+    const pendingSpawn = new Promise<{ ptyId: string; cwd: string }>((resolve) => {
+      resolveSpawn = resolve;
+    });
+    mockedBridge.spawnTerminal.mockImplementationOnce(() => pendingSpawn);
+
+    useTerminalStore.getState().toggleVisible(ENV_A);
+    expect(slotForA().visible).toBe(true);
+
+    useTerminalStore.getState().toggleVisible(ENV_A);
+    expect(slotForA().visible).toBe(false);
+
+    resolveSpawn({ ptyId: "pty-pending", cwd: `/path/to/${ENV_A}` });
+    await flushAsyncWork();
+
+    expect(slotForA().tabs).toHaveLength(1);
+    expect(slotForA().visible).toBe(false);
+  });
+
+  it("ensureVisible deduplicates concurrent initial shell opens", async () => {
+    const [firstId, secondId] = await Promise.all([
+      useTerminalStore.getState().ensureVisible(ENV_A),
+      useTerminalStore.getState().ensureVisible(ENV_A),
+    ]);
+
+    expect(mockedBridge.spawnTerminal).toHaveBeenCalledTimes(1);
+    expect(firstId).toBe(secondId);
+    expect(slotForA().tabs).toHaveLength(1);
+    expect(slotForA().visible).toBe(true);
   });
 
   it("markExited flags the matching tab across all envs", async () => {
