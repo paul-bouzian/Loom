@@ -226,8 +226,8 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
       return;
     }
 
-    const update = pendingUpdate;
-    const snapshot = get().snapshot;
+    let update = pendingUpdate;
+    let snapshot = get().snapshot;
     if (!update || !snapshot) {
       await replacePendingUpdate(null);
       set({
@@ -249,9 +249,33 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
     });
 
     try {
-      await updater.downloadAndInstall(update.id, (event) => {
-        applyDownloadEvent(event, set);
-      });
+      try {
+        await downloadActiveUpdate(update, set);
+      } catch (cause: unknown) {
+        if (!isInactiveUpdateOfferError(cause)) {
+          throw cause;
+        }
+
+        const refreshedUpdate = await updater.check();
+        await replacePendingUpdate(refreshedUpdate);
+        if (!refreshedUpdate) {
+          throw new Error(
+            "Update download is no longer available. Check for updates again.",
+          );
+        }
+
+        update = refreshedUpdate;
+        snapshot = toUpdateSnapshot(refreshedUpdate);
+        set({
+          state: "downloading",
+          snapshot,
+          error: null,
+          noticeVisible: true,
+          downloadedBytes: 0,
+          contentLength: null,
+        });
+        await downloadActiveUpdate(refreshedUpdate, set);
+      }
       // Persist as soon as the bytes are on disk so the release notes card
       // still surfaces if the user quits before pressing Install — Electron's
       // updater is configured with autoInstallOnAppQuit, which would otherwise
@@ -265,8 +289,9 @@ export const useAppUpdateStore = create<UpdateStore>((set, get) => ({
       const message =
         cause instanceof Error ? cause.message : "Failed to download the update";
       set({
-        state: "available",
+        state: "error",
         error: message,
+        noticeVisible: true,
         downloadedBytes: 0,
         contentLength: null,
       });
@@ -428,6 +453,20 @@ function applyDownloadEvent(event: DesktopUpdateDownloadEvent, set: UpdateSetter
       }));
       break;
   }
+}
+
+async function downloadActiveUpdate(update: DesktopUpdate, set: UpdateSetter) {
+  await updater.downloadAndInstall(update.id, (event) => {
+    applyDownloadEvent(event, set);
+  });
+}
+
+function isInactiveUpdateOfferError(cause: unknown) {
+  if (!(cause instanceof Error)) {
+    return false;
+  }
+
+  return cause.message.includes("This update is no longer active.");
 }
 
 function runSimulatedDownload(

@@ -1,9 +1,53 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 describe("electron afterPack", () => {
+  it("writes the macOS app update configuration into app resources", async () => {
+    const modulePath = "../scripts/electron-after-pack.mjs";
+    const { writeAppUpdateConfig } = await import(modulePath);
+    const resourcesDirectory = await mkdtemp(join(tmpdir(), "skein-update-"));
+
+    await writeAppUpdateConfig({
+      appId: "com.paulbouzian.skein",
+      publish: [
+        {
+          provider: "github",
+          owner: "paul-bouzian",
+          repo: "Skein",
+        },
+      ],
+      resourcesDirectory,
+    });
+
+    await expect(
+      readFile(join(resourcesDirectory, "app-update.yml"), "utf8"),
+    ).resolves.toBe(
+      [
+        "provider: github",
+        "owner: paul-bouzian",
+        "repo: Skein",
+        "channel: latest",
+        "updaterCacheDirName: com.paulbouzian.skein-updater",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("fails packaging when the macOS update publish configuration is missing", async () => {
+    const modulePath = "../scripts/electron-after-pack.mjs";
+    const { resolveMacAppUpdateConfig } = await import(modulePath);
+
+    expect(() =>
+      resolveMacAppUpdateConfig({
+        appId: "com.paulbouzian.skein",
+        publish: [],
+      }),
+    ).toThrow("Skein macOS auto-update requires a GitHub publish configuration.");
+  });
+
   it("creates a native launcher that injects launch-time compatibility switches", async () => {
     const modulePath = "../scripts/electron-after-pack.mjs";
     const { createLauncherSource } = await import(modulePath);

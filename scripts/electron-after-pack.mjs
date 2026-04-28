@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const APP_UPDATE_CONFIG_FILE = "app-update.yml";
 const FONTATIONS_DISABLE_FLAG = "--disable-features=FontationsFontBackend";
 const JITLESS_FLAG = "--js-flags=--jitless";
 const WRAPPED_EXECUTABLE_SUFFIX = "-electron";
@@ -20,11 +21,17 @@ export default async function afterPack(context) {
   const appBundleDirectory = join(context.appOutDir, `${appName}.app`);
   const macOsDirectory = join(appBundleDirectory, "Contents", "MacOS");
   const frameworksDirectory = join(appBundleDirectory, "Contents", "Frameworks");
+  const resourcesDirectory = join(appBundleDirectory, "Contents", "Resources");
   const launcherPath = join(macOsDirectory, appName);
   const wrappedExecutableName = `${appName}${WRAPPED_EXECUTABLE_SUFFIX}`;
   const wrappedExecutablePath = join(macOsDirectory, wrappedExecutableName);
   const launcherSourcePath = join(macOsDirectory, LAUNCHER_SOURCE_FILE);
 
+  await writeAppUpdateConfig({
+    appId: context.packager.appInfo.id,
+    publish: context.packager.config.publish,
+    resourcesDirectory,
+  });
   await rename(launcherPath, wrappedExecutablePath);
   await writeFile(
     launcherSourcePath,
@@ -43,6 +50,66 @@ export default async function afterPack(context) {
     await unlink(launcherSourcePath).catch(() => {});
   }
   await chmod(launcherPath, 0o755);
+}
+
+export async function writeAppUpdateConfig({
+  appId,
+  publish,
+  resourcesDirectory,
+}) {
+  const source = createAppUpdateConfigSource(
+    resolveMacAppUpdateConfig({ appId, publish }),
+  );
+  await writeFile(join(resourcesDirectory, APP_UPDATE_CONFIG_FILE), source);
+}
+
+export function resolveMacAppUpdateConfig({ appId, publish }) {
+  assertNonEmptyString(appId, "appId");
+
+  const publishConfig = Array.isArray(publish) ? publish[0] : publish;
+  if (
+    !publishConfig ||
+    publishConfig.provider !== "github" ||
+    typeof publishConfig.owner !== "string" ||
+    typeof publishConfig.repo !== "string"
+  ) {
+    throw new Error(
+      "Skein macOS auto-update requires a GitHub publish configuration.",
+    );
+  }
+
+  return {
+    provider: "github",
+    owner: publishConfig.owner,
+    repo: publishConfig.repo,
+    channel:
+      typeof publishConfig.channel === "string" ? publishConfig.channel : "latest",
+    updaterCacheDirName: `${appId}-updater`,
+  };
+}
+
+export function createAppUpdateConfigSource({
+  provider,
+  owner,
+  repo,
+  channel,
+  updaterCacheDirName,
+}) {
+  const values = {
+    provider,
+    owner,
+    repo,
+    channel,
+    updaterCacheDirName,
+  };
+
+  return Object.entries(values)
+    .map(([key, value]) => {
+      assertNonEmptyString(value, key);
+      return `${key}: ${formatYamlScalar(value)}`;
+    })
+    .join("\n")
+    .concat("\n");
 }
 
 export function createLauncherSource({
@@ -176,4 +243,14 @@ async function buildNativeLauncher({
       launcherSourcePath,
     }),
   );
+}
+
+function assertNonEmptyString(value, label) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`Expected ${label} to be a non-empty string.`);
+  }
+}
+
+function formatYamlScalar(value) {
+  return /^[A-Za-z0-9_.-]+$/.test(value) ? value : JSON.stringify(value);
 }

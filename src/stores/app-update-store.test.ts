@@ -175,6 +175,48 @@ describe("app-update-store", () => {
     expect(useAppUpdateStore.getState().noticeVisible).toBe(true);
   });
 
+  it("refreshes a stale native offer and retries the download once", async () => {
+    updaterCheckMock
+      .mockResolvedValueOnce(makeUpdate({ id: "offer-1" }))
+      .mockResolvedValueOnce(makeUpdate({ id: "offer-2" }));
+    updaterDownloadAndInstallMock
+      .mockRejectedValueOnce(new Error("This update is no longer active."))
+      .mockImplementationOnce(async (_updateId, onEvent) => {
+        onEvent?.({ event: "Started", data: { contentLength: 100 } });
+        onEvent?.({ event: "Progress", data: { chunkLength: 100 } });
+        onEvent?.({ event: "Finished" });
+      });
+
+    await useAppUpdateStore.getState().initialize();
+    await useAppUpdateStore.getState().startDownload();
+
+    expect(updaterCheckMock).toHaveBeenCalledTimes(2);
+    expect(updaterDownloadAndInstallMock).toHaveBeenNthCalledWith(
+      1,
+      "offer-1",
+      expect.any(Function),
+    );
+    expect(updaterDownloadAndInstallMock).toHaveBeenNthCalledWith(
+      2,
+      "offer-2",
+      expect.any(Function),
+    );
+    expect(useAppUpdateStore.getState().state).toBe("downloaded");
+    expect(useAppUpdateStore.getState().downloadedBytes).toBe(100);
+  });
+
+  it("shows a retryable error when the update download fails", async () => {
+    updaterCheckMock.mockResolvedValue(makeUpdate());
+    updaterDownloadAndInstallMock.mockRejectedValue(new Error("Network failed"));
+
+    await useAppUpdateStore.getState().initialize();
+    await useAppUpdateStore.getState().startDownload();
+
+    expect(useAppUpdateStore.getState().state).toBe("error");
+    expect(useAppUpdateStore.getState().error).toBe("Network failed");
+    expect(useAppUpdateStore.getState().noticeVisible).toBe(true);
+  });
+
   it("skips silent refocus checks when an update is already available", async () => {
     updaterCheckMock.mockResolvedValueOnce(makeUpdate());
 
