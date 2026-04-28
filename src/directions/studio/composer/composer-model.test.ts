@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ThreadComposerCatalog } from "../../../lib/types";
 import {
   buildAutocompleteItems,
+  buildPromptInsertText,
   decorateComposerText,
   findActiveComposerToken,
 } from "./composer-model";
@@ -96,6 +97,23 @@ describe("composer-model", () => {
         insertText: "/prompts:release()",
       }),
     ]);
+  });
+
+  it("places prompt cursor at the end when no argument placeholder exists", () => {
+    expect(
+      buildPromptInsertText({
+        name: "empty-named",
+        description: "No named args yet",
+        argumentMode: "named",
+        argumentNames: [],
+        positionalCount: 0,
+        argumentHint: null,
+      }),
+    ).toEqual({
+      text: "/prompts:empty-named()",
+      cursorOffset: "/prompts:empty-named()".length,
+      appendSpace: false,
+    });
   });
 
   it("builds Claude slash suggestions from commands only", () => {

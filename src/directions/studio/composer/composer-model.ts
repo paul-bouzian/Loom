@@ -91,9 +91,10 @@ export function buildPromptInsertText(prompt: ComposerPromptOption) {
       ? prompt.argumentNames.map((name) => `${name}=""`)
       : Array.from({ length: Math.max(prompt.positionalCount, 1) }, () => '""');
   const text = `${base}(${values.join(", ")})`;
+  const firstPlaceholder = text.indexOf('""');
   return {
     text,
-    cursorOffset: text.indexOf('""') + 1,
+    cursorOffset: firstPlaceholder >= 0 ? firstPlaceholder + 1 : text.length,
     appendSpace: false,
   };
 }

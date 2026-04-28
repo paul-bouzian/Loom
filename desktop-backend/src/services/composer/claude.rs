@@ -235,7 +235,9 @@ fn load_claude_commands_from_root(
         };
         let parsed =
             parse_claude_definition_file(&raw, fallback_name, path.to_string_lossy().as_ref());
-        commands.insert(parsed.name.to_ascii_lowercase(), parsed);
+        commands
+            .entry(parsed.name.to_ascii_lowercase())
+            .or_insert(parsed);
     }
     Ok(())
 }
@@ -307,7 +309,9 @@ fn load_claude_skills_from_root(
         };
         let parsed =
             parse_claude_definition_file(&raw, fallback_name, path.to_string_lossy().as_ref());
-        skills.insert(parsed.name.to_ascii_lowercase(), parsed);
+        skills
+            .entry(parsed.name.to_ascii_lowercase())
+            .or_insert(parsed);
     }
     Ok(())
 }
@@ -449,23 +453,56 @@ fn frontmatter_scalar(frontmatter: &str, key: &str) -> Option<String> {
 }
 
 fn frontmatter_arguments(frontmatter: &str) -> Option<Vec<String>> {
-    let value = frontmatter_scalar(frontmatter, "arguments")?;
+    let arguments = frontmatter_scalar(frontmatter, "arguments")
+        .map(|value| parse_frontmatter_argument_scalar(&value))
+        .or_else(|| frontmatter_sequence(frontmatter, "arguments"))?;
+    (!arguments.is_empty()).then_some(arguments)
+}
+
+fn parse_frontmatter_argument_scalar(value: &str) -> Vec<String> {
     let trimmed = value.trim();
-    let arguments = if trimmed.starts_with('[') && trimmed.ends_with(']') {
-        trimmed[1..trimmed.len().saturating_sub(1)]
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        return trimmed[1..trimmed.len().saturating_sub(1)]
             .split(',')
             .map(|part| unquote_scalar(part.trim()).to_string())
             .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-    } else {
-        trimmed
-            .split_whitespace()
-            .map(unquote_scalar)
-            .filter(|part| !part.is_empty())
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-    };
-    (!arguments.is_empty()).then_some(arguments)
+            .collect();
+    }
+    trimmed
+        .split_whitespace()
+        .map(unquote_scalar)
+        .filter(|part| !part.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn frontmatter_sequence(frontmatter: &str, key: &str) -> Option<Vec<String>> {
+    let header = format!("{key}:");
+    let mut in_sequence = false;
+    let mut values = Vec::new();
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if !in_sequence {
+            if trimmed == header {
+                in_sequence = true;
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !line.starts_with([' ', '\t']) {
+            break;
+        }
+        let Some(value) = trimmed.strip_prefix("- ") else {
+            continue;
+        };
+        let value = unquote_scalar(value.trim()).trim();
+        if !value.is_empty() {
+            values.push(value.to_string());
+        }
+    }
+    (!values.is_empty()).then_some(values)
 }
 
 fn unquote_scalar(value: &str) -> &str {
@@ -517,21 +554,29 @@ fn render_claude_definition(
             .unwrap_or_default(),
     );
     for (index, value) in parsed_arguments.iter().enumerate().rev() {
-        let position = index + 1;
         rendered = rendered.replace(&format!("$ARGUMENTS[{index}]"), value);
-        rendered = rendered.replace(&format!("$ARGUMENTS[{position}]"), value);
-        rendered = rendered.replace(&format!("${position}"), value);
+        rendered = rendered.replace(&format!("${index}"), value);
     }
     rendered = rendered.replace("$ARGUMENTS", &argument_text);
-    for (index, name) in definition.argument_names.iter().enumerate() {
+    let mut named_arguments = definition
+        .argument_names
+        .iter()
+        .enumerate()
+        .collect::<Vec<_>>();
+    named_arguments.sort_by(|(_, left), (_, right)| right.len().cmp(&left.len()));
+    for (index, name) in named_arguments {
         if let Some(value) = parsed_arguments.get(index) {
             rendered = rendered.replace(&format!("${name}"), value);
         }
     }
 
     let has_argument_placeholder = definition.content.contains("$ARGUMENTS")
-        || (1..=parsed_arguments.len())
-            .any(|position| definition.content.contains(&format!("${position}")))
+        || (0..parsed_arguments.len()).any(|position| {
+            definition
+                .content
+                .contains(&format!("$ARGUMENTS[{position}]"))
+                || definition.content.contains(&format!("${position}"))
+        })
         || definition
             .argument_names
             .iter()
@@ -701,7 +746,7 @@ mod tests {
         fs::create_dir_all(&skill_root).expect("skill root should be created");
         fs::write(
             command_root.join(format!("{command_name}.md")),
-            "Deploy to $1 as $2",
+            "Deploy to $0 as $1",
         )
         .expect("command should be written");
         fs::write(
@@ -716,6 +761,87 @@ mod tests {
 
         assert!(resolved.contains("Deploy to production as canary"));
         assert!(resolved.contains("Use Review the current task too"));
+    }
+
+    #[test]
+    fn parses_multiline_claude_argument_frontmatter() {
+        let test_dir = TestDir::new();
+        let command_name = unique_claude_name("fix");
+        let command_root = test_dir.path.join(".claude").join("commands");
+        fs::create_dir_all(&command_root).expect("command root should be created");
+        fs::write(
+            command_root.join(format!("{command_name}.md")),
+            format!(
+                "---\nname: {command_name}\narguments:\n  - issue\n  - path\n---\nFix $issue in $path"
+            ),
+        )
+        .expect("command should be written");
+
+        let commands =
+            load_claude_command_definitions(&test_dir.path.to_string_lossy()).expect("commands");
+        let resolved = resolve_claude_composer_text(
+            &test_dir.path.to_string_lossy(),
+            &format!("/{command_name} BUG-123 src/lib.rs"),
+        )
+        .expect("command should resolve");
+
+        assert!(commands.iter().any(|command| {
+            command.name == command_name
+                && command.argument_names == ["issue".to_string(), "path".to_string()]
+                && command.argument_hint.as_deref() == Some("<issue> <path>")
+        }));
+        assert_eq!(resolved, "Fix BUG-123 in src/lib.rs");
+    }
+
+    #[test]
+    fn first_seen_claude_definitions_win_name_collisions() {
+        let project_root = TestDir::new();
+        let user_root = TestDir::new();
+        let command_name = unique_claude_name("deploy");
+        let mut commands = HashMap::new();
+        fs::write(
+            project_root.path.join(format!("{command_name}.md")),
+            "Project command",
+        )
+        .expect("project command should be written");
+        fs::write(
+            user_root.path.join(format!("{command_name}.md")),
+            "User command",
+        )
+        .expect("user command should be written");
+
+        load_claude_commands_from_root(&project_root.path, &mut commands)
+            .expect("project command root should load");
+        load_claude_commands_from_root(&user_root.path, &mut commands)
+            .expect("user command root should load");
+
+        assert_eq!(
+            commands
+                .get(&command_name)
+                .map(|command| command.content.as_str()),
+            Some("Project command")
+        );
+    }
+
+    #[test]
+    fn replaces_longer_claude_named_arguments_before_prefixes() {
+        let test_dir = TestDir::new();
+        let command_name = unique_claude_name("paths");
+        let command_root = test_dir.path.join(".claude").join("commands");
+        fs::create_dir_all(&command_root).expect("command root should be created");
+        fs::write(
+            command_root.join(format!("{command_name}.md")),
+            "---\narguments: [path, path_suffix]\n---\nMove $path to $path_suffix",
+        )
+        .expect("command should be written");
+
+        let resolved = resolve_claude_composer_text(
+            &test_dir.path.to_string_lossy(),
+            &format!("/{command_name} src dst"),
+        )
+        .expect("command should resolve");
+
+        assert_eq!(resolved, "Move src to dst");
     }
 
     #[test]
@@ -796,7 +922,7 @@ mod tests {
         let command_name = unique_claude_name("path");
         let command_root = test_dir.path.join(".claude").join("commands");
         fs::create_dir_all(&command_root).expect("command root should be created");
-        fs::write(command_root.join(format!("{command_name}.md")), "Path: $1")
+        fs::write(command_root.join(format!("{command_name}.md")), "Path: $0")
             .expect("command should be written");
 
         let resolved = resolve_claude_composer_text(
@@ -814,7 +940,7 @@ mod tests {
         let command_name = unique_claude_name("deploy");
         let command_root = test_dir.path.join(".claude").join("commands");
         fs::create_dir_all(&command_root).expect("command root should be created");
-        fs::write(command_root.join(format!("{command_name}.md")), "Deploy $1")
+        fs::write(command_root.join(format!("{command_name}.md")), "Deploy $0")
             .expect("command should be written");
 
         let error = resolve_claude_composer_text(
