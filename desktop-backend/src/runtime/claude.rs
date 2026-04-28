@@ -344,8 +344,8 @@ impl ClaudeRuntimeSession {
             .hidden_provider_message_markers_for_thread(&context.thread_id)
             .await;
         let persisted_items = item_store::load(&context.thread_id);
-        let has_plan_approval_system_item = self
-            .plan_approval_system_item_exists_for_thread(&context.thread_id, &persisted_items)
+        let should_promote_legacy_plan_approval = self
+            .should_promote_legacy_plan_approval_for_thread(&context.thread_id, &persisted_items)
             .await;
         if let Some(provider_thread_id) = context.provider_thread_id.clone() {
             let result = run_claude_worker::<_, ClaudeOpenResult>(
@@ -361,7 +361,7 @@ impl ClaudeRuntimeSession {
             promote_legacy_hidden_plan_approval_message(
                 &mut hidden_provider_markers,
                 &result.messages,
-                has_plan_approval_system_item,
+                should_promote_legacy_plan_approval,
             );
             let mut snapshot = snapshot_from_claude_messages(
                 context,
@@ -396,7 +396,7 @@ impl ClaudeRuntimeSession {
             promote_legacy_hidden_plan_approval_message(
                 &mut hidden_provider_markers,
                 &messages,
-                has_plan_approval_system_item,
+                should_promote_legacy_plan_approval,
             );
             let mut snapshot = snapshot_from_claude_messages(
                 context,
@@ -427,25 +427,39 @@ impl ClaudeRuntimeSession {
         live_markers.unwrap_or_else(|| load_hidden_provider_message_markers(thread_id))
     }
 
-    async fn plan_approval_system_item_exists_for_thread(
+    async fn should_promote_legacy_plan_approval_for_thread(
         &self,
         thread_id: &str,
         persisted_items: &[ConversationItem],
     ) -> bool {
-        if persisted_items_contain_plan_approval(persisted_items) {
-            return true;
-        }
-        let live_has_plan_approval = self
+        let persisted_has_plan_approval = persisted_items_contain_plan_approval(persisted_items);
+        let persisted_has_visible_user_message =
+            items_contain_visible_plan_approval_user_message(persisted_items);
+        let live_state = self
             .state
             .lock()
             .await
             .snapshots_by_thread
             .get(thread_id)
-            .map(|snapshot| persisted_items_contain_plan_approval(&snapshot.items));
-        live_has_plan_approval.unwrap_or_else(|| {
-            snapshot_store::load(thread_id)
-                .is_some_and(|snapshot| persisted_items_contain_plan_approval(&snapshot.items))
-        })
+            .map(|snapshot| {
+                (
+                    persisted_items_contain_plan_approval(&snapshot.items),
+                    items_contain_visible_plan_approval_user_message(&snapshot.items),
+                )
+            });
+        let (snapshot_has_plan_approval, snapshot_has_visible_user_message) = live_state
+            .unwrap_or_else(|| {
+                snapshot_store::load(thread_id)
+                    .map(|snapshot| {
+                        (
+                            persisted_items_contain_plan_approval(&snapshot.items),
+                            items_contain_visible_plan_approval_user_message(&snapshot.items),
+                        )
+                    })
+                    .unwrap_or((false, false))
+            });
+        (persisted_has_plan_approval || snapshot_has_plan_approval)
+            && !(persisted_has_visible_user_message || snapshot_has_visible_user_message)
     }
 
     pub async fn send_message(
@@ -1778,6 +1792,17 @@ fn persisted_items_contain_plan_approval(items: &[ConversationItem]) -> bool {
             ConversationItem::System(system)
                 if system.title == "Plan approved"
                     && system.body.contains("approved the current plan")
+        )
+    })
+}
+
+fn items_contain_visible_plan_approval_user_message(items: &[ConversationItem]) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            item,
+            ConversationItem::Message(message)
+                if matches!(message.role, ConversationRole::User)
+                    && message.text.trim() == plan_approval_message().trim()
         )
     })
 }
@@ -3843,8 +3868,38 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
         )];
 
         assert!(persisted_items_contain_plan_approval(&snapshot_items));
+        assert!(!items_contain_visible_plan_approval_user_message(
+            &snapshot_items
+        ));
         promote_legacy_hidden_plan_approval_message(&mut markers, &messages, true);
         assert_eq!(markers.ids, ["user-hidden"]);
+    }
+
+    #[test]
+    fn legacy_plan_approval_promotion_is_disabled_for_visible_user_text() {
+        let snapshot_items = vec![
+            ConversationItem::System(crate::domain::conversation::ConversationSystemItem {
+                id: "system-plan-approved".to_string(),
+                turn_id: None,
+                tone: ConversationTone::Info,
+                title: "Plan approved".to_string(),
+                body: "Skein approved the current plan and switched the thread to Build mode."
+                    .to_string(),
+            }),
+            ConversationItem::Message(ConversationMessageItem {
+                id: "user-literal".to_string(),
+                turn_id: None,
+                role: ConversationRole::User,
+                text: plan_approval_message().to_string(),
+                images: None,
+                is_streaming: false,
+            }),
+        ];
+
+        assert!(persisted_items_contain_plan_approval(&snapshot_items));
+        assert!(items_contain_visible_plan_approval_user_message(
+            &snapshot_items
+        ));
     }
 
     #[test]
