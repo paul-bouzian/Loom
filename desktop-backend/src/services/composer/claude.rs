@@ -801,7 +801,7 @@ fn split_shell_arguments(source: &str) -> AppResult<Vec<String>> {
 }
 
 fn is_identifier_char(character: char) -> bool {
-    character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | ':' | '/')
+    character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | ':' | '/' | '.')
 }
 
 fn is_name_char(character: char) -> bool {
@@ -931,6 +931,28 @@ mod tests {
             .iter()
             .any(|command| command.name == format!("git:{command_name}")));
         assert_eq!(resolved, "Create PR for current branch");
+    }
+
+    #[test]
+    fn does_not_expand_claude_slash_commands_inside_relative_paths() {
+        let test_dir = TestDir::new();
+        let command_root = test_dir.path.join(".claude").join("commands");
+        fs::create_dir_all(&command_root).expect("command root should be created");
+        fs::write(command_root.join("build.md"), "Build command")
+            .expect("build command should be written");
+        fs::write(command_root.join("review.md"), "Review command")
+            .expect("review command should be written");
+
+        let resolved = resolve_claude_composer_text(
+            &test_dir.path.to_string_lossy(),
+            "Inspect ./build and ../review before /build",
+        )
+        .expect("command should resolve");
+
+        assert_eq!(
+            resolved,
+            "Inspect ./build and ../review before Build command"
+        );
     }
 
     #[test]
