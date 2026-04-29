@@ -7,6 +7,7 @@ import type {
   SubagentThreadSnapshot,
 } from "../../lib/types";
 import { CheckIcon, ChecklistIcon, ChevronRightIcon } from "../../shared/Icons";
+import { SmoothCollapse } from "../../shared/SmoothCollapse";
 import "./ConversationActiveTasksPanel.css";
 
 type Props = {
@@ -68,32 +69,34 @@ export function ConversationActiveTasksPanel({
           }`}
         />
       </button>
-      {expanded ? (
-        <div className="tx-active-tasks__body">
-          {hasTasks ? (
-            <ol className="tx-active-tasks__list">
-              {steps.map((step, index) => (
-                <li
-                  key={`${activeTurnId}-${index}`}
-                  className={`tx-active-tasks__item tx-active-tasks__item--${step.status}`}
-                >
-                  <StepMarker status={step.status} index={index + 1} />
-                  <span className="tx-active-tasks__step">{step.step}</span>
-                </li>
-              ))}
-            </ol>
-          ) : fallbackTaskText ? (
-            <p className="tx-active-tasks__summary">{fallbackTaskText}</p>
-          ) : null}
-          {hasSubagents ? (
-            <BackgroundAgentsSection
-              subagents={subagents}
-              expanded={agentsExpanded}
-              onToggle={() => setAgentsExpanded((value) => !value)}
-            />
-          ) : null}
-        </div>
-      ) : null}
+      <SmoothCollapse open={expanded}>
+        {() => (
+          <div className="tx-active-tasks__body">
+            {hasTasks ? (
+              <ol className="tx-active-tasks__list">
+                {steps.map((step, index) => (
+                  <li
+                    key={`${activeTurnId}-${index}`}
+                    className={`tx-active-tasks__item tx-active-tasks__item--${step.status}`}
+                  >
+                    <StepMarker status={step.status} index={index + 1} />
+                    <span className="tx-active-tasks__step">{step.step}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : fallbackTaskText ? (
+              <p className="tx-active-tasks__summary">{fallbackTaskText}</p>
+            ) : null}
+            {hasSubagents ? (
+              <BackgroundAgentsSection
+                subagents={subagents}
+                expanded={agentsExpanded}
+                onToggle={() => setAgentsExpanded((value) => !value)}
+              />
+            ) : null}
+          </div>
+        )}
+      </SmoothCollapse>
     </aside>
   );
 }
@@ -181,32 +184,34 @@ function BackgroundAgentsSection({
         </span>
         <span className="tx-active-tasks__agents-summary">{summary}</span>
       </button>
-      {expanded ? (
-        <ul className="tx-active-tasks__agents-list">
-          {subagents.map((subagent, index) => (
-            <li
-              key={subagent.threadId}
-              className="tx-active-tasks__agent-item"
-            >
-              <div className="tx-active-tasks__agent-copy">
-                <span className="tx-active-tasks__agent-name">
-                  {labelForSubagent(subagent, index)}
-                </span>
-                {subagent.role && subagent.nickname ? (
-                  <span className="tx-active-tasks__agent-role">
-                    {subagent.role}
-                  </span>
-                ) : null}
-              </div>
-              <span
-                className={`tx-active-tasks__agent-status tx-active-tasks__agent-status--${subagent.status}`}
+      <SmoothCollapse open={expanded}>
+        {() => (
+          <ul className="tx-active-tasks__agents-list">
+            {subagents.map((subagent, index) => (
+              <li
+                key={subagent.threadId}
+                className="tx-active-tasks__agent-item"
               >
-                {labelForSubagentStatus(subagent.status)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+                <div className="tx-active-tasks__agent-copy">
+                  <span className="tx-active-tasks__agent-name">
+                    {labelForSubagent(subagent, index)}
+                  </span>
+                  {subagent.role && subagent.nickname ? (
+                    <span className="tx-active-tasks__agent-role">
+                      {subagent.role}
+                    </span>
+                  ) : null}
+                </div>
+                <span
+                  className={`tx-active-tasks__agent-status tx-active-tasks__agent-status--${subagent.status}`}
+                >
+                  {labelForSubagentStatus(subagent.status)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SmoothCollapse>
     </div>
   );
 }
