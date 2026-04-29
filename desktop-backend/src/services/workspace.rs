@@ -579,7 +579,6 @@ impl WorkspaceService {
             .map_err(AppError::Validation)?;
         let settings_json = serde_json::to_string(&settings)
             .map_err(|error| AppError::Validation(error.to_string()))?;
-        project_config::write_project_settings(&root_path, &settings)?;
         let affected = transaction.execute(
             "
             UPDATE projects
@@ -591,6 +590,7 @@ impl WorkspaceService {
         if affected == 0 {
             return Err(AppError::NotFound("Project not found.".to_string()));
         }
+        project_config::write_project_settings(&root_path, &settings)?;
         transaction.commit()?;
 
         self.project_by_id(&input.project_id, Vec::new())
