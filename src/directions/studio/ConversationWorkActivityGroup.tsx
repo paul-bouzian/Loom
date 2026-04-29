@@ -90,16 +90,18 @@ export function ConversationWorkActivityGroup({ group, provider }: Props) {
         <span className="tx-work-activity__label">{headerLabel}</span>
       </button>
       <SmoothCollapse open={expanded && hasContent}>
-        <div className="tx-work-activity__body">
-          {group.items.map((item) => (
-            <ConversationItemRow
-              key={item.id}
-              item={item}
-              compact
-              provider={provider}
-            />
-          ))}
-        </div>
+        {() => (
+          <div className="tx-work-activity__body">
+            {group.items.map((item) => (
+              <ConversationItemRow
+                key={item.id}
+                item={item}
+                compact
+                provider={provider}
+              />
+            ))}
+          </div>
+        )}
       </SmoothCollapse>
     </section>
   );

@@ -6,7 +6,7 @@ const ANIMATION_MS = 250;
 
 type Props = {
   open: boolean;
-  children: ReactNode;
+  children: ReactNode | (() => ReactNode);
   className?: string;
   id?: string;
 };
@@ -36,6 +36,16 @@ export function SmoothCollapse({ open, children, className, id }: Props) {
 
     clearPending();
 
+    const reducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+
+    if (reducedMotion) {
+      setMounted(open);
+      setVisualOpen(open);
+      return clearPending;
+    }
+
     if (open) {
       setMounted(true);
       openRafRef.current = window.requestAnimationFrame(() => {
@@ -64,9 +74,15 @@ export function SmoothCollapse({ open, children, className, id }: Props) {
     .filter(Boolean)
     .join(" ");
 
+  const innerContent = mounted
+    ? typeof children === "function"
+      ? children()
+      : children
+    : null;
+
   return (
     <div className={wrapperClassName} aria-hidden={!open} id={id}>
-      <div className="tx-collapse__inner">{mounted ? children : null}</div>
+      <div className="tx-collapse__inner">{innerContent}</div>
     </div>
   );
 }

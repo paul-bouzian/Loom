@@ -12,12 +12,12 @@
   overflow: hidden;
   min-height: 0;
   opacity: 0;
-  transition: opacity 240ms ease-in;
+  transition: opacity 250ms ease-in;
 }
 
 .tx-collapse--open .tx-collapse__inner {
   opacity: 1;
-  transition: opacity 240ms ease-out;
+  transition: opacity 250ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {

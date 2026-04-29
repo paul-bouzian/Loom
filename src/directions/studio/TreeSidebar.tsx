@@ -714,7 +714,7 @@ export function TreeSidebar({ theme, collapsed = false, onOpenSettings, onToggle
                   </Tooltip>
                 </div>
                 <SmoothCollapse open={!project.sidebarCollapsed}>
-                  {renderProjectThreads(project)}
+                  {() => renderProjectThreads(project)}
                 </SmoothCollapse>
               </section>
               ))
