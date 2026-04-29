@@ -891,6 +891,8 @@ export type ThreadConversationSnapshot = {
   provider: ProviderKind;
   providerThreadId?: string | null;
   codexThreadId?: string | null;
+  hiddenProviderMessageIds?: string[];
+  hiddenProviderMessageTexts?: string[];
   status: ConversationStatus;
   activeTurnId?: string | null;
   items: ConversationItem[];
