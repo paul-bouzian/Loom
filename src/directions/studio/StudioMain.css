@@ -118,6 +118,8 @@
 }
 
 .studio-main__handoff {
+  width: auto;
+  padding: 0 6px;
   gap: 2px;
 }
 
