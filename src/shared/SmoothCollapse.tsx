@@ -81,7 +81,12 @@ export function SmoothCollapse({ open, children, className, id }: Props) {
     : null;
 
   return (
-    <div className={wrapperClassName} aria-hidden={!open} id={id}>
+    <div
+      className={wrapperClassName}
+      aria-hidden={!open}
+      inert={!open}
+      id={id}
+    >
       <div className="tx-collapse__inner">{innerContent}</div>
     </div>
   );
