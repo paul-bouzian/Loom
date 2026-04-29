@@ -85,7 +85,7 @@ export function SmoothCollapse({ open, children, className, id }: Props) {
     <div
       className={wrapperClassName}
       aria-hidden={!open}
-      inert={!open}
+      inert={!visualOpen}
       id={id}
     >
       <div className="tx-collapse__inner">{renderedChildren}</div>
