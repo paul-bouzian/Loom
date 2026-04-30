@@ -20,11 +20,11 @@ describe("ConversationItemRow", () => {
   it("renders user composer commands as visual badges", () => {
     render(
       <ConversationItemRow
-        provider="codex"
+        provider="claude"
         item={messageItem({
           id: "user-command",
           role: "user",
-          text: "Use /prompts:review() with $create-pr",
+          text: "Use /prompts:review() with $create-pr and /release-notes",
         })}
       />,
     );
@@ -35,11 +35,16 @@ describe("ConversationItemRow", () => {
     const skillBadge = screen
       .getByText("$create-pr")
       .closest(".tx-inline-token-badge");
+    const slashBadge = screen
+      .getByText("/release-notes")
+      .closest(".tx-inline-token-badge");
 
     expect(promptBadge).not.toBeNull();
     expect(promptBadge).toHaveAttribute("title", "/prompts:review()");
     expect(skillBadge).not.toBeNull();
     expect(skillBadge).toHaveAttribute("title", "$create-pr");
+    expect(slashBadge).not.toBeNull();
+    expect(slashBadge).toHaveAttribute("title", "/release-notes");
     expect(
       screen.getByRole("button", { name: "Copy message" }),
     ).toBeInTheDocument();

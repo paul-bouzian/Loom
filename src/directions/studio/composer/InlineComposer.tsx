@@ -483,13 +483,16 @@ export function InlineComposer({
   }
 
   function deleteDecoratedTokenBeforeCursor() {
-    if (selection.start !== selection.end) {
+    const element = textareaRef.current;
+    const start = element?.selectionStart ?? selection.start;
+    const end = element?.selectionEnd ?? selection.end;
+    if (start !== end) {
       return false;
     }
 
     const deletionRange = findComposerTokenDeletionRange(
       draft,
-      selection.start,
+      start,
       catalog,
       composer.provider,
     );

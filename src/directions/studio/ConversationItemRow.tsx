@@ -276,6 +276,7 @@ function ConversationMessageRow({
               <ComposerTokenText
                 text={item.text}
                 provider={provider}
+                decorateAllProviderTokens={item.role === "user"}
                 decorateUnknownTokens
                 keyPrefix={`message-${item.id}-collapsed`}
               />
@@ -285,6 +286,7 @@ function ConversationMessageRow({
               <ComposerTokenText
                 text={item.text}
                 provider={provider}
+                decorateAllProviderTokens={item.role === "user"}
                 decorateUnknownTokens
                 linkifyText
                 keyPrefix={`message-${item.id}`}

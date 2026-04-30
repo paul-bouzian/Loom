@@ -55,6 +55,7 @@ export type ComposerMirrorSegment =
   | { kind: "file"; text: string; start: number; end: number };
 
 export type DecorateComposerTextOptions = {
+  decorateAllProviderTokens?: boolean;
   decorateUnknownTokens?: boolean;
 };
 
@@ -354,6 +355,7 @@ export function decorateComposerText(
     return [];
   }
 
+  const decorateAllProviderTokens = options.decorateAllProviderTokens === true;
   const decorateUnknownTokens = options.decorateUnknownTokens === true;
   const promptMap = new Map(
     (catalog?.prompts ?? []).map((prompt) => [prompt.name, prompt]),
@@ -365,7 +367,9 @@ export function decorateComposerText(
     (catalog?.apps ?? []).map((app) => [app.slug.toLowerCase(), app]),
   );
   const promptInvocations =
-    provider === "claude" ? [] : parsePromptInvocations(text);
+    provider === "claude" && !decorateAllProviderTokens
+      ? []
+      : parsePromptInvocations(text);
   const occupied = promptInvocations.map((invocation) => ({
     start: invocation.start,
     end: invocation.end,
@@ -383,7 +387,7 @@ export function decorateComposerText(
       end: invocation.end,
     }));
   const mentionTokens: DecoratedToken[] = [];
-  if (provider === "claude") {
+  if (provider === "claude" || decorateAllProviderTokens) {
     for (const token of collectSpecialTokens(text, "/", occupied)) {
       const normalized = token.text.slice(1).toLowerCase();
       if (
@@ -475,7 +479,7 @@ export function findComposerTokenDeletionRange(
     if (segment.kind === "text") {
       continue;
     }
-    if (cursor > segment.start && cursor <= segment.end) {
+    if (cursor === segment.end) {
       return { start: segment.start, end: segment.end };
     }
   }

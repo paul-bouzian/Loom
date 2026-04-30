@@ -19,6 +19,7 @@ type ComposerTokenTextProps = {
   catalog?: ThreadComposerCatalog | null;
   provider: ProviderKind;
   cursorIndex?: number | null;
+  decorateAllProviderTokens?: boolean;
   decorateUnknownTokens?: boolean;
   keyPrefix: string;
   linkifyText?: boolean;
@@ -30,12 +31,14 @@ export function ComposerTokenText({
   catalog = null,
   provider,
   cursorIndex = null,
+  decorateAllProviderTokens = false,
   decorateUnknownTokens = false,
   keyPrefix,
   linkifyText = false,
   showCaret = false,
 }: ComposerTokenTextProps) {
   const segments = decorateComposerText(text, catalog, provider, {
+    decorateAllProviderTokens,
     decorateUnknownTokens,
   });
   let sourceCursor = 0;

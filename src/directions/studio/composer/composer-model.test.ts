@@ -242,6 +242,38 @@ describe("composer-model", () => {
     ]);
   });
 
+  it("can decorate submitted commands without relying on the current provider", () => {
+    const segments = decorateComposerText(
+      "Use /prompts:review() then /release-notes",
+      null,
+      "codex",
+      { decorateAllProviderTokens: true, decorateUnknownTokens: true },
+    );
+
+    expect(segments).toEqual([
+      { kind: "text", text: "Use " },
+      {
+        kind: "prompt",
+        text: "/prompts:review()",
+        parts: [
+          { text: "/prompts:review", tone: "base" },
+          { text: "(", tone: "base" },
+          { text: ")", tone: "base" },
+        ],
+        start: 4,
+        end: 21,
+      },
+      { kind: "text", text: " then " },
+      {
+        kind: "prompt",
+        text: "/release-notes",
+        parts: [{ text: "/release-notes", tone: "base" }],
+        start: 27,
+        end: 41,
+      },
+    ]);
+  });
+
   it("finds the full decorated token range when deleting at the token edge", () => {
     expect(
       findComposerTokenDeletionRange(
@@ -251,6 +283,33 @@ describe("composer-model", () => {
         "codex",
       ),
     ).toEqual({ start: 4, end: 14 });
+  });
+
+  it("does not delete a decorated prompt while editing inside its arguments", () => {
+    const text = 'Use /prompts:review(topic="")';
+    const cursorInsideArgument = text.indexOf('""') + 1;
+
+    expect(
+      findComposerTokenDeletionRange(
+        text,
+        cursorInsideArgument,
+        {
+          prompts: [
+            {
+              name: "review",
+              description: "Review a topic",
+              argumentMode: "named",
+              argumentNames: ["topic"],
+              positionalCount: 0,
+              argumentHint: null,
+            },
+          ],
+          skills: [],
+          apps: [],
+        },
+        "codex",
+      ),
+    ).toBeNull();
   });
 
   it("builds Claude dollar suggestions without Codex mention bindings", () => {
