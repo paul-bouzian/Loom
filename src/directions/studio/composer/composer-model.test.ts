@@ -197,7 +197,7 @@ describe("composer-model", () => {
 
   it("can decorate submitted Codex prompt tokens without a catalog", () => {
     const segments = decorateComposerText(
-      "Run /prompts:review() and $create-pr",
+      "Run /prompts:review() and $create-pr but keep $schema $path raw",
       null,
       "codex",
       { decorateUnknownTokens: true },
@@ -218,6 +218,7 @@ describe("composer-model", () => {
       },
       { kind: "text", text: " and " },
       { kind: "skill", text: "$create-pr", start: 26, end: 36 },
+      { kind: "text", text: " but keep $schema $path raw" },
     ]);
   });
 
