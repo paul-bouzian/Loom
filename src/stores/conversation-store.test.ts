@@ -266,7 +266,7 @@ describe("conversation store", () => {
     ).toEqual(["Earlier", "Start now"]);
   });
 
-  it("keeps first-message work visible across stale idle snapshots", async () => {
+  it("keeps first-message work visible until a stale idle snapshot confirms it", async () => {
     const thread = makeThread({ id: "thread-new", environmentId: "env-1" });
     let callback: (payload: {
       threadId: string;
@@ -304,30 +304,6 @@ describe("conversation store", () => {
       items: [
         expect.objectContaining({
           kind: "message",
-          role: "user",
-          text: "Start now",
-        }),
-      ],
-    });
-
-    callback({
-      threadId: "thread-new",
-      environmentId: "env-1",
-      snapshot: makeConversationSnapshot({
-        threadId: "thread-new",
-        environmentId: "env-1",
-        status: "idle",
-        activeTurnId: null,
-        items: [userMessage("user-confirmed", "Start now")],
-      }),
-    });
-
-    expect(stateForThread("thread-new")).toMatchObject({
-      status: "running",
-      activeTurnId: OPTIMISTIC_FIRST_TURN_ID,
-      items: [
-        expect.objectContaining({
-          id: "user-confirmed",
           role: "user",
           text: "Start now",
         }),

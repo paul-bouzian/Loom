@@ -1064,6 +1064,8 @@ describe("studioActions", () => {
         ...state,
         snapshotsByThreadId: {},
         composerByThreadId: {},
+        hydrationByThreadId: {},
+        runtimeHydrationByThreadId: {},
         errorByThreadId: {},
         draftByThreadId: {},
         pendingFirstMessageByThreadId: {},

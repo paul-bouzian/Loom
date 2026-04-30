@@ -999,10 +999,6 @@ function snapshotWithPendingOptimisticMessage(
   }
 
   if (hasConfirmedUserMessage(snapshot, pending)) {
-    if (isStalePreRunSnapshot(snapshot)) {
-      pendingOptimisticUserMessages.delete(threadId);
-      return snapshotWithOptimisticTurn(snapshot);
-    }
     pendingOptimisticUserMessages.delete(threadId);
     if (!snapshotContainsItem(snapshot, pending.item.id)) return snapshot;
     return {

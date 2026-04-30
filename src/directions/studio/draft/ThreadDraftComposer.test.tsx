@@ -461,6 +461,53 @@ describe("ThreadDraftComposer", () => {
     expect(screen.queryByText("Cancelled")).toBeNull();
   });
 
+  it("surfaces cleanup failures after an interrupted draft send", async () => {
+    let resolveSend!: (value: { ok: false; error: string; cancelled?: boolean }) => void;
+    const sendPromise = new Promise<{
+      ok: false;
+      error: string;
+      cancelled?: boolean;
+    }>((resolve) => {
+      resolveSend = resolve;
+    });
+    mockedSendThreadDraft.mockReturnValueOnce(sendPromise);
+    mockedBridge.getDraftThreadState.mockResolvedValueOnce(
+      makeDraftThreadState({ text: "Cancel this send" }),
+    );
+
+    render(
+      <ThreadDraftComposer
+        draft={{ kind: "project", projectId: "project-1" }}
+        paneId="topLeft"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(latestInlineComposerProps?.draft).toBe("Cancel this send");
+    });
+
+    act(() => {
+      latestInlineComposerProps?.onSend("Cancel this send", [], [], []);
+    });
+    act(() => {
+      latestInlineComposerProps?.onInterrupt();
+    });
+
+    await act(async () => {
+      resolveSend({
+        ok: false,
+        error: "Cancelled, but failed to clean up the created worktree.",
+      });
+      await sendPromise;
+    });
+
+    expect(
+      screen.getByText("Cancelled, but failed to clean up the created worktree."),
+    ).toBeInTheDocument();
+    expect(latestInlineComposerProps?.draft).toBe("Cancel this send");
+    expect(latestInlineComposerProps?.isBusy).toBe(false);
+  });
+
   it("moves the chat draft into the selected project and clears the chat draft", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,

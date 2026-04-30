@@ -644,7 +644,7 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
         draftMentionBindings,
         isCancelled: () => sendCancelledRef.current,
       });
-      if (sendCancelledRef.current || (!result.ok && result.cancelled)) {
+      if (!result.ok && result.cancelled) {
         return;
       }
       if (!result.ok) {
