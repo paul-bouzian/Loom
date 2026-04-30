@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "worktree": {
+    "teardownScript": "cd ~/dev/Skein && git pull"
+  },
+  "actions": []
+}
