@@ -10,6 +10,7 @@ import type {
   ConversationMessageItem,
   EnvironmentCapabilitiesSnapshot,
   SubmitPlanDecisionInput,
+  ThreadRecord,
   ThreadConversationSnapshot,
   WorkspaceSnapshot,
 } from "../lib/types";
@@ -102,6 +103,10 @@ type ConversationState = {
     threadId: string,
     payload: PendingFirstMessage,
   ) => void;
+  stagePendingFirstMessage: (
+    thread: ThreadRecord,
+    payload: PendingFirstMessage,
+  ) => void;
   consumePendingFirstMessage: (threadId: string) => PendingFirstMessage | null;
 };
 
@@ -163,6 +168,7 @@ const pendingOptimisticUserMessages = new Map<
   string,
   PendingOptimisticUserMessage
 >();
+export const OPTIMISTIC_FIRST_TURN_ID = "optimistic-first-turn";
 const BACKFILL_DELAY_MS = 1_500;
 const projectionBackfillQueuesByEnvironment = new Map<string, string[]>();
 const projectionBackfillTimersByEnvironment = new Map<string, number>();
@@ -376,9 +382,22 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       get().composerByThreadId[threadId] ??
       get().snapshotsByThreadId[threadId]?.composer;
     const previousSnapshot = get().snapshotsByThreadId[threadId];
-    const optimisticMessage = previousSnapshot
-      ? buildOptimisticUserMessageSnapshot(previousSnapshot, text, images)
+    const stagedOptimisticMessage = previousSnapshot
+      ? reusablePendingOptimisticUserMessage(
+          threadId,
+          text,
+          images,
+          previousSnapshot,
+        )
       : null;
+    const optimisticMessage =
+      previousSnapshot && !stagedOptimisticMessage
+        ? buildOptimisticUserMessageSnapshot(previousSnapshot, text, images)
+        : null;
+    const rollbackSnapshot =
+      stagedOptimisticMessage && previousSnapshot
+        ? snapshotWithoutItem(previousSnapshot, stagedOptimisticMessage.item.id)
+        : previousSnapshot;
 
     if (optimisticMessage) {
       pendingOptimisticUserMessages.set(threadId, {
@@ -437,15 +456,15 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         cause instanceof Error ? cause.message : "Failed to send message";
       set((state) => ({
         snapshotsByThreadId:
-          optimisticMessage &&
-          previousSnapshot &&
+          (optimisticMessage || stagedOptimisticMessage) &&
+          rollbackSnapshot &&
           snapshotContainsItem(
             state.snapshotsByThreadId[threadId],
-            optimisticMessage.item.id,
+            (optimisticMessage ?? stagedOptimisticMessage)!.item.id,
           )
             ? {
                 ...state.snapshotsByThreadId,
-                [threadId]: previousSnapshot,
+                [threadId]: rollbackSnapshot,
               }
             : state.snapshotsByThreadId,
         errorByThreadId: { ...state.errorByThreadId, [threadId]: message },
@@ -563,6 +582,56 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         [threadId]: payload,
       },
     })),
+
+  stagePendingFirstMessage: (thread, payload) => {
+    const optimisticItem = createOptimisticUserMessage(
+      payload.text,
+      payload.images,
+    );
+    if (!optimisticItem || !payload.composer) {
+      get().enqueuePendingFirstMessage(thread.id, payload);
+      return;
+    }
+    const composer = payload.composer;
+
+    pendingOptimisticUserMessages.set(thread.id, {
+      item: optimisticItem,
+      afterItemId: null,
+      baseItemCount: 0,
+    });
+
+    set((state) => {
+      const baseSnapshot =
+        state.snapshotsByThreadId[thread.id] ??
+        buildPendingFirstMessageSnapshot(thread, composer);
+      return {
+        snapshotsByThreadId: {
+          ...state.snapshotsByThreadId,
+          [thread.id]: snapshotWithPendingOptimisticMessage(
+            thread.id,
+            baseSnapshot,
+          ),
+        },
+        composerByThreadId: {
+          ...state.composerByThreadId,
+          [thread.id]: composer,
+        },
+        hydrationByThreadId: {
+          ...state.hydrationByThreadId,
+          [thread.id]: "ready",
+        },
+        runtimeHydrationByThreadId: {
+          ...state.runtimeHydrationByThreadId,
+          [thread.id]: "loading",
+        },
+        errorByThreadId: { ...state.errorByThreadId, [thread.id]: null },
+        pendingFirstMessageByThreadId: {
+          ...state.pendingFirstMessageByThreadId,
+          [thread.id]: payload,
+        },
+      };
+    });
+  },
 
   consumePendingFirstMessage: (threadId) => {
     const pending = get().pendingFirstMessageByThreadId[threadId] ?? null;
@@ -787,18 +856,8 @@ function buildOptimisticUserMessageSnapshot(
   item: ConversationMessageItem;
   snapshot: ThreadConversationSnapshot;
 } | null {
-  if (text.length === 0 && images.length === 0) {
-    return null;
-  }
-
-  const messageItem: ConversationMessageItem = {
-    kind: "message",
-    id: `optimistic-user-${crypto.randomUUID()}`,
-    role: "user",
-    text,
-    images: images.length > 0 ? images : null,
-    isStreaming: false,
-  };
+  const messageItem = createOptimisticUserMessage(text, images);
+  if (!messageItem) return null;
 
   return {
     item: messageItem,
@@ -807,6 +866,90 @@ function buildOptimisticUserMessageSnapshot(
       items: [...snapshot.items, messageItem],
       error: null,
     },
+  };
+}
+
+function createOptimisticUserMessage(
+  text: string,
+  images: ConversationImageAttachment[],
+): ConversationMessageItem | null {
+  if (text.length === 0 && images.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: "message",
+    id: `optimistic-user-${crypto.randomUUID()}`,
+    role: "user",
+    text,
+    images: images.length > 0 ? images : null,
+    isStreaming: false,
+  };
+}
+
+function buildPendingFirstMessageSnapshot(
+  thread: ThreadRecord,
+  composer: ThreadConversationSnapshot["composer"],
+): ThreadConversationSnapshot {
+  return {
+    threadId: thread.id,
+    environmentId: thread.environmentId,
+    provider: thread.provider,
+    providerThreadId: thread.providerThreadId ?? null,
+    codexThreadId: thread.codexThreadId ?? null,
+    hiddenProviderMessageIds: [],
+    hiddenProviderMessageTexts: [],
+    status: "running",
+    activeTurnId: OPTIMISTIC_FIRST_TURN_ID,
+    items: [],
+    subagents: [],
+    tokenUsage: null,
+    pendingInteractions: [],
+    proposedPlan: null,
+    taskPlan: null,
+    error: null,
+    composer,
+  };
+}
+
+function reusablePendingOptimisticUserMessage(
+  threadId: string,
+  text: string,
+  images: ConversationImageAttachment[],
+  snapshot: ThreadConversationSnapshot,
+): PendingOptimisticUserMessage | null {
+  const pending = pendingOptimisticUserMessages.get(threadId);
+  if (!pending || !snapshotContainsItem(snapshot, pending.item.id)) {
+    return null;
+  }
+  if (pending.item.text !== text) {
+    return null;
+  }
+  if (!sameImageAttachments(pending.item.images ?? null, images)) {
+    return null;
+  }
+  return pending;
+}
+
+function snapshotWithoutItem(
+  snapshot: ThreadConversationSnapshot,
+  itemId: string,
+): ThreadConversationSnapshot {
+  const nextItems = snapshot.items.filter((item) => item.id !== itemId);
+  if (
+    nextItems.length === 0 &&
+    snapshot.activeTurnId === OPTIMISTIC_FIRST_TURN_ID
+  ) {
+    return {
+      ...snapshot,
+      status: "idle",
+      activeTurnId: null,
+      items: nextItems,
+    };
+  }
+  return {
+    ...snapshot,
+    items: nextItems,
   };
 }
 
@@ -820,10 +963,11 @@ function snapshotWithPendingOptimisticMessage(
   }
 
   if (hasConfirmedUserMessage(snapshot, pending)) {
-    pendingOptimisticUserMessages.delete(threadId);
-    if (!snapshotContainsItem(snapshot, pending.item.id)) {
-      return snapshot;
+    if (isStalePreRunSnapshot(snapshot)) {
+      return snapshotWithOptimisticTurn(snapshot);
     }
+    pendingOptimisticUserMessages.delete(threadId);
+    if (!snapshotContainsItem(snapshot, pending.item.id)) return snapshot;
     return {
       ...snapshot,
       items: snapshot.items.filter((item) => item.id !== pending.item.id),
@@ -831,7 +975,9 @@ function snapshotWithPendingOptimisticMessage(
   }
 
   if (snapshotContainsItem(snapshot, pending.item.id)) {
-    return snapshot;
+    return isStalePreRunSnapshot(snapshot)
+      ? snapshotWithOptimisticTurn(snapshot)
+      : snapshot;
   }
 
   const afterIndex = pending.afterItemId
@@ -843,12 +989,30 @@ function snapshotWithPendingOptimisticMessage(
       : Math.min(pending.baseItemCount, snapshot.items.length);
 
   return {
-    ...snapshot,
+    ...snapshotWithOptimisticTurn(snapshot),
     items: [
       ...snapshot.items.slice(0, insertAt),
       pending.item,
       ...snapshot.items.slice(insertAt),
     ],
+    error: null,
+  };
+}
+
+function isStalePreRunSnapshot(snapshot: ThreadConversationSnapshot): boolean {
+  return snapshot.status === "idle" && !snapshot.activeTurnId;
+}
+
+function snapshotWithOptimisticTurn(
+  snapshot: ThreadConversationSnapshot,
+): ThreadConversationSnapshot {
+  if (!isStalePreRunSnapshot(snapshot)) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    status: "running",
+    activeTurnId: OPTIMISTIC_FIRST_TURN_ID,
     error: null,
   };
 }

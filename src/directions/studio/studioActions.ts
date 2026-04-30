@@ -185,10 +185,10 @@ export async function sendThreadDraft(
         }),
   }));
 
-  // Hand the message off to ThreadConversation: it consumes the pending
-  // first message on mount and runs its own handleSend, which wires up the
-  // optimistic user message while background naming stays hidden.
-  useConversationStore.getState().enqueuePendingFirstMessage(thread.id, {
+  // Hand the message off to ThreadConversation and project it into the new
+  // thread immediately. The real send still goes through the canonical
+  // conversation path once runtime hydration is ready.
+  useConversationStore.getState().stagePendingFirstMessage(thread, {
     text: text.trim(),
     images,
     mentionBindings,

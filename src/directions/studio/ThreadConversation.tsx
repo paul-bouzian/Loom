@@ -22,6 +22,7 @@ import type {
 } from "../../lib/types";
 import { ThreadIcon } from "../../shared/Icons";
 import {
+  OPTIMISTIC_FIRST_TURN_ID,
   selectConversationCapabilities,
   selectConversationComposer,
   selectConversationDraft,
@@ -388,6 +389,9 @@ export function ThreadConversation({
     Boolean(activePlan?.isAwaitingDecision && !isRefiningPlan) ||
     !transportReady;
   const isRunning = snapshot?.status === "running";
+  const isFirstMessageOpening = Boolean(
+    pendingFirstMessage || snapshot?.activeTurnId === OPTIMISTIC_FIRST_TURN_ID,
+  );
   const isMutating = isPending || isSubmitting;
   const hasDraftContent = draft.trim().length > 0;
   const hasAttachedImages = images.length > 0;
@@ -539,7 +543,11 @@ export function ThreadConversation({
   }
 
   return (
-    <div className="tx-conversation">
+    <div
+      className={`tx-conversation ${
+        isFirstMessageOpening ? "tx-conversation--first-message-opening" : ""
+      }`}
+    >
       <div
         ref={timelineRef}
         className="tx-conversation__timeline"
@@ -635,7 +643,7 @@ export function ThreadConversation({
         effortOptions={effortOptions}
         focusKey={`${thread.id}:${composerFocusKey}`}
         images={images}
-        isBusy={isRunning || isPending}
+        isBusy={isRunning || isPending || isSubmitting || isFirstMessageOpening}
         isSending={isSubmitting}
         isRefiningPlan={isRefiningPlan}
         mentionBindings={mentionBindings}

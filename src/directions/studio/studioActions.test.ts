@@ -18,7 +18,10 @@ import {
   selectAdjacentThread,
   sendThreadDraft,
 } from "./studioActions";
-import { useConversationStore } from "../../stores/conversation-store";
+import {
+  OPTIMISTIC_FIRST_TURN_ID,
+  useConversationStore,
+} from "../../stores/conversation-store";
 
 const draftComposer = {
   provider: "codex" as const,
@@ -596,6 +599,28 @@ describe("studioActions", () => {
         mentionBindings: [],
         composer: draftComposer,
       });
+      expect(
+        useConversationStore.getState().snapshotsByThreadId[newThread.id],
+      ).toMatchObject({
+        threadId: newThread.id,
+        environmentId: newThread.environmentId,
+        status: "running",
+        activeTurnId: OPTIMISTIC_FIRST_TURN_ID,
+        composer: draftComposer,
+        items: [
+          expect.objectContaining({
+            kind: "message",
+            role: "user",
+            text: "Hello",
+            isStreaming: false,
+          }),
+        ],
+      });
+      expect(
+        useConversationStore.getState().runtimeHydrationByThreadId[
+          newThread.id
+        ],
+      ).toBe("loading");
       expect(useWorkspaceStore.getState().draftBySlot.topLeft).toBeUndefined();
       expect(useWorkspaceStore.getState().selectedThreadId).toBe(newThread.id);
     });

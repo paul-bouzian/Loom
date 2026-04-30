@@ -675,7 +675,7 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
   return (
     <div
       className={`tx-conversation thread-draft ${
-        hasSentOnce ? "" : "thread-draft--centered"
+        hasSentOnce ? "thread-draft--sent" : "thread-draft--centered"
       }`}
     >
       {optimisticMessage ? (
@@ -717,7 +717,7 @@ export function ThreadDraftComposer({ draft, paneId }: Props) {
         effortOptions={effortOptions}
         focusKey={`draft:${paneId}`}
         images={composerDraft.images}
-        isBusy={isRetargeting}
+        isBusy={isSending || isRetargeting}
         isSending={isSending}
         isRefiningPlan={false}
         mentionBindings={composerDraft.mentionBindings}

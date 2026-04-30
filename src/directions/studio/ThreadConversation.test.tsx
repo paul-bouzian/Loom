@@ -1622,6 +1622,32 @@ describe("ThreadConversation", () => {
     });
   });
 
+  it("shows first-message work state before runtime hydration completes", () => {
+    const thread = makeThread({ id: "thread-new", environmentId: "env-1" });
+    const runtimeOpen = createDeferred<Awaited<ReturnType<typeof bridge.openThreadConversation>>>();
+    mockedBridge.openThreadConversation.mockReturnValue(runtimeOpen.promise);
+
+    useConversationStore.getState().stagePendingFirstMessage(thread, {
+      text: "Build the dashboard",
+      images: [],
+      mentionBindings: [],
+      composer: baseComposer,
+    });
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment({ id: "env-1" })}
+        thread={thread}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Stop generation" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Working/)).toBeInTheDocument();
+    expect(screen.getByText("Build the dashboard")).toBeInTheDocument();
+  });
+
   it("renders subagents in the active tasks panel for active turns", async () => {
     setCompactWorkActivity(false);
     mockedBridge.openThreadConversation.mockResolvedValue({
