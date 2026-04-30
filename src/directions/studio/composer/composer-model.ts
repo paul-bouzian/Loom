@@ -11,6 +11,27 @@ const TOKEN_BOUNDARY = /[\s([{'"`,.;:!?)}\]]/;
 const TOKEN_STOP = /[\s)\]},"'`;]/;
 const SPACE_APPEND_STOP = /[\s,.;:!?)}\]>"'`]/;
 const UNKNOWN_COMMAND_TOKEN_SIGNAL = /[-_.:]/;
+const AMBIGUOUS_SLASH_PATH_ROOTS = new Set([
+  "applications",
+  "bin",
+  "dev",
+  "etc",
+  "home",
+  "library",
+  "mnt",
+  "opt",
+  "private",
+  "proc",
+  "run",
+  "sbin",
+  "sys",
+  "tmp",
+  "users",
+  "usr",
+  "var",
+  "volumes",
+  "workspace",
+]);
 
 function formatSlugLabel(slug: string): string {
   return slug
@@ -403,6 +424,7 @@ export function decorateComposerText(
         token.text,
         promptMap,
         decorateUnknownTokens,
+        decorateAllProviderTokens,
         provider,
       );
       if (resolved) {
@@ -601,6 +623,7 @@ function resolveSlashCommandToken(
   text: string,
   promptMap: Map<string, unknown>,
   decorateUnknownTokens: boolean,
+  decorateAllProviderTokens: boolean,
   provider: ProviderKind,
 ) {
   if (promptMap.has(text.slice(1).toLowerCase())) {
@@ -613,6 +636,7 @@ function resolveSlashCommandToken(
       trimmed,
       promptMap,
       decorateUnknownTokens,
+      decorateAllProviderTokens,
       provider,
     )
   ) {
@@ -625,12 +649,14 @@ function shouldDecorateSlashCommandToken(
   text: string,
   promptMap: Map<string, unknown>,
   decorateUnknownTokens: boolean,
+  decorateAllProviderTokens: boolean,
   provider: ProviderKind,
 ) {
   const normalized = text.slice(1).toLowerCase();
   return (
     promptMap.has(normalized) ||
-    (decorateUnknownTokens && isSlashCommandToken(text, provider))
+    (decorateUnknownTokens &&
+      isSlashCommandToken(text, provider, decorateAllProviderTokens))
   );
 }
 
@@ -694,7 +720,11 @@ function trimTrailingTokenPunctuation(text: string) {
   return text.replace(/[.!?:]+$/u, "");
 }
 
-function isSlashCommandToken(text: string, provider: ProviderKind) {
+function isSlashCommandToken(
+  text: string,
+  provider: ProviderKind,
+  decorateAllProviderTokens: boolean,
+) {
   const match = /^\/([A-Za-z0-9][A-Za-z0-9._:-]*)$/.exec(text);
   if (!match) {
     return false;
@@ -702,7 +732,12 @@ function isSlashCommandToken(text: string, provider: ProviderKind) {
   if (UNKNOWN_COMMAND_TOKEN_SIGNAL.test(match[1])) {
     return true;
   }
-  return provider === "claude" && /^[a-z][a-z0-9]*$/.test(match[1]);
+  const normalized = match[1].toLowerCase();
+  return (
+    (provider === "claude" || decorateAllProviderTokens) &&
+    /^[a-z][a-z0-9]*$/.test(match[1]) &&
+    !AMBIGUOUS_SLASH_PATH_ROOTS.has(normalized)
+  );
 }
 
 function isDollarMentionToken(text: string) {

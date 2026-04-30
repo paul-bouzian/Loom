@@ -373,7 +373,7 @@ describe("composer-model", () => {
 
   it("can decorate submitted commands without relying on the current provider", () => {
     const segments = decorateComposerText(
-      "Use /prompts:review() then /release-notes but keep /workspace /run /mnt raw",
+      "Use /prompts:review() then /review and /release-notes but keep /workspace /run /mnt raw",
       null,
       "codex",
       { decorateAllProviderTokens: true, decorateUnknownTokens: true },
@@ -395,10 +395,18 @@ describe("composer-model", () => {
       { kind: "text", text: " then " },
       {
         kind: "prompt",
+        text: "/review",
+        parts: [{ text: "/review", tone: "base" }],
+        start: 27,
+        end: 34,
+      },
+      { kind: "text", text: " and " },
+      {
+        kind: "prompt",
         text: "/release-notes",
         parts: [{ text: "/release-notes", tone: "base" }],
-        start: 27,
-        end: 41,
+        start: 39,
+        end: 53,
       },
       { kind: "text", text: " but keep /workspace /run /mnt raw" },
     ]);
