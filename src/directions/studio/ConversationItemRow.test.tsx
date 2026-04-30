@@ -57,6 +57,21 @@ describe("ConversationItemRow", () => {
       screen.getByRole("button", { name: "Copy message" }),
     ).toBeInTheDocument();
   });
+
+  it("does not render assistant text as unknown composer badges", () => {
+    const { container } = render(
+      <ConversationItemRow
+        provider="claude"
+        item={messageItem({
+          id: "assistant-command-text",
+          role: "assistant",
+          text: "Assistant output can mention /review and $foo-bar literally.",
+        })}
+      />,
+    );
+
+    expect(container.querySelector(".tx-inline-token-badge")).toBeNull();
+  });
 });
 
 function messageItem(

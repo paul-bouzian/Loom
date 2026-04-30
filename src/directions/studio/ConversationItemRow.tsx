@@ -277,7 +277,7 @@ function ConversationMessageRow({
                 text={item.text}
                 provider={provider}
                 decorateAllProviderTokens={item.role === "user"}
-                decorateUnknownTokens
+                decorateUnknownTokens={item.role === "user"}
                 mentionBindings={item.mentionBindings ?? []}
                 keyPrefix={`message-${item.id}-collapsed`}
               />
@@ -288,7 +288,7 @@ function ConversationMessageRow({
                 text={item.text}
                 provider={provider}
                 decorateAllProviderTokens={item.role === "user"}
-                decorateUnknownTokens
+                decorateUnknownTokens={item.role === "user"}
                 mentionBindings={item.mentionBindings ?? []}
                 linkifyText
                 keyPrefix={`message-${item.id}`}

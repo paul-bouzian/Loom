@@ -413,50 +413,19 @@ export function decorateComposerText(
     }
   }
   for (const token of collectSpecialTokens(text, "$", occupied)) {
-    const normalized = token.text.slice(1).toLowerCase();
-    const explicitKind = mentionBindingMap.get(normalized);
-    if (explicitKind === "skill") {
+    const resolved = resolveDollarMentionToken(
+      token.text,
+      mentionBindingMap,
+      skillMap,
+      appMap,
+      decorateUnknownTokens,
+    );
+    if (resolved) {
       mentionTokens.push({
-        kind: "skill",
-        text: token.text,
+        kind: resolved.kind,
+        text: resolved.text,
         start: token.start,
-        end: token.end,
-      });
-      continue;
-    }
-    if (explicitKind === "app") {
-      mentionTokens.push({
-        kind: "app",
-        text: token.text,
-        start: token.start,
-        end: token.end,
-      });
-      continue;
-    }
-    if (skillMap.has(normalized)) {
-      mentionTokens.push({
-        kind: "skill",
-        text: token.text,
-        start: token.start,
-        end: token.end,
-      });
-      continue;
-    }
-    if (appMap.has(normalized)) {
-      mentionTokens.push({
-        kind: "app",
-        text: token.text,
-        start: token.start,
-        end: token.end,
-      });
-      continue;
-    }
-    if (decorateUnknownTokens && isDollarMentionToken(token.text)) {
-      mentionTokens.push({
-        kind: "skill",
-        text: token.text,
-        start: token.start,
-        end: token.end,
+        end: token.start + resolved.text.length,
       });
     }
   }
@@ -624,6 +593,66 @@ function collectSpecialTokens(
     index = end;
   }
   return tokens;
+}
+
+function resolveDollarMentionToken(
+  text: string,
+  mentionBindingMap: Map<string, "skill" | "app">,
+  skillMap: Map<string, unknown>,
+  appMap: Map<string, unknown>,
+  decorateUnknownTokens: boolean,
+): { kind: "skill" | "app"; text: string } | null {
+  const exactKind = lookupDollarMentionKind(
+    text,
+    mentionBindingMap,
+    skillMap,
+    appMap,
+  );
+  if (exactKind) {
+    return { kind: exactKind, text };
+  }
+
+  const trimmed = trimTrailingMentionPunctuation(text);
+  if (trimmed !== text) {
+    const trimmedKind = lookupDollarMentionKind(
+      trimmed,
+      mentionBindingMap,
+      skillMap,
+      appMap,
+    );
+    if (trimmedKind) {
+      return { kind: trimmedKind, text: trimmed };
+    }
+  }
+
+  if (decorateUnknownTokens && isDollarMentionToken(trimmed)) {
+    return { kind: "skill", text: trimmed };
+  }
+  return null;
+}
+
+function lookupDollarMentionKind(
+  text: string,
+  mentionBindingMap: Map<string, "skill" | "app">,
+  skillMap: Map<string, unknown>,
+  appMap: Map<string, unknown>,
+) {
+  const normalized = text.slice(1).toLowerCase();
+  const explicitKind = mentionBindingMap.get(normalized);
+  if (explicitKind) {
+    return explicitKind;
+  }
+  if (skillMap.has(normalized)) {
+    return "skill";
+  }
+  if (appMap.has(normalized)) {
+    return "app";
+  }
+  return null;
+}
+
+function trimTrailingMentionPunctuation(text: string) {
+  return text.replace(/[.!?:]+$/u, "");
 }
 
 function isSlashCommandToken(text: string, provider: ProviderKind) {

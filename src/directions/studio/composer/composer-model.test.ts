@@ -248,6 +248,36 @@ describe("composer-model", () => {
     ]);
   });
 
+  it("keeps trailing punctuation outside explicit dollar mention badges", () => {
+    const segments = decorateComposerText("Use $github.", null, "codex", {
+      decorateUnknownTokens: true,
+      mentionBindings: [
+        { mention: "github", kind: "app", path: "app://github" },
+      ],
+    });
+
+    expect(segments).toEqual([
+      { kind: "text", text: "Use " },
+      { kind: "app", text: "$github", start: 4, end: 11 },
+      { kind: "text", text: "." },
+    ]);
+  });
+
+  it("keeps trailing punctuation outside unknown dollar mention badges", () => {
+    const segments = decorateComposerText(
+      "Use $code-simplifier.",
+      null,
+      "codex",
+      { decorateUnknownTokens: true },
+    );
+
+    expect(segments).toEqual([
+      { kind: "text", text: "Use " },
+      { kind: "skill", text: "$code-simplifier", start: 4, end: 20 },
+      { kind: "text", text: "." },
+    ]);
+  });
+
   it("decorates catalog-backed Claude command tokens without treating paths as commands", () => {
     const segments = decorateComposerText(
       "Run /review but leave /Users/test/file alone",
