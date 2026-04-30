@@ -16,6 +16,34 @@ describe("ConversationItemRow", () => {
     expect(screen.getByText("Claude")).toBeInTheDocument();
     expect(screen.queryByText("Codex")).toBeNull();
   });
+
+  it("renders user composer commands as visual badges", () => {
+    render(
+      <ConversationItemRow
+        provider="codex"
+        item={messageItem({
+          id: "user-command",
+          role: "user",
+          text: "Use /prompts:review() with $create-pr",
+        })}
+      />,
+    );
+
+    const promptBadge = screen
+      .getByText("/review")
+      .closest(".tx-inline-token-badge");
+    const skillBadge = screen
+      .getByText("$create-pr")
+      .closest(".tx-inline-token-badge");
+
+    expect(promptBadge).not.toBeNull();
+    expect(promptBadge).toHaveAttribute("title", "/prompts:review()");
+    expect(skillBadge).not.toBeNull();
+    expect(skillBadge).toHaveAttribute("title", "$create-pr");
+    expect(
+      screen.getByRole("button", { name: "Copy message" }),
+    ).toBeInTheDocument();
+  });
 });
 
 function messageItem(

@@ -20,6 +20,7 @@ import {
   type IconProps,
 } from "../../shared/Icons";
 import { SmoothCollapse } from "../../shared/SmoothCollapse";
+import { ComposerTokenText } from "./ComposerTokenText";
 import { ConversationLinkedText } from "./ConversationLinkedText";
 import { ConversationMessageImages } from "./ConversationMessageImages";
 import { ConversationMarkdown } from "./ConversationMarkdown";
@@ -271,9 +272,24 @@ function ConversationMessageRow({
             // URLs below the fold don't sit in the tab order, and visible
             // URLs above the fold don't look clickable while the user is
             // still supposed to press "Show more" to interact with them.
-            <div className={bodyClassName}>{item.text}</div>
+            <div className={bodyClassName}>
+              <ComposerTokenText
+                text={item.text}
+                provider={provider}
+                decorateUnknownTokens
+                keyPrefix={`message-${item.id}-collapsed`}
+              />
+            </div>
           ) : (
-            <ConversationLinkedText as="div" className={bodyClassName} text={item.text} />
+            <div className={bodyClassName}>
+              <ComposerTokenText
+                text={item.text}
+                provider={provider}
+                decorateUnknownTokens
+                linkifyText
+                keyPrefix={`message-${item.id}`}
+              />
+            </div>
           )}
         </div>
       ) : null}

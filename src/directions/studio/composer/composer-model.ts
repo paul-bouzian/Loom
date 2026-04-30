@@ -6,7 +6,7 @@ import type {
   ThreadComposerCatalog,
 } from "../../../lib/types";
 
-const PROMPT_PREFIX = "/prompts:";
+export const PROMPT_PREFIX = "/prompts:";
 const TOKEN_BOUNDARY = /[\s([{'"`,.;:!?)}\]]/;
 const TOKEN_STOP = /[\s)\]},"'`;]/;
 const SPACE_APPEND_STOP = /[\s,.;:!?)}\]>"'`]/;
@@ -43,10 +43,20 @@ export type ComposerMirrorPart = {
 
 export type ComposerMirrorSegment =
   | { kind: "text"; text: string }
-  | { kind: "prompt"; text: string; parts: ComposerMirrorPart[] }
-  | { kind: "skill"; text: string }
-  | { kind: "app"; text: string }
-  | { kind: "file"; text: string };
+  | {
+      kind: "prompt";
+      text: string;
+      parts: ComposerMirrorPart[];
+      start: number;
+      end: number;
+    }
+  | { kind: "skill"; text: string; start: number; end: number }
+  | { kind: "app"; text: string; start: number; end: number }
+  | { kind: "file"; text: string; start: number; end: number };
+
+export type DecorateComposerTextOptions = {
+  decorateUnknownTokens?: boolean;
+};
 
 type DecoratedToken =
   | ({ kind: "prompt"; text: string; parts: ComposerMirrorPart[] } & {
@@ -338,11 +348,13 @@ export function decorateComposerText(
   text: string,
   catalog: ThreadComposerCatalog | null,
   provider: ProviderKind = "codex",
+  options: DecorateComposerTextOptions = {},
 ): ComposerMirrorSegment[] {
   if (!text) {
     return [];
   }
 
+  const decorateUnknownTokens = options.decorateUnknownTokens === true;
   const promptMap = new Map(
     (catalog?.prompts ?? []).map((prompt) => [prompt.name, prompt]),
   );
@@ -359,7 +371,10 @@ export function decorateComposerText(
     end: invocation.end,
   }));
   const promptTokens: DecoratedToken[] = promptInvocations
-    .filter((invocation) => promptMap.has(invocation.name))
+    .filter(
+      (invocation) =>
+        decorateUnknownTokens || promptMap.has(invocation.name),
+    )
     .map((invocation) => ({
       kind: "prompt",
       text: invocation.raw,
@@ -371,7 +386,10 @@ export function decorateComposerText(
   if (provider === "claude") {
     for (const token of collectSpecialTokens(text, "/", occupied)) {
       const normalized = token.text.slice(1).toLowerCase();
-      if (promptMap.has(normalized)) {
+      if (
+        promptMap.has(normalized) ||
+        (decorateUnknownTokens && isSlashCommandToken(token.text))
+      ) {
         mentionTokens.push({
           kind: "prompt",
           text: token.text,
@@ -396,6 +414,15 @@ export function decorateComposerText(
     if (appMap.has(normalized)) {
       mentionTokens.push({
         kind: "app",
+        text: token.text,
+        start: token.start,
+        end: token.end,
+      });
+      continue;
+    }
+    if (decorateUnknownTokens && isDollarMentionToken(token.text)) {
+      mentionTokens.push({
+        kind: "skill",
         text: token.text,
         start: token.start,
         end: token.end,
@@ -431,6 +458,29 @@ export function decorateComposerText(
     segments.push({ kind: "text", text: text.slice(cursor) });
   }
   return segments;
+}
+
+export function findComposerTokenDeletionRange(
+  text: string,
+  cursor: number,
+  catalog: ThreadComposerCatalog | null,
+  provider: ProviderKind = "codex",
+) {
+  if (cursor <= 0 || cursor > text.length) {
+    return null;
+  }
+
+  const segments = decorateComposerText(text, catalog, provider);
+  for (const segment of segments) {
+    if (segment.kind === "text") {
+      continue;
+    }
+    if (cursor > segment.start && cursor <= segment.end) {
+      return { start: segment.start, end: segment.end };
+    }
+  }
+
+  return null;
 }
 
 function parsePromptInvocations(text: string): PromptInvocation[] {
@@ -540,6 +590,14 @@ function collectSpecialTokens(
     index = end;
   }
   return tokens;
+}
+
+function isSlashCommandToken(text: string) {
+  return /^\/[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(text);
+}
+
+function isDollarMentionToken(text: string) {
+  return /^\$[a-z][a-z0-9._:-]*$/.test(text);
 }
 
 function buildPromptMirrorParts(raw: string): ComposerMirrorPart[] {

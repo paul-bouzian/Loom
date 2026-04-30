@@ -6,6 +6,7 @@ import {
   buildPromptInsertText,
   decorateComposerText,
   findActiveComposerToken,
+  findComposerTokenDeletionRange,
 } from "./composer-model";
 
 const catalog: ThreadComposerCatalog = {
@@ -192,6 +193,64 @@ describe("composer-model", () => {
       { kind: "skill", text: "$review", start: 23, end: 30 },
       { kind: "text", text: " but keep /review raw" },
     ]);
+  });
+
+  it("can decorate submitted Codex prompt tokens without a catalog", () => {
+    const segments = decorateComposerText(
+      "Run /prompts:review() and $create-pr",
+      null,
+      "codex",
+      { decorateUnknownTokens: true },
+    );
+
+    expect(segments).toEqual([
+      { kind: "text", text: "Run " },
+      {
+        kind: "prompt",
+        text: "/prompts:review()",
+        parts: [
+          { text: "/prompts:review", tone: "base" },
+          { text: "(", tone: "base" },
+          { text: ")", tone: "base" },
+        ],
+        start: 4,
+        end: 21,
+      },
+      { kind: "text", text: " and " },
+      { kind: "skill", text: "$create-pr", start: 26, end: 36 },
+    ]);
+  });
+
+  it("can decorate submitted Claude command tokens without treating paths as commands", () => {
+    const segments = decorateComposerText(
+      "Run /review but leave /Users/test/file alone",
+      null,
+      "claude",
+      { decorateUnknownTokens: true },
+    );
+
+    expect(segments).toEqual([
+      { kind: "text", text: "Run " },
+      {
+        kind: "prompt",
+        text: "/review",
+        parts: [{ text: "/review", tone: "base" }],
+        start: 4,
+        end: 11,
+      },
+      { kind: "text", text: " but leave /Users/test/file alone" },
+    ]);
+  });
+
+  it("finds the full decorated token range when deleting at the token edge", () => {
+    expect(
+      findComposerTokenDeletionRange(
+        "Use $create-pr",
+        "Use $create-pr".length,
+        catalog,
+        "codex",
+      ),
+    ).toEqual({ start: 4, end: 14 });
   });
 
   it("builds Claude dollar suggestions without Codex mention bindings", () => {
