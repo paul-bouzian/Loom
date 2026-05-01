@@ -1241,6 +1241,9 @@ async fn plan_mode_starts_a_real_plan_turn() {
         .find(|request| request.method == "turn/start")
         .expect("turn/start should be issued");
     assert_eq!(turn_start.params["collaborationMode"]["mode"], "plan");
+    let developer_instructions =
+        &turn_start.params["collaborationMode"]["settings"]["developer_instructions"];
+    assert!(developer_instructions.is_null());
 }
 
 #[tokio::test]
