@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import * as bridge from "../lib/bridge";
+import { OPTIMISTIC_FIRST_TURN_ID } from "../lib/conversation-constants";
 import type {
   ApprovalResponseInput,
   ComposerMentionBindingInput,
@@ -169,7 +170,6 @@ const pendingOptimisticUserMessages = new Map<
   string,
   PendingOptimisticUserMessage
 >();
-export const OPTIMISTIC_FIRST_TURN_ID = "optimistic-first-turn";
 const BACKFILL_DELAY_MS = 1_500;
 const projectionBackfillQueuesByEnvironment = new Map<string, string[]>();
 const projectionBackfillTimersByEnvironment = new Map<string, number>();

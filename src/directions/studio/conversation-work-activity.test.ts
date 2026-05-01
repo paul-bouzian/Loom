@@ -1,9 +1,48 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { OPTIMISTIC_FIRST_TURN_ID } from "../../lib/conversation-constants";
 import { makeConversationSnapshot } from "../../test/fixtures/conversation";
 import { buildConversationTimeline } from "./conversation-work-activity";
 
 describe("buildConversationTimeline", () => {
+  it("tracks optimistic first-message timing independently per thread", () => {
+    const dateNow = vi.spyOn(Date, "now");
+    const firstStartedAt = new Date("2026-05-01T10:00:00Z").getTime();
+    const secondStartedAt = new Date("2026-05-01T13:17:00Z").getTime();
+    const thirdStartedAt = new Date("2026-05-01T15:44:00Z").getTime();
+    try {
+      dateNow.mockReturnValue(firstStartedAt);
+      const firstGroup = optimisticWorkActivityGroup({
+        threadId: "thread-optimistic-timing-old",
+        messageId: "optimistic-user-old",
+        text: "Start old thread",
+      });
+
+      dateNow.mockReturnValue(secondStartedAt);
+      const secondGroup = optimisticWorkActivityGroup({
+        threadId: "thread-optimistic-timing-new",
+        messageId: "optimistic-user-new",
+        text: "Start new thread",
+      });
+
+      expect(firstGroup.startedAt).not.toBeNull();
+      expect(secondGroup.startedAt).not.toBeNull();
+      expect(secondGroup.startedAt).toBeGreaterThan(firstGroup.startedAt!);
+      expect(secondGroup.startedAt).toBe(secondStartedAt);
+
+      dateNow.mockReturnValue(thirdStartedAt);
+      const sameThreadNextGroup = optimisticWorkActivityGroup({
+        threadId: "thread-optimistic-timing-new",
+        messageId: "optimistic-user-new-retry",
+        text: "Start new thread again",
+      });
+
+      expect(sameThreadNextGroup.startedAt).toBe(thirdStartedAt);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("keeps live assistant updates inside the active work activity", () => {
     const entries = buildConversationTimeline(
       makeConversationSnapshot({
@@ -238,3 +277,43 @@ describe("buildConversationTimeline", () => {
     ]);
   });
 });
+
+function onlyWorkActivityGroup(
+  entries: ReturnType<typeof buildConversationTimeline>,
+) {
+  const group = entries.find((entry) => entry.kind === "workActivity");
+  if (!group || group.kind !== "workActivity") {
+    throw new Error("Expected a work activity group.");
+  }
+  return group.group;
+}
+
+function optimisticWorkActivityGroup({
+  threadId,
+  messageId,
+  text,
+}: {
+  threadId: string;
+  messageId: string;
+  text: string;
+}) {
+  return onlyWorkActivityGroup(
+    buildConversationTimeline(
+      makeConversationSnapshot({
+        threadId,
+        status: "running",
+        activeTurnId: OPTIMISTIC_FIRST_TURN_ID,
+        items: [
+          {
+            kind: "message",
+            id: messageId,
+            role: "user",
+            text,
+            images: null,
+            isStreaming: false,
+          },
+        ],
+      }),
+    ),
+  );
+}
