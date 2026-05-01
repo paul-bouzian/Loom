@@ -5,6 +5,7 @@ import type {
   ProposedPlanSnapshot,
   ThreadConversationSnapshot,
 } from "../../lib/types";
+import { OPTIMISTIC_FIRST_TURN_ID } from "../../lib/conversation-constants";
 import { shouldRenderConversationItem } from "./conversation-item-visibility";
 
 export type WorkActivityStatus =
@@ -34,29 +35,29 @@ type WorkActivityTiming = {
   finishedAt: number | null;
 };
 
-const TIMING_BY_TURN: Map<string, WorkActivityTiming> = new Map();
+const TIMING_BY_GROUP: Map<string, WorkActivityTiming> = new Map();
 const TIMING_MAX_ENTRIES = 500;
 
 function evictOldestTiming(): void {
-  while (TIMING_BY_TURN.size > TIMING_MAX_ENTRIES) {
-    const oldest = TIMING_BY_TURN.keys().next().value;
+  while (TIMING_BY_GROUP.size > TIMING_MAX_ENTRIES) {
+    const oldest = TIMING_BY_GROUP.keys().next().value;
     if (oldest === undefined) break;
-    TIMING_BY_TURN.delete(oldest);
+    TIMING_BY_GROUP.delete(oldest);
   }
 }
 
 function recordTiming(
-  turnId: string,
+  timingKey: string,
   status: WorkActivityStatus,
 ): WorkActivityTiming | null {
-  const existing = TIMING_BY_TURN.get(turnId) ?? null;
+  const existing = TIMING_BY_GROUP.get(timingKey) ?? null;
   if (status === "running" || status === "waiting") {
     if (existing) {
       existing.finishedAt = null;
       return existing;
     }
     const created: WorkActivityTiming = { startedAt: Date.now(), finishedAt: null };
-    TIMING_BY_TURN.set(turnId, created);
+    TIMING_BY_GROUP.set(timingKey, created);
     evictOldestTiming();
     return created;
   }
@@ -469,7 +470,7 @@ function finalizeGroup(
   };
 
   const status = statusForGroup(group.turnId, snapshot, latestWorkTurnId);
-  const timing = recordTiming(group.turnId, status);
+  const timing = recordTiming(timingKeyForGroup(group.turnId, snapshot), status);
 
   return {
     id: `work-${group.turnId}`,
@@ -480,6 +481,22 @@ function finalizeGroup(
     startedAt: timing?.startedAt ?? null,
     finishedAt: timing?.finishedAt ?? null,
   };
+}
+
+function timingKeyForGroup(
+  turnId: string,
+  snapshot: ThreadConversationSnapshot,
+): string {
+  const keyParts = [snapshot.threadId, turnId];
+  if (turnId === OPTIMISTIC_FIRST_TURN_ID) {
+    const anchorIndex = findActiveTurnAnchorIndex(snapshot);
+    const anchorId =
+      anchorIndex === null ? null : (snapshot.items[anchorIndex]?.id ?? null);
+    if (anchorId) {
+      keyParts.push(anchorId);
+    }
+  }
+  return JSON.stringify(keyParts);
 }
 
 function statusForGroup(

@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import * as bridge from "../../lib/bridge";
+import { OPTIMISTIC_FIRST_TURN_ID } from "../../lib/conversation-constants";
 import type {
   ComposerDraftMentionBinding,
   ComposerMentionBindingInput,
@@ -22,7 +23,6 @@ import type {
 } from "../../lib/types";
 import { ThreadIcon } from "../../shared/Icons";
 import {
-  OPTIMISTIC_FIRST_TURN_ID,
   selectConversationCapabilities,
   selectConversationComposer,
   selectConversationDraft,

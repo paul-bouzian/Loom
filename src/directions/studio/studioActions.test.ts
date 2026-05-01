@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as bridge from "../../lib/bridge";
+import { OPTIMISTIC_FIRST_TURN_ID } from "../../lib/conversation-constants";
 import { dialogConfirmMock } from "../../test/desktop-mock";
 import {
   makeEnvironment,
@@ -18,10 +19,7 @@ import {
   selectAdjacentThread,
   sendThreadDraft,
 } from "./studioActions";
-import {
-  OPTIMISTIC_FIRST_TURN_ID,
-  useConversationStore,
-} from "../../stores/conversation-store";
+import { useConversationStore } from "../../stores/conversation-store";
 
 const draftComposer = {
   provider: "codex" as const,

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as bridge from "../lib/bridge";
+import { OPTIMISTIC_FIRST_TURN_ID } from "../lib/conversation-constants";
 import type {
   ComposerMentionBindingInput,
   ConversationImageAttachment,
@@ -17,7 +18,6 @@ import {
 } from "../test/fixtures/conversation";
 import {
   INITIAL_CONVERSATION_STATE,
-  OPTIMISTIC_FIRST_TURN_ID,
   teardownConversationListener,
   useConversationStore,
 } from "./conversation-store";
