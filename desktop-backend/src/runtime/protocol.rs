@@ -21,7 +21,6 @@ use crate::domain::settings::{
 };
 use crate::domain::workspace::CodexRateLimitSnapshot;
 use crate::error::{AppError, AppResult};
-use crate::runtime::collaboration_mode_templates::developer_instructions_for_mode;
 
 pub const AGENT_MESSAGE_DELTA_METHOD: &str = "item/agentMessage/delta";
 
@@ -692,7 +691,7 @@ pub fn collaboration_mode_payload(composer: &ConversationComposerSettings) -> Va
         "settings": {
             "model": composer.model,
             "reasoning_effort": composer.reasoning_effort,
-            "developer_instructions": developer_instructions_for_mode(composer.collaboration_mode),
+            "developer_instructions": Value::Null,
         }
     })
 }
@@ -2947,7 +2946,7 @@ mod tests {
     }
 
     #[test]
-    fn collaboration_mode_payload_includes_plan_instructions() {
+    fn collaboration_mode_payload_uses_builtin_plan_instructions() {
         let payload = collaboration_mode_payload(&ConversationComposerSettings {
             provider: ProviderKind::Codex,
             model: "gpt-5.4".to_string(),
@@ -2958,11 +2957,7 @@ mod tests {
         });
 
         assert_eq!(payload["mode"], "plan");
-        assert!(payload["settings"]["developer_instructions"]
-            .as_str()
-            .is_some_and(
-                |instructions| instructions.contains("must use the `request_user_input` tool")
-            ));
+        assert!(payload["settings"]["developer_instructions"].is_null());
     }
 
     #[test]
