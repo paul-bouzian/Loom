@@ -4,9 +4,10 @@ import { createPortal } from "react-dom";
 import type {
   ConversationComposerSettings,
   ModelOption,
+  ProviderKind,
   ReasoningEffort,
 } from "../../../lib/types";
-import { CheckIcon, ChevronRightIcon } from "../../../shared/Icons";
+import { BarsIcon, CheckIcon, ChevronRightIcon } from "../../../shared/Icons";
 import type { ComposerPickerOption } from "../ComposerPicker";
 import {
   claudeModelSupportsOneMillionContext,
@@ -38,6 +39,22 @@ const MENU_MIN_WIDTH = 180;
 const MENU_MAX_HEIGHT = 300;
 const MENU_MIN_HEIGHT = 150;
 
+const REASONING_LEVEL_RANK: Record<ReasoningEffort, number> = {
+  low: 1,
+  medium: 2,
+  high: 3,
+  xhigh: 4,
+  max: 5,
+};
+
+function reasoningTotalBars(provider: ProviderKind): number {
+  return provider === "claude" ? 5 : 4;
+}
+
+function reasoningFilledBars(effort: ReasoningEffort, total: number): number {
+  return Math.max(1, Math.min(REASONING_LEVEL_RANK[effort] ?? 1, total));
+}
+
 export function ReasoningContextPicker({
   composer,
   disabled,
@@ -64,6 +81,8 @@ export function ReasoningContextPicker({
   ]
     .filter(Boolean)
     .join(" · ");
+  const totalBars = reasoningTotalBars(composer.provider);
+  const filledBars = reasoningFilledBars(composer.reasoningEffort, totalBars);
 
   useEffect(() => {
     if (!open) return;
@@ -161,6 +180,9 @@ export function ReasoningContextPicker({
         aria-label="Thinking picker"
         onClick={() => setOpen((current) => !current)}
       >
+        <span className="tx-picker__leading-icon" aria-hidden="true">
+          <BarsIcon size={12} total={totalBars} filled={filledBars} />
+        </span>
         <span className="tx-picker__value">{valueLabel}</span>
         <ChevronRightIcon size={8} className="tx-picker__chevron" />
       </button>

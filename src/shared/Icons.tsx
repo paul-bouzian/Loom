@@ -788,6 +788,132 @@ export function WorktreeGlyph({ size = 14, className }: IconProps) {
   );
 }
 
+type BarsIconProps = IconProps & {
+  total: number;
+  filled: number;
+};
+
+export function BarsIcon({
+  size = 14,
+  total,
+  filled,
+  className,
+}: BarsIconProps) {
+  const safeTotal = Math.max(1, Math.floor(total));
+  const safeFilled = Math.max(0, Math.min(Math.floor(filled), safeTotal));
+  const viewWidth = 16;
+  const viewHeight = 16;
+  const gap = 1.5;
+  const barWidth = (viewWidth - gap * (safeTotal - 1)) / safeTotal;
+  const minHeight = 4;
+  const maxHeight = 13;
+  const heightStep =
+    safeTotal > 1 ? (maxHeight - minHeight) / (safeTotal - 1) : 0;
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${viewWidth} ${viewHeight}`}
+      fill="currentColor"
+      className={className}
+    >
+      {Array.from({ length: safeTotal }, (_, index) => {
+        const height = minHeight + heightStep * index;
+        const x = index * (barWidth + gap);
+        const y = viewHeight - height - 1;
+        const isFilled = index < safeFilled;
+        return (
+          <rect
+            key={index}
+            x={x}
+            y={y}
+            width={barWidth}
+            height={height}
+            rx={0.6}
+            ry={0.6}
+            opacity={isFilled ? 1 : 0.3}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+export function MessageSquareIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      className={className}
+    >
+      <path
+        d="M3 3.75A1.25 1.25 0 0 1 4.25 2.5h7.5A1.25 1.25 0 0 1 13 3.75v6A1.25 1.25 0 0 1 11.75 11H6.5L3.75 13.5a.4.4 0 0 1-.65-.31V3.75z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function ShieldCheckIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      className={className}
+    >
+      <path
+        d="M8 1.75 2.75 3.5v4.1c0 3.25 2.25 5.55 5.25 6.65 3-1.1 5.25-3.4 5.25-6.65V3.5L8 1.75z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m5.6 8.1 1.7 1.7L10.6 6.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function UnlockIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      className={className}
+    >
+      <rect
+        x="3.25"
+        y="7.25"
+        width="9.5"
+        height="6.5"
+        rx="1.25"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+      <path
+        d="M5.25 7.25V5a2.75 2.75 0 0 1 5.4-.7"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function BrainIcon({ size = 13, className }: IconProps) {
   return (
     <svg
