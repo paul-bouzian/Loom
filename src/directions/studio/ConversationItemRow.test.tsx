@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ConversationAutoApprovalReviewItem,
@@ -211,6 +211,46 @@ describe("ConversationItemRow", () => {
         description: "bun run verify",
       }),
     ).toBeInTheDocument();
+  });
+
+  describe("copy button feedback", () => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(
+      globalThis.navigator,
+      "clipboard",
+    );
+
+    afterEach(() => {
+      if (originalClipboard) {
+        Object.defineProperty(globalThis.navigator, "clipboard", originalClipboard);
+      } else {
+        // @ts-expect-error — restore unset state when clipboard wasn't defined.
+        delete (globalThis.navigator as Navigator).clipboard;
+      }
+    });
+
+    it("applies the copied state synchronously without waiting for clipboard.writeText", async () => {
+      // writeText never resolves; is-copied must apply before the await settles.
+      const writeText = vi.fn(() => new Promise<void>(() => {}));
+      Object.defineProperty(globalThis.navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+
+      render(
+        <ConversationItemRow
+          provider="claude"
+          item={messageItem({ id: "copy-sync", text: "Bonjour" })}
+        />,
+      );
+
+      const button = screen.getByRole("button", { name: "Copy message" });
+      expect(button.classList.contains("is-copied")).toBe(false);
+
+      await userEvent.click(button);
+
+      expect(writeText).toHaveBeenCalledWith("Bonjour");
+      expect(button.classList.contains("is-copied")).toBe(true);
+    });
   });
 });
 

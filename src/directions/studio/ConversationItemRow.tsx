@@ -254,8 +254,6 @@ function ConversationMessageRow({
   const [expanded, setExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const bodyWrapRef = useRef<HTMLDivElement | null>(null);
-  const isMountedRef = useRef(true);
-  const copyFeedbackTimeoutRef = useRef<number | null>(null);
   const shouldRenderMarkdown = item.role === "assistant";
   const hasText = item.text.trim().length > 0;
   const hasImages = Boolean(item.images && item.images.length > 0);
@@ -291,21 +289,13 @@ function ConversationMessageRow({
     .filter(Boolean)
     .join(" ");
 
-  const clearCopyFeedbackTimeout = useCallback(() => {
-    if (copyFeedbackTimeoutRef.current === null) {
+  useEffect(() => {
+    if (!copied) {
       return;
     }
-
-    window.clearTimeout(copyFeedbackTimeoutRef.current);
-    copyFeedbackTimeoutRef.current = null;
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-      clearCopyFeedbackTimeout();
-    };
-  }, [clearCopyFeedbackTimeout]);
+    const timer = window.setTimeout(() => setCopied(false), 1100);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   useLayoutEffect(() => {
     if (!isCollapsible) {
@@ -344,24 +334,17 @@ function ConversationMessageRow({
       return;
     }
 
+    // Apply the copied state synchronously so the CSS transition runs in the
+    // same frame as the click — otherwise a row remount during the awaited
+    // clipboard write (e.g. assistant message id stabilizing at end of stream)
+    // can drop the state update and the icon swap never plays.
+    setCopied(true);
     try {
       await clipboard.writeText(item.text);
-      if (!isMountedRef.current) {
-        return;
-      }
-      setCopied(true);
-      clearCopyFeedbackTimeout();
-      copyFeedbackTimeoutRef.current = window.setTimeout(() => {
-        if (!isMountedRef.current) {
-          return;
-        }
-        setCopied(false);
-        copyFeedbackTimeoutRef.current = null;
-      }, 1200);
     } catch {
-      // Clipboard access can fail in restricted contexts; the UI should remain stable.
+      setCopied(false);
     }
-  }, [clearCopyFeedbackTimeout, hasText, item.text]);
+  }, [hasText, item.text]);
 
   return (
     <div className={className}>
