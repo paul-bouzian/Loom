@@ -237,6 +237,33 @@ fn auto_review_notification_normalizes_review_item() {
 }
 
 #[test]
+fn auto_review_network_summary_omits_missing_port() {
+    let item = normalize_auto_approval_review_notification(&json!({
+        "threadId": "thr-1",
+        "turnId": "turn-1",
+        "reviewId": "review-1",
+        "action": {
+            "type": "networkAccess",
+            "protocol": "https",
+            "host": "example.com",
+            "target": "api"
+        },
+        "review": {
+            "status": "inProgress"
+        }
+    }))
+    .expect("auto review notification should normalize");
+
+    match item {
+        ConversationItem::AutoApprovalReview(review) => {
+            assert_eq!(review.title, "Network auto-review");
+            assert_eq!(review.summary, "https://example.com\ntarget: api");
+        }
+        _ => panic!("expected auto approval review item"),
+    }
+}
+
+#[test]
 fn history_snapshot_skips_hidden_inter_agent_messages() {
     let snapshot = build_history_snapshot(
         "thread-1".to_string(),

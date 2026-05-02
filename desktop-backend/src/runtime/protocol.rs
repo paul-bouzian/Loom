@@ -1762,16 +1762,15 @@ fn auto_approval_review_action(action: &Value) -> (String, String, String) {
                 .map(|value| value.to_string())
                 .unwrap_or_default();
             let target = string_field(action, "target");
+            let endpoint = if port.is_empty() {
+                format!("{protocol}://{host}")
+            } else {
+                format!("{protocol}://{host}:{port}")
+            };
             (
                 "networkAccess".to_string(),
                 "Network auto-review".to_string(),
-                join_lines(
-                    [
-                        Some(format!("{protocol}://{host}:{port}")),
-                        prefixed_detail("target", target),
-                    ]
-                    .into_iter(),
-                ),
+                join_lines([Some(endpoint), prefixed_detail("target", target)].into_iter()),
             )
         }
         "mcpToolCall" => {

@@ -109,9 +109,11 @@ describe("ConversationItemRow", () => {
     expect(screen.getByText("Approved")).toBeInTheDocument();
     expect(screen.getByText("Risk: High")).toBeInTheDocument();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Show Command auto-review details" }),
-    );
+    const toggle = screen.getByRole("button", {
+      name: "Show Command auto-review details",
+      description: "Risk: High Approved",
+    });
+    await userEvent.click(toggle);
 
     expect(screen.getByText("git push origin feature")).toBeInTheDocument();
     expect(screen.getByText("User explicitly requested this action.")).toBeInTheDocument();

@@ -166,6 +166,11 @@ function AutoApprovalReviewRow({
     authorizationLabel,
     item.targetItemId ? `Target: ${item.targetItemId}` : null,
   ].filter(Boolean);
+  const statusId = `${item.id}-auto-review-status`;
+  const riskId = `${item.id}-auto-review-risk`;
+  const describedBy = [riskLabel ? riskId : null, statusId]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div className={`tx-item tx-item--auto-review ${compact ? "tx-item--compact" : ""}`}>
@@ -173,6 +178,7 @@ function AutoApprovalReviewRow({
         type="button"
         className="tx-item__toggle"
         aria-label={expanded ? `Hide ${item.title} details` : `Show ${item.title} details`}
+        aria-describedby={describedBy}
         onClick={onToggle}
       >
         <div className="tx-item__header">
@@ -186,11 +192,17 @@ function AutoApprovalReviewRow({
           </span>
           <span className="tx-auto-review__badges">
             {riskLabel ? (
-              <span className={`tx-auto-review__badge tx-auto-review__badge--risk-${item.riskLevel}`}>
+              <span
+                id={riskId}
+                className={`tx-auto-review__badge tx-auto-review__badge--risk-${item.riskLevel}`}
+              >
                 {riskLabel}
               </span>
             ) : null}
-            <span className={`tx-auto-review__badge tx-auto-review__badge--status-${item.status}`}>
+            <span
+              id={statusId}
+              className={`tx-auto-review__badge tx-auto-review__badge--status-${item.status}`}
+            >
               {statusLabel}
             </span>
           </span>

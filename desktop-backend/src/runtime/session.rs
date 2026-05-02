@@ -2393,13 +2393,13 @@ async fn handle_notification(
                         })
                         .flatten();
                     let snapshot = snapshot.clone();
+                    Some((snapshot, local_thread_id, item_to_persist))
+                };
+
+                if let Some((snapshot, local_thread_id, item_to_persist)) = maybe_snapshot {
                     if let Some(item) = item_to_persist {
                         item_store::save(&local_thread_id, &item);
                     }
-                    Some(snapshot)
-                };
-
-                if let Some(snapshot) = maybe_snapshot {
                     emit_snapshot_from_handle(events, snapshot);
                 }
             }
