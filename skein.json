@@ -3,5 +3,13 @@
   "worktree": {
     "teardownScript": "cd ~/dev/Skein && git pull"
   },
-  "actions": []
+  "actions": [
+    {
+      "id": "d4436d81-182d-4888-abe0-1f99cfae3ab5",
+      "label": "Dev",
+      "icon": "play",
+      "script": "bun run electron:dev",
+      "shortcut": null
+    }
+  ]
 }
