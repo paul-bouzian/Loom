@@ -561,6 +561,44 @@ export function InlineComposer({
     );
   }
 
+  // Snap a single, unmodified click to the source position computed from the
+  // mirror DOM. We bind on `click` (not `mousedown`) and skip whenever the
+  // gesture might be a drag-select, double-click, or shift/ctrl/alt/meta range
+  // extension so native textarea selection behaviors stay intact.
+  function handleComposerClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (event.detail !== 1) {
+      return;
+    }
+    if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
+      return;
+    }
+    const textarea = textareaRef.current;
+    if (!textarea || textarea.disabled) {
+      return;
+    }
+    if (textarea.selectionStart !== textarea.selectionEnd) {
+      return;
+    }
+    const mirror = event.currentTarget.querySelector<HTMLElement>(
+      ".tx-inline-composer__mirror",
+    );
+    if (!mirror?.querySelector("[data-token-start]")) {
+      return;
+    }
+    const position = findDraftPositionForClick(
+      mirror,
+      textarea,
+      event.clientX,
+      event.clientY,
+    );
+    if (position === null) {
+      return;
+    }
+    textarea.focus();
+    textarea.setSelectionRange(position, position);
+    setSelection({ start: position, end: position });
+  }
+
   function collaborationModeLabel(
     mode: ConversationComposerSettings["collaborationMode"],
   ) {
@@ -612,6 +650,7 @@ export function InlineComposer({
           ]
             .filter(Boolean)
             .join(" ")}
+          onClick={handleComposerClick}
         >
           <ComposerTextMirror
             draft={draft}
@@ -634,6 +673,9 @@ export function InlineComposer({
             }
             placeholder={placeholder}
             disabled={inputDisabled}
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
             onChange={(event) => {
               const nextDraft = event.target.value;
               const nextBindings = rebaseComposerMentionBindings(
@@ -904,4 +946,132 @@ export function InlineComposer({
       </div>
     </div>
   );
+}
+
+function findDraftPositionForClick(
+  mirror: HTMLElement,
+  textarea: HTMLTextAreaElement,
+  clientX: number,
+  clientY: number,
+): number | null {
+  const caret = caretAtPointThroughTextarea(textarea, clientX, clientY);
+  if (!caret || !mirror.contains(caret.node)) {
+    return null;
+  }
+
+  const startElement =
+    caret.node.nodeType === Node.ELEMENT_NODE
+      ? (caret.node as Element)
+      : caret.node.parentElement;
+
+  for (
+    let element = startElement;
+    element && element !== mirror;
+    element = element.parentElement
+  ) {
+    const tokenStart = parseFiniteAttribute(element, "data-token-start");
+    const tokenEnd = parseFiniteAttribute(element, "data-token-end");
+    if (tokenStart !== null && tokenEnd !== null) {
+      const rect = element.getBoundingClientRect();
+      return clientX < rect.left + rect.width / 2 ? tokenStart : tokenEnd;
+    }
+    const sourceStart = parseFiniteAttribute(element, "data-source-start");
+    if (sourceStart !== null) {
+      return sourceStart + characterOffsetWithin(element, caret);
+    }
+  }
+  return null;
+}
+
+// `caret.offset` is a character offset when `caret.node` is a text node, but a
+// child-node index when it is an element. Convert to characters by summing the
+// text length of preceding children so the value can be added to a parent's
+// `data-source-start`.
+function characterOffsetWithin(
+  ancestor: Element,
+  caret: { node: Node; offset: number },
+): number {
+  if (caret.node.nodeType === Node.TEXT_NODE) {
+    return prefixTextLength(ancestor, caret.node) + caret.offset;
+  }
+  if (caret.node === ancestor) {
+    return childIndexToCharOffset(ancestor, caret.offset);
+  }
+  if (caret.node.nodeType === Node.ELEMENT_NODE) {
+    const prefix = prefixTextLength(ancestor, caret.node);
+    return prefix + childIndexToCharOffset(caret.node as Element, caret.offset);
+  }
+  return prefixTextLength(ancestor, caret.node);
+}
+
+function prefixTextLength(ancestor: Element, target: Node): number {
+  let total = 0;
+  for (const child of ancestor.childNodes) {
+    if (child === target || child.contains(target)) {
+      return total;
+    }
+    total += child.textContent?.length ?? 0;
+  }
+  return total;
+}
+
+function childIndexToCharOffset(element: Element, childIndex: number): number {
+  let total = 0;
+  const limit = Math.min(childIndex, element.childNodes.length);
+  for (let i = 0; i < limit; i += 1) {
+    total += element.childNodes[i]?.textContent?.length ?? 0;
+  }
+  return total;
+}
+
+function parseFiniteAttribute(element: Element, name: string): number | null {
+  const value = element.getAttribute(name);
+  if (value === null) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+// `caretPositionFromPoint` returns whichever element is on top at the point.
+// The textarea covers the mirror, so we hide it from hit-testing for the call
+// to read the underlying mirror caret position, then restore it.
+function caretAtPointThroughTextarea(
+  textarea: HTMLTextAreaElement,
+  clientX: number,
+  clientY: number,
+): { node: Node; offset: number } | null {
+  const previous = textarea.style.pointerEvents;
+  textarea.style.pointerEvents = "none";
+  try {
+    return resolveCaretPoint(clientX, clientY);
+  } finally {
+    textarea.style.pointerEvents = previous;
+  }
+}
+
+function resolveCaretPoint(
+  clientX: number,
+  clientY: number,
+): { node: Node; offset: number } | null {
+  const doc = document as Document & {
+    caretPositionFromPoint?: (
+      x: number,
+      y: number,
+    ) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  if (typeof doc.caretPositionFromPoint === "function") {
+    const pos = doc.caretPositionFromPoint(clientX, clientY);
+    if (pos) {
+      return { node: pos.offsetNode, offset: pos.offset };
+    }
+  }
+  if (typeof doc.caretRangeFromPoint === "function") {
+    const range = doc.caretRangeFromPoint(clientX, clientY);
+    if (range) {
+      return { node: range.startContainer, offset: range.startOffset };
+    }
+  }
+  return null;
 }

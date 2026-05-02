@@ -1300,7 +1300,22 @@ ol.tx-markdown__list {
   pointer-events: none;
 }
 
+.tx-inline-composer__mirror .tx-inline-token-badge {
+  pointer-events: auto;
+  cursor: text;
+}
+
+.tx-inline-composer__mirror .tx-inline-token-badge::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: 4px;
+}
+
 .tx-inline-composer__mirror-content {
+  position: relative;
   min-height: calc(var(--tx-composer-control-height) - 28px);
 }
 
@@ -1527,6 +1542,7 @@ ol.tx-markdown__list {
 
 .tx-inline-token-badge {
   display: inline-flex;
+  position: relative;
   max-width: 100%;
   align-items: center;
   gap: 4px;
@@ -1563,14 +1579,10 @@ ol.tx-markdown__list {
 }
 
 .tx-inline-composer__visual-caret {
-  display: inline-block;
+  position: absolute;
   width: 1px;
-  height: 1.35em;
-  margin-inline: 1px 0;
   border-radius: 999px;
   background: var(--tx-text-primary);
-  transform: translateY(0.25em);
-  vertical-align: baseline;
   animation: tx-composer-caret-blink 1.05s steps(2, start) infinite;
   pointer-events: none;
 }

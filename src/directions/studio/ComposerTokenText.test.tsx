@@ -35,7 +35,6 @@ describe("ComposerTokenText", () => {
           cursorIndex={"Use $cre".length}
           provider="codex"
           keyPrefix="test"
-          showCaret
         />
       </div>,
     );
@@ -43,12 +42,9 @@ describe("ComposerTokenText", () => {
     const root = screen.getByTestId("text");
     expect(root).toHaveTextContent("Use $create-pr now");
     expect(root.querySelector(".tx-inline-token-badge")).toBeNull();
-    expect(
-      root.querySelector(".tx-inline-composer__visual-caret"),
-    ).not.toBeNull();
   });
 
-  it("renders source prompt text when the visual caret is at a prompt boundary", () => {
+  it("renders source prompt text when the caret is at a prompt boundary", () => {
     const text = "/prompts:review-long-command()";
 
     render(
@@ -59,7 +55,6 @@ describe("ComposerTokenText", () => {
           cursorIndex={text.length}
           provider="codex"
           keyPrefix="test"
-          showCaret
         />
       </div>,
     );
@@ -67,12 +62,9 @@ describe("ComposerTokenText", () => {
     const root = screen.getByTestId("text");
     expect(root).toHaveTextContent(text);
     expect(root.querySelector(".tx-inline-token-badge")).toBeNull();
-    expect(
-      root.querySelector(".tx-inline-composer__visual-caret"),
-    ).not.toBeNull();
   });
 
-  it("renders source skill text when the visual caret is at a token boundary", () => {
+  it("renders source skill text when the caret is at a token boundary", () => {
     const text = "$create-pr";
 
     render(
@@ -83,7 +75,6 @@ describe("ComposerTokenText", () => {
           cursorIndex={text.length}
           provider="codex"
           keyPrefix="test"
-          showCaret
         />
       </div>,
     );
@@ -91,8 +82,5 @@ describe("ComposerTokenText", () => {
     const root = screen.getByTestId("text");
     expect(root).toHaveTextContent(text);
     expect(root.querySelector(".tx-inline-token-badge")).toBeNull();
-    expect(
-      root.querySelector(".tx-inline-composer__visual-caret"),
-    ).not.toBeNull();
   });
 });

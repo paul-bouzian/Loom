@@ -1,5 +1,3 @@
-import { Fragment } from "react";
-
 import type {
   ComposerMentionBindingInput,
   ProviderKind,
@@ -29,7 +27,6 @@ type ComposerTokenTextProps = {
   keyPrefix: string;
   linkifyText?: boolean;
   mentionBindings?: ComposerMentionBindingInput[];
-  showCaret?: boolean;
 };
 
 export function ComposerTokenText({
@@ -43,7 +40,6 @@ export function ComposerTokenText({
   keyPrefix,
   linkifyText = false,
   mentionBindings = [],
-  showCaret = false,
 }: ComposerTokenTextProps) {
   const segments = decorateComposerText(text, catalog, provider, {
     decorateAllProviderTokens,
@@ -52,7 +48,6 @@ export function ComposerTokenText({
     mentionBindings,
   });
   let sourceCursor = 0;
-  let caretRendered = false;
 
   return (
     <>
@@ -65,26 +60,14 @@ export function ComposerTokenText({
               }
             : { start: segment.start, end: segment.end };
         sourceCursor = range.end;
-        const renderCaret =
-          showCaret &&
-          cursorIndex !== null &&
-          !caretRendered &&
-          cursorIndex >= range.start &&
-          cursorIndex <= range.end;
-        if (renderCaret) {
-          caretRendered = true;
-        }
         return renderComposerSegment(
           segment,
           `${keyPrefix}-${index}`,
           linkifyText,
-          renderCaret ? cursorIndex : null,
+          cursorIndex,
           range,
         );
       })}
-      {showCaret && cursorIndex === text.length && !caretRendered ? (
-        <ComposerMirrorCaret />
-      ) : null}
     </>
   );
 }
@@ -97,68 +80,42 @@ function renderComposerSegment(
   range: { start: number; end: number },
 ) {
   if (segment.kind === "text") {
-    if (cursorIndex !== null) {
-      const localCursor = Math.max(
-        0,
-        Math.min(segment.text.length, cursorIndex - range.start),
-      );
-      const before = segment.text.slice(0, localCursor);
-      const after = segment.text.slice(localCursor);
-      return (
-        <Fragment key={key}>
-          {linkifyText ? renderTextWithExternalLinks(before, `${key}-before`) : before}
-          <ComposerMirrorCaret />
-          {linkifyText ? renderTextWithExternalLinks(after, `${key}-after`) : after}
-        </Fragment>
-      );
-    }
     return (
-      <Fragment key={key}>
+      <span key={key} data-source-start={range.start}>
         {linkifyText
           ? renderTextWithExternalLinks(segment.text, key)
           : segment.text}
-      </Fragment>
+      </span>
     );
   }
 
-  if (cursorIndex !== null && cursorIndex <= range.start) {
-    return (
-      <Fragment key={key}>
-        <ComposerMirrorCaret />
-        <ComposerTokenBadge segment={segment} />
-      </Fragment>
-    );
-  }
+  const cursorInToken =
+    cursorIndex !== null &&
+    cursorIndex >= range.start &&
+    cursorIndex <= range.end;
 
-  if (cursorIndex !== null && cursorIndex <= range.end) {
+  if (cursorInToken) {
     const display = displayForComposerToken(segment);
-    const localCursor = Math.max(
-      0,
-      Math.min(segment.text.length, cursorIndex - range.start),
-    );
     return (
-      <Fragment key={key}>
-        <span className={`tx-inline-token tx-inline-token--${display.tone}`}>
-          {segment.text.slice(0, localCursor)}
-          <ComposerMirrorCaret />
-          {segment.text.slice(localCursor)}
-        </span>
-      </Fragment>
+      <span
+        key={key}
+        className={`tx-inline-token tx-inline-token--${display.tone}`}
+        data-source-start={range.start}
+      >
+        {segment.text}
+      </span>
     );
   }
 
-  return (
-    <Fragment key={key}>
-      <ComposerTokenBadge segment={segment} />
-      {cursorIndex !== null ? <ComposerMirrorCaret /> : null}
-    </Fragment>
-  );
+  return <ComposerTokenBadge key={key} segment={segment} range={range} />;
 }
 
 function ComposerTokenBadge({
   segment,
+  range,
 }: {
   segment: Exclude<ComposerMirrorSegment, { kind: "text" }>;
+  range: { start: number; end: number };
 }) {
   const display = displayForComposerToken(segment);
   const Icon = iconForComposerToken(segment);
@@ -169,7 +126,12 @@ function ComposerTokenBadge({
   ].join(" ");
 
   return (
-    <span className={classes} title={segment.text}>
+    <span
+      className={classes}
+      title={segment.text}
+      data-token-start={range.start}
+      data-token-end={range.end}
+    >
       <Icon size={12} className="tx-inline-token-badge__icon" />
       <span className="tx-inline-token-badge__label">{display.label}</span>
       {display.detail ? (
@@ -177,10 +139,6 @@ function ComposerTokenBadge({
       ) : null}
     </span>
   );
-}
-
-function ComposerMirrorCaret() {
-  return <span className="tx-inline-composer__visual-caret" />;
 }
 
 function displayForComposerToken(
