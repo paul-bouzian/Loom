@@ -33,7 +33,7 @@ type Props = {
   onToggleReviewPanel: () => void;
 };
 
-const APPROVAL_VALUES: ApprovalPolicy[] = ["askToEdit", "fullAccess"];
+const APPROVAL_VALUES: ApprovalPolicy[] = ["askToEdit", "autoReview", "fullAccess"];
 const DEFAULT_SPLIT_ACTIVE_THREAD = "mod+\\";
 const DEFAULT_CLOSE_FOCUSED_PANE = "mod+shift+w";
 

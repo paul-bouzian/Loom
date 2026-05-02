@@ -22,6 +22,7 @@ fn should_persist(item: &ConversationItem) -> bool {
     match item {
         ConversationItem::Tool(_)
         | ConversationItem::System(_)
+        | ConversationItem::AutoApprovalReview(_)
         | ConversationItem::Reasoning(_) => true,
         ConversationItem::Message(message) => {
             message.role == crate::domain::conversation::ConversationRole::Assistant
