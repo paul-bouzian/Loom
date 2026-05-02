@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { CheckIcon, ChevronRightIcon } from "../../shared/Icons";
@@ -17,6 +17,7 @@ type Props = {
   disabled?: boolean;
   menuZIndex?: number;
   tone?: "default" | "accent" | "info" | "warning";
+  leadingIcon?: ReactNode;
   onChange: (value: string) => void;
 };
 
@@ -36,6 +37,7 @@ export function ComposerPicker({
   disabled = false,
   menuZIndex = 50,
   tone = "default",
+  leadingIcon,
   onChange,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -158,6 +160,11 @@ export function ComposerPicker({
         aria-label={`${label} picker`}
         onClick={() => setOpen((current) => !current)}
       >
+        {leadingIcon ? (
+          <span className="tx-picker__leading-icon" aria-hidden="true">
+            {leadingIcon}
+          </span>
+        ) : null}
         <span className={valueClassName}>{selected?.label ?? value}</span>
         <ChevronRightIcon size={compact ? 8 : 12} className={chevronClassName} />
       </button>

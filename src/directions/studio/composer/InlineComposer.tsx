@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type ReactNode,
   type SetStateAction,
 } from "react";
 
@@ -28,8 +29,11 @@ import {
   HammerIcon,
   ImageIcon,
   MapIcon,
+  MessageSquareIcon,
   MicIcon,
+  ShieldCheckIcon,
   StopIcon,
+  UnlockIcon,
 } from "../../../shared/Icons";
 import { Tooltip } from "../../../shared/Tooltip";
 import { ComposerPicker } from "../ComposerPicker";
@@ -181,10 +185,13 @@ export function InlineComposer({
   const effectiveEffortOptions =
     selectedModel?.supportedReasoningEfforts ?? effortOptions;
   let approvalPickerTone: "default" | "info" | "warning" = "default";
+  let approvalLeadingIcon: ReactNode = <MessageSquareIcon size={12} />;
   if (composer.approvalPolicy === "fullAccess") {
     approvalPickerTone = "warning";
+    approvalLeadingIcon = <UnlockIcon size={12} />;
   } else if (composer.approvalPolicy === "autoReview") {
     approvalPickerTone = "info";
+    approvalLeadingIcon = <ShieldCheckIcon size={12} />;
   }
   const fastModeSupported = modelSupportsFastMode(selectedModel);
   const fastModeEnabled = fastModeSupported && composer.serviceTier === "fast";
@@ -753,6 +760,7 @@ export function InlineComposer({
             label="Access"
             value={composer.approvalPolicy}
             tone={approvalPickerTone}
+            leadingIcon={approvalLeadingIcon}
             options={APPROVAL_OPTIONS}
             compact
             disabled={controlsDisabled}
