@@ -157,6 +157,22 @@ describe("Claude agent usage", () => {
     expect(event?.modelContextWindow).toBe(1_000_000);
   });
 
+  it("accepts snake_case context usage metadata keys", async () => {
+    const event = await tokenUsageEventFor(
+      {
+        getContextUsage: async () => ({
+          total_tokens: 42_000,
+          raw_max_tokens: 1_000_000,
+        }),
+      },
+      "claude-opus-4-7",
+      null,
+    );
+
+    expect(event?.total.totalTokens).toBe(42_000);
+    expect(event?.modelContextWindow).toBe(1_000_000);
+  });
+
   it("ignores negative usage counters before computing totals", async () => {
     const event = await tokenUsageEventFor(
       {},
