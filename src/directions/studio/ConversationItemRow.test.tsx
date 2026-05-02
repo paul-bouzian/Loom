@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ConversationAutoApprovalReviewItem,
@@ -211,6 +211,121 @@ describe("ConversationItemRow", () => {
         description: "bun run verify",
       }),
     ).toBeInTheDocument();
+  });
+
+  describe("copy button feedback", () => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(
+      globalThis.navigator,
+      "clipboard",
+    );
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      if (originalClipboard) {
+        Object.defineProperty(globalThis.navigator, "clipboard", originalClipboard);
+      } else {
+        // @ts-expect-error — restore unset state when clipboard wasn't defined.
+        delete (globalThis.navigator as Navigator).clipboard;
+      }
+    });
+
+    it("applies the copied state synchronously without waiting for clipboard.writeText", async () => {
+      // writeText never resolves; is-copied must apply before the await settles.
+      const writeText = vi.fn(() => new Promise<void>(() => {}));
+      Object.defineProperty(globalThis.navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+
+      render(
+        <ConversationItemRow
+          provider="claude"
+          item={messageItem({ id: "copy-sync", text: "Bonjour" })}
+        />,
+      );
+
+      const button = screen.getByRole("button", { name: "Copy message" });
+      expect(button.classList.contains("is-copied")).toBe(false);
+
+      await userEvent.click(button);
+
+      expect(writeText).toHaveBeenCalledWith("Bonjour");
+      expect(button.classList.contains("is-copied")).toBe(true);
+    });
+
+    it("ignores stale clipboard rejections from earlier clicks", async () => {
+      // First click rejects late; second click resolves. The stale rejection
+      // must not clear the second click's timer or flip the icon back.
+      let rejectFirst: (reason: Error) => void = () => {};
+      const writeText = vi
+        .fn<(value: string) => Promise<void>>()
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((_, reject) => {
+              rejectFirst = reject;
+            }),
+        )
+        .mockImplementationOnce(() => Promise.resolve());
+      Object.defineProperty(globalThis.navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+
+      render(
+        <ConversationItemRow
+          provider="claude"
+          item={messageItem({ id: "copy-race", text: "Bonjour" })}
+        />,
+      );
+
+      const button = screen.getByRole("button", { name: "Copy message" });
+      await userEvent.click(button);
+      await userEvent.click(button);
+      expect(button.classList.contains("is-copied")).toBe(true);
+
+      rejectFirst(new Error("clipboard unavailable"));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(button.classList.contains("is-copied")).toBe(true);
+    });
+
+    it("restarts the auto-revert timer on each consecutive click", async () => {
+      // Without a timer reset, the first click's timeout would fire shortly
+      // after the second click and the checkmark would disappear early. We
+      // assert the reset directly: every click must clear the prior timeout
+      // and schedule a fresh one.
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(globalThis.navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+      const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+
+      render(
+        <ConversationItemRow
+          provider="claude"
+          item={messageItem({ id: "copy-rapid", text: "Bonjour" })}
+        />,
+      );
+
+      const button = screen.getByRole("button", { name: "Copy message" });
+      await userEvent.click(button);
+      const scheduledAfterFirst = setTimeoutSpy.mock.calls.filter(
+        ([, delay]) => delay === 1100,
+      ).length;
+      expect(scheduledAfterFirst).toBe(1);
+
+      const clearedBeforeSecond = clearTimeoutSpy.mock.calls.length;
+      await userEvent.click(button);
+
+      const scheduledAfterSecond = setTimeoutSpy.mock.calls.filter(
+        ([, delay]) => delay === 1100,
+      ).length;
+      expect(scheduledAfterSecond).toBe(2);
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(clearedBeforeSecond);
+    });
   });
 });
 

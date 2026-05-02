@@ -254,8 +254,8 @@ function ConversationMessageRow({
   const [expanded, setExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const bodyWrapRef = useRef<HTMLDivElement | null>(null);
-  const isMountedRef = useRef(true);
-  const copyFeedbackTimeoutRef = useRef<number | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
+  const copyAttemptRef = useRef(0);
   const shouldRenderMarkdown = item.role === "assistant";
   const hasText = item.text.trim().length > 0;
   const hasImages = Boolean(item.images && item.images.length > 0);
@@ -291,21 +291,14 @@ function ConversationMessageRow({
     .filter(Boolean)
     .join(" ");
 
-  const clearCopyFeedbackTimeout = useCallback(() => {
-    if (copyFeedbackTimeoutRef.current === null) {
-      return;
-    }
-
-    window.clearTimeout(copyFeedbackTimeoutRef.current);
-    copyFeedbackTimeoutRef.current = null;
-  }, []);
-
   useEffect(() => {
     return () => {
-      isMountedRef.current = false;
-      clearCopyFeedbackTimeout();
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
     };
-  }, [clearCopyFeedbackTimeout]);
+  }, []);
 
   useLayoutEffect(() => {
     if (!isCollapsible) {
@@ -344,24 +337,44 @@ function ConversationMessageRow({
       return;
     }
 
-    try {
-      await clipboard.writeText(item.text);
-      if (!isMountedRef.current) {
+    // Tag this copy attempt so async handlers from earlier clicks cannot
+    // cancel the feedback owned by a later click — a slow `writeText` from
+    // click N that rejects after click N+1 must not clear N+1's timer or
+    // flip `copied` back to false.
+    const attempt = ++copyAttemptRef.current;
+    // Apply the copied state synchronously so the CSS transition runs in the
+    // same frame as the click — otherwise a row remount during the awaited
+    // clipboard write (e.g. assistant message id stabilizing at end of stream)
+    // can drop the state update and the icon swap never plays.
+    setCopied(true);
+    // Reset the auto-revert timer on every click so rapid consecutive copies
+    // each get the full feedback window — tying the timer to a `copied`
+    // false→true transition would let the first click's timeout fire shortly
+    // after the second click, making the checkmark vanish too early.
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
+      if (copyAttemptRef.current !== attempt) {
         return;
       }
-      setCopied(true);
-      clearCopyFeedbackTimeout();
-      copyFeedbackTimeoutRef.current = window.setTimeout(() => {
-        if (!isMountedRef.current) {
-          return;
-        }
-        setCopied(false);
-        copyFeedbackTimeoutRef.current = null;
-      }, 1200);
+      copyTimerRef.current = null;
+      setCopied(false);
+    }, 1100);
+
+    try {
+      await clipboard.writeText(item.text);
     } catch {
-      // Clipboard access can fail in restricted contexts; the UI should remain stable.
+      if (copyAttemptRef.current !== attempt) {
+        return;
+      }
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
+      setCopied(false);
     }
-  }, [clearCopyFeedbackTimeout, hasText, item.text]);
+  }, [hasText, item.text]);
 
   return (
     <div className={className}>

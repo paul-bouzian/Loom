@@ -357,10 +357,10 @@
   transform: translateY(4px);
   transition:
     opacity var(--tx-transition-fast),
-    transform var(--tx-transition-fast),
-    border-color var(--tx-transition-fast),
-    background var(--tx-transition-fast),
-    color var(--tx-transition-fast);
+    transform 160ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease;
 }
 
 .tx-item__copy-button--compact {
@@ -389,8 +389,10 @@
 }
 
 .tx-item__copy-button.is-copied {
-  border-color: color-mix(in srgb, var(--tx-accent) 42%, var(--tx-border-subtle));
+  border-color: color-mix(in srgb, var(--tx-accent) 55%, var(--tx-border-subtle));
+  background: color-mix(in srgb, var(--tx-accent) 10%, var(--tx-bg-raised));
   color: var(--tx-accent);
+  transform: translateY(0) scale(1.06);
 }
 
 .tx-item__copy-icon {
@@ -405,35 +407,55 @@
 .tx-item__copy-icon > svg {
   position: absolute;
   inset: 0;
+  transform-origin: center;
+  will-change: transform, opacity;
   transition:
-    opacity var(--tx-transition-fast),
-    transform var(--tx-transition-fast),
-    filter var(--tx-transition-fast);
+    opacity 140ms cubic-bezier(0.32, 0.72, 0.28, 1),
+    transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    filter 140ms cubic-bezier(0.32, 0.72, 0.28, 1);
 }
 
 .tx-item__copy-icon-copy {
   opacity: 1;
-  transform: scale(1);
+  transform: scale(1) rotate(0deg);
   filter: blur(0);
 }
 
 .tx-item__copy-icon-check {
   opacity: 0;
-  transform: scale(0.82);
-  filter: blur(2px);
-  transition-delay: 60ms;
+  transform: scale(0.6) rotate(-8deg);
+  filter: blur(1px);
+  transition-delay: 40ms;
 }
 
 .tx-item__copy-button.is-copied .tx-item__copy-icon-copy {
   opacity: 0;
-  transform: scale(0.82);
-  filter: blur(2px);
+  transform: scale(0.6) rotate(8deg);
+  filter: blur(1px);
+  transition-delay: 0ms;
 }
 
 .tx-item__copy-button.is-copied .tx-item__copy-icon-check {
   opacity: 1;
-  transform: scale(1);
+  transform: scale(1) rotate(0deg);
   filter: blur(0);
+  transition-delay: 40ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tx-item__copy-button,
+  .tx-item__copy-icon > svg {
+    transition-duration: 120ms;
+    transition-timing-function: ease;
+  }
+  .tx-item__copy-icon-check,
+  .tx-item__copy-button.is-copied .tx-item__copy-icon-copy {
+    transform: scale(1) rotate(0deg);
+    filter: blur(0);
+  }
+  .tx-item__copy-button.is-copied {
+    transform: translateY(0);
+  }
 }
 
 /* ── Message images ── */
