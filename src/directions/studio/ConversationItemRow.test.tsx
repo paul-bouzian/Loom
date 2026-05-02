@@ -196,6 +196,22 @@ describe("ConversationItemRow", () => {
 
     expect(previewElement(container)).toBeNull();
   });
+
+  it("exposes compact previews as button descriptions", () => {
+    render(
+      <ConversationItemRow
+        compact
+        item={toolItem({ summary: "bun run verify" })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Show Command details",
+        description: "bun run verify",
+      }),
+    ).toBeInTheDocument();
+  });
 });
 
 function previewElement(container: HTMLElement) {

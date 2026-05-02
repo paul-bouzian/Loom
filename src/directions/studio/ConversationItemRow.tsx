@@ -50,6 +50,7 @@ export function ConversationItemRow({
       return null;
     }
     const preview = compact ? previewForItem(item) : null;
+    const previewId = preview ? `${item.id}-preview` : undefined;
 
     return (
       <div className={`tx-item tx-item--reasoning ${compact ? "tx-item--compact" : ""}`}>
@@ -57,6 +58,7 @@ export function ConversationItemRow({
           type="button"
           className="tx-item__toggle"
           aria-label={expanded ? "Hide thinking details" : "Show thinking details"}
+          aria-describedby={previewId}
           onClick={() => setExpanded((value) => !value)}
         >
           <div className="tx-item__header">
@@ -68,7 +70,7 @@ export function ConversationItemRow({
               <BrainIcon size={13} className="tx-item__kind-icon" />
               <span className="tx-item__title">Thinking</span>
             </span>
-            <ConversationItemPreview preview={preview} />
+            <ConversationItemPreview id={previewId} preview={preview} />
           </div>
         </button>
         <SmoothCollapse open={expanded}>
@@ -94,6 +96,7 @@ export function ConversationItemRow({
   if (item.kind === "tool") {
     const ToolIcon = iconForToolType(item.toolType);
     const preview = compact ? previewForItem(item) : null;
+    const previewId = preview ? `${item.id}-preview` : undefined;
     return (
       <div
         className={`tx-item tx-item--tool tx-item--tool-${slugifyToolType(item.toolType)} ${compact ? "tx-item--compact" : ""}`}
@@ -102,6 +105,7 @@ export function ConversationItemRow({
           type="button"
           className="tx-item__toggle"
           aria-label={expanded ? `Hide ${item.title} details` : `Show ${item.title} details`}
+          aria-describedby={previewId}
           onClick={() => setExpanded((value) => !value)}
         >
           <div className="tx-item__header">
@@ -113,7 +117,7 @@ export function ConversationItemRow({
               <ToolIcon size={13} className="tx-item__kind-icon" />
               <span className="tx-item__title">{item.title}</span>
             </span>
-            <ConversationItemPreview preview={preview} />
+            <ConversationItemPreview id={previewId} preview={preview} />
           </div>
         </button>
         <SmoothCollapse open={expanded}>
@@ -438,13 +442,19 @@ function assistantLabelForProvider(provider: ProviderKind) {
 
 const PREVIEW_SOURCE_MAX_LENGTH = 600;
 
-function ConversationItemPreview({ preview }: { preview: string | null }) {
+function ConversationItemPreview({
+  id,
+  preview,
+}: {
+  id?: string;
+  preview: string | null;
+}) {
   if (!preview) {
     return null;
   }
 
   return (
-    <span className="tx-item__preview" aria-hidden="true">
+    <span id={id} className="tx-item__preview">
       {preview}
     </span>
   );
