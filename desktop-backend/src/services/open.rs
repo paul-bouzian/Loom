@@ -159,6 +159,14 @@ fn build_file_manager_file_launch_spec(path: &Path) -> AppResult<LaunchSpec> {
 }
 
 fn resolve_environment_file_path(environment_path: &Path, file_path: &str) -> AppResult<PathBuf> {
+    resolve_environment_file_path_with_home(environment_path, file_path, current_home_dir)
+}
+
+fn resolve_environment_file_path_with_home(
+    environment_path: &Path,
+    file_path: &str,
+    home_dir: impl FnOnce() -> AppResult<PathBuf>,
+) -> AppResult<PathBuf> {
     let trimmed = file_path.trim();
     if trimmed.is_empty() {
         return Err(AppError::Validation("File path is required.".to_string()));
@@ -177,12 +185,7 @@ fn resolve_environment_file_path(environment_path: &Path, file_path: &str) -> Ap
         )));
     }
 
-    let requested_path = Path::new(trimmed);
-    let candidate = if requested_path.is_absolute() {
-        requested_path.to_path_buf()
-    } else {
-        environment_root.join(requested_path)
-    };
+    let candidate = build_file_reference_candidate(&environment_root, trimmed, home_dir)?;
     let resolved = candidate.canonicalize().map_err(|error| {
         AppError::NotFound(format!(
             "File does not exist: {} ({error})",
@@ -204,6 +207,41 @@ fn resolve_environment_file_path(environment_path: &Path, file_path: &str) -> Ap
     }
 
     Ok(resolved)
+}
+
+fn build_file_reference_candidate(
+    environment_root: &Path,
+    file_path: &str,
+    home_dir: impl FnOnce() -> AppResult<PathBuf>,
+) -> AppResult<PathBuf> {
+    let requested_path = Path::new(file_path);
+    if requested_path.is_absolute() {
+        return Ok(requested_path.to_path_buf());
+    }
+
+    if let Some(suffix) = home_relative_suffix(file_path) {
+        return Ok(home_dir()?.join(suffix));
+    }
+
+    Ok(environment_root.join(requested_path))
+}
+
+fn home_relative_suffix(path: &str) -> Option<&str> {
+    if path == "~" {
+        return Some("");
+    }
+
+    path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\"))
+}
+
+fn current_home_dir() -> AppResult<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| {
+            AppError::Validation("Home directory is unavailable for file references.".to_string())
+        })
 }
 
 #[cfg(target_os = "windows")]
@@ -249,7 +287,8 @@ fn format_launch_failure(spec: &LaunchSpec, output: &std::process::Output) -> St
 mod tests {
     use super::{
         build_file_launch_spec, build_launch_spec, format_launch_failure,
-        resolve_environment_file_path, LaunchSpec, OpenFileLocation,
+        resolve_environment_file_path, resolve_environment_file_path_with_home, LaunchSpec,
+        OpenFileLocation,
     };
     use crate::domain::settings::{OpenTarget, OpenTargetKind};
     use std::ffi::OsString;
@@ -488,6 +527,38 @@ mod tests {
             resolve_environment_file_path(&temp.path, "src/../src/app.ts").expect("file path");
 
         assert_eq!(resolved, file.canonicalize().expect("canonical file"));
+    }
+
+    #[test]
+    fn file_references_expand_home_relative_paths_inside_the_environment() {
+        let temp = TempDirGuard::new("skein-open-file-home-relative");
+        let file = temp.path.join("src/app.ts");
+        fs::create_dir_all(file.parent().expect("parent")).expect("create parent");
+        fs::write(&file, "export const value = 1;\n").expect("write file");
+
+        let resolved = resolve_environment_file_path_with_home(&temp.path, "~/src/app.ts", || {
+            Ok(temp.path.clone())
+        })
+        .expect("file path");
+
+        assert_eq!(resolved, file.canonicalize().expect("canonical file"));
+    }
+
+    #[test]
+    fn file_references_reject_home_relative_paths_outside_the_environment() {
+        let environment = TempDirGuard::new("skein-open-file-home-environment");
+        let outside = TempDirGuard::new("skein-open-file-home-outside");
+        fs::write(outside.path.join("secrets.txt"), "secret\n").expect("write file");
+
+        let error =
+            resolve_environment_file_path_with_home(&environment.path, "~/secrets.txt", || {
+                Ok(outside.path.clone())
+            })
+            .expect_err("outside home-relative path should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("inside the selected environment"));
     }
 
     #[test]
