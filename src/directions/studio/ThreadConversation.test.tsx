@@ -1179,7 +1179,9 @@ describe("ThreadConversation", () => {
     await userEvent.click(token);
 
     expect(mockedBridge.openEnvironmentFile).toHaveBeenCalledWith({
+      column: null,
       environmentId: "env-1",
+      line: 544,
       path: filePath,
     });
   });

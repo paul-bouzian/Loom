@@ -31,6 +31,8 @@ pub struct OpenEnvironmentInput {
 #[serde(rename_all = "camelCase")]
 pub struct OpenEnvironmentFileInput {
     pub environment_id: String,
+    pub column: Option<u32>,
+    pub line: Option<u32>,
     pub path: String,
     pub target_id: Option<String>,
 }
@@ -387,6 +389,8 @@ pub(crate) fn open_environment_file_impl(
     Ok(crate::services::open::open_environment_file(
         &context.environment_path,
         &input.path,
+        input.line,
+        input.column,
         &context.target,
     )?)
 }

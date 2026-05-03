@@ -314,6 +314,8 @@ function ConversationMessageRow({
       try {
         await bridge.openEnvironmentFile({
           environmentId,
+          column: target.column,
+          line: target.line,
           path: target.filePath,
         });
       } catch (cause: unknown) {

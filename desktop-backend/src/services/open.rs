@@ -26,11 +26,19 @@ pub fn open_environment(path: &Path, target: &OpenTarget) -> AppResult<()> {
 pub fn open_environment_file(
     environment_path: &Path,
     file_path: &str,
+    line: Option<u32>,
+    column: Option<u32>,
     target: &OpenTarget,
 ) -> AppResult<()> {
     let path = resolve_environment_file_path(environment_path, file_path)?;
-    let spec = build_file_launch_spec(&path, target)?;
+    let spec = build_file_launch_spec(&path, OpenFileLocation { line, column }, target)?;
     run_launch(spec)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpenFileLocation {
+    line: Option<u32>,
+    column: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,15 +52,30 @@ fn build_launch_spec(path: &Path, target: &OpenTarget) -> AppResult<LaunchSpec> 
     build_open_target_launch_spec(path_arg, target, build_file_manager_launch_spec)
 }
 
-fn build_file_launch_spec(path: &Path, target: &OpenTarget) -> AppResult<LaunchSpec> {
+fn build_file_launch_spec(
+    path: &Path,
+    location: OpenFileLocation,
+    target: &OpenTarget,
+) -> AppResult<LaunchSpec> {
     match target.kind {
         OpenTargetKind::FileManager => build_file_manager_file_launch_spec(path),
-        _ => build_open_target_launch_spec(
+        OpenTargetKind::App => {
+            build_app_file_launch_spec(path.as_os_str().to_os_string(), location, target)
+        }
+        OpenTargetKind::Command => build_open_target_launch_spec(
             path.as_os_str().to_os_string(),
             target,
             build_file_manager_launch_spec,
         ),
     }
+}
+
+fn build_app_file_launch_spec(
+    path_arg: OsString,
+    _location: OpenFileLocation,
+    target: &OpenTarget,
+) -> AppResult<LaunchSpec> {
+    build_app_launch_spec(path_arg, target)
 }
 
 fn build_open_target_launch_spec(
@@ -245,7 +268,7 @@ fn format_launch_failure(spec: &LaunchSpec, output: &std::process::Output) -> St
 mod tests {
     use super::{
         build_file_launch_spec, build_launch_spec, format_launch_failure,
-        resolve_environment_file_path, LaunchSpec,
+        resolve_environment_file_path, LaunchSpec, OpenFileLocation,
     };
     use crate::domain::settings::{OpenTarget, OpenTargetKind};
     use std::ffi::OsString;
@@ -375,8 +398,15 @@ mod tests {
             args: Vec::new(),
         };
 
-        let spec = build_file_launch_spec(Path::new("/tmp/skein/src/app.ts"), &target)
-            .expect("launch spec");
+        let spec = build_file_launch_spec(
+            Path::new("/tmp/skein/src/app.ts"),
+            OpenFileLocation {
+                line: Some(42),
+                column: Some(7),
+            },
+            &target,
+        )
+        .expect("launch spec");
 
         assert_eq!(
             spec,
@@ -402,8 +432,15 @@ mod tests {
             args: Vec::new(),
         };
 
-        let spec = build_file_launch_spec(Path::new("/tmp/skein/src/app.ts"), &target)
-            .expect("launch spec");
+        let spec = build_file_launch_spec(
+            Path::new("/tmp/skein/src/app.ts"),
+            OpenFileLocation {
+                line: Some(42),
+                column: Some(7),
+            },
+            &target,
+        )
+        .expect("launch spec");
 
         assert_eq!(
             spec,
@@ -428,8 +465,15 @@ mod tests {
             args: Vec::new(),
         };
 
-        let spec = build_file_launch_spec(Path::new(r"C:\skein\src\app.ts"), &target)
-            .expect("launch spec");
+        let spec = build_file_launch_spec(
+            Path::new(r"C:\skein\src\app.ts"),
+            OpenFileLocation {
+                line: Some(42),
+                column: Some(7),
+            },
+            &target,
+        )
+        .expect("launch spec");
 
         assert_eq!(
             spec,

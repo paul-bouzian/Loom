@@ -633,6 +633,7 @@ export function ThreadConversation({
           ) : (
             <ConversationWorkActivityGroup
               key={entry.group.id}
+              environmentId={environment.id}
               group={entry.group}
               provider={snapshot?.provider ?? thread.provider}
             />

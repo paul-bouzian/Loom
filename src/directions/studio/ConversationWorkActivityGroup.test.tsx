@@ -1,8 +1,9 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ConversationItem } from "../../lib/types";
+import { desktopInvokeMock } from "../../test/desktop-mock";
 import { ConversationWorkActivityGroup } from "./ConversationWorkActivityGroup";
 import type {
   ConversationWorkActivityGroup as ConversationWorkActivityGroupData,
@@ -10,6 +11,11 @@ import type {
 } from "./conversation-work-activity";
 
 describe("ConversationWorkActivityGroup", () => {
+  beforeEach(() => {
+    desktopInvokeMock.mockReset();
+    desktopInvokeMock.mockResolvedValue(undefined);
+  });
+
   it("starts collapsed for completed work and shows the body when expanded", async () => {
     const { container } = render(
       <ConversationWorkActivityGroup
@@ -45,21 +51,50 @@ describe("ConversationWorkActivityGroup", () => {
       expect(container.querySelector(".tx-work-activity__body")).toBeNull();
     });
   });
+
+  it("passes the environment id to grouped assistant file references", async () => {
+    render(
+      <ConversationWorkActivityGroup
+        environmentId="env-1"
+        group={makeGroup({
+          itemCount: 1,
+          status: "running",
+          text: "Updated [ThreadConversation.tsx](src/ThreadConversation.tsx:42:7).",
+        })}
+        provider="codex"
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open ThreadConversation.tsx" }),
+    );
+
+    expect(desktopInvokeMock).toHaveBeenCalledWith("open_environment_file", {
+      input: {
+        column: 7,
+        environmentId: "env-1",
+        line: 42,
+        path: "src/ThreadConversation.tsx",
+      },
+    });
+  });
 });
 
 function makeGroup({
   itemCount,
   status,
+  text,
 }: {
   itemCount: number;
   status: WorkActivityStatus;
+  text?: string;
 }): ConversationWorkActivityGroupData {
   const items = Array.from({ length: itemCount }, (_, index): ConversationItem => ({
     kind: "message",
     id: `update-${index}`,
     turnId: "turn-work-activity",
     role: "assistant",
-    text: `Update ${index + 1}`,
+    text: text ?? `Update ${index + 1}`,
     images: null,
     isStreaming: index === itemCount - 1,
   }));

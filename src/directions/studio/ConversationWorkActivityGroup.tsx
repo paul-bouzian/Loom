@@ -10,6 +10,7 @@ import type {
 } from "./conversation-work-activity";
 
 type Props = {
+  environmentId?: string | null;
   group: ConversationWorkActivityGroupData;
   provider: ProviderKind;
 };
@@ -37,7 +38,11 @@ function formatElapsed(ms: number): string {
     : `${hours}h ${remainingMinutes}m`;
 }
 
-export function ConversationWorkActivityGroup({ group, provider }: Props) {
+export function ConversationWorkActivityGroup({
+  environmentId = null,
+  group,
+  provider,
+}: Props) {
   const isActive = isActiveStatus(group.status);
   const [expanded, setExpanded] = useState(isActive);
   const wasActiveRef = useRef(isActive);
@@ -96,6 +101,7 @@ export function ConversationWorkActivityGroup({ group, provider }: Props) {
             {group.items.map((item) => (
               <ConversationItemRow
                 key={item.id}
+                environmentId={environmentId}
                 item={item}
                 compact
                 provider={provider}
