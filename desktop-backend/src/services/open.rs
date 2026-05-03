@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::domain::settings::{OpenTarget, OpenTargetKind};
@@ -178,10 +178,6 @@ fn resolve_environment_file_path(environment_path: &Path, file_path: &str) -> Ap
     }
 
     let requested_path = Path::new(trimmed);
-    if !requested_path.is_absolute() {
-        validate_relative_file_path(requested_path)?;
-    }
-
     let candidate = if requested_path.is_absolute() {
         requested_path.to_path_buf()
     } else {
@@ -208,21 +204,6 @@ fn resolve_environment_file_path(environment_path: &Path, file_path: &str) -> Ap
     }
 
     Ok(resolved)
-}
-
-fn validate_relative_file_path(path: &Path) -> AppResult<()> {
-    if path.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return Err(AppError::Validation(
-            "Path traversal is not allowed for file references.".to_string(),
-        ));
-    }
-
-    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -497,12 +478,33 @@ mod tests {
     }
 
     #[test]
-    fn file_references_reject_parent_path_segments() {
-        let temp = TempDirGuard::new("skein-open-file-traversal");
-        let error = resolve_environment_file_path(&temp.path, "../secrets.txt")
+    fn file_references_allow_parent_segments_inside_the_environment() {
+        let temp = TempDirGuard::new("skein-open-file-parent-inside");
+        let file = temp.path.join("src/app.ts");
+        fs::create_dir_all(file.parent().expect("parent")).expect("create parent");
+        fs::write(&file, "export const value = 1;\n").expect("write file");
+
+        let resolved =
+            resolve_environment_file_path(&temp.path, "src/../src/app.ts").expect("file path");
+
+        assert_eq!(resolved, file.canonicalize().expect("canonical file"));
+    }
+
+    #[test]
+    fn file_references_reject_parent_segments_outside_the_environment() {
+        let root = TempDirGuard::new("skein-open-file-traversal-root");
+        let environment_path = root.path.join("environment");
+        let outside_path = root.path.join("outside");
+        fs::create_dir_all(&environment_path).expect("create environment");
+        fs::create_dir_all(&outside_path).expect("create outside");
+        fs::write(outside_path.join("secrets.txt"), "secret\n").expect("write file");
+
+        let error = resolve_environment_file_path(&environment_path, "../outside/secrets.txt")
             .expect_err("traversal should be rejected");
 
-        assert!(error.to_string().contains("Path traversal"));
+        assert!(error
+            .to_string()
+            .contains("inside the selected environment"));
     }
 
     #[test]
