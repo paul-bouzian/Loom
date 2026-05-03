@@ -27,6 +27,14 @@ pub struct OpenEnvironmentInput {
     pub target_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenEnvironmentFileInput {
+    pub environment_id: String,
+    pub path: String,
+    pub target_id: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunProjectActionResult {
@@ -364,6 +372,21 @@ pub(crate) fn open_environment_impl(
         .environment_open_context(environment_id, input.target_id.as_deref())?;
     Ok(crate::services::open::open_environment(
         &context.environment_path,
+        &context.target,
+    )?)
+}
+
+pub(crate) fn open_environment_file_impl(
+    input: OpenEnvironmentFileInput,
+    state: &AppState,
+) -> Result<(), CommandError> {
+    let environment_id = normalized_environment_id(&input.environment_id)?;
+    let context = state
+        .workspace
+        .environment_open_context(environment_id, input.target_id.as_deref())?;
+    Ok(crate::services::open::open_environment_file(
+        &context.environment_path,
+        &input.path,
         &context.target,
     )?)
 }

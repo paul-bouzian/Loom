@@ -23,7 +23,10 @@ use crate::commands::{
         self, KillTerminalInput, ResizeTerminalInput, SpawnTerminalInput, WriteTerminalInput,
     },
     voice,
-    workspace::{self, OpenEnvironmentInput, RunProjectActionInput, SaveDraftThreadStateInput},
+    workspace::{
+        self, OpenEnvironmentFileInput, OpenEnvironmentInput, RunProjectActionInput,
+        SaveDraftThreadStateInput,
+    },
 };
 use crate::domain::conversation::{
     ComposerTarget, RespondToApprovalRequestInput, RespondToUserInputRequestInput,
@@ -385,6 +388,10 @@ async fn dispatch_request(
         "open_environment" => {
             let payload: InputEnvelope<OpenEnvironmentInput> = decode_params(params)?;
             encode_result(workspace::open_environment_impl(payload.input, state))
+        }
+        "open_environment_file" => {
+            let payload: InputEnvelope<OpenEnvironmentFileInput> = decode_params(params)?;
+            encode_result(workspace::open_environment_file_impl(payload.input, state))
         }
         "add_project" => {
             let payload: InputEnvelope<AddProjectRequest> = decode_params(params)?;

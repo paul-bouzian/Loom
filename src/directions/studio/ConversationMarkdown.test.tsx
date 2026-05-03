@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { openExternalMock } from "../../test/desktop-mock";
 import { ConversationMarkdown } from "./ConversationMarkdown";
@@ -56,6 +56,34 @@ describe("ConversationMarkdown", () => {
     const token = screen.getByTitle(filePath);
     expect(token).toHaveClass("tx-markdown__file-ref");
     expect(screen.getByText("ThreadConversation.tsx").tagName).toBe("STRONG");
+  });
+
+  it("opens file references through the provided handler", async () => {
+    const onFileReferenceClick = vi.fn();
+
+    render(
+      <ConversationMarkdown
+        markdown={"Updated [ConversationMarkdown.tsx](src/ConversationMarkdown.tsx:42:7)."}
+        onFileReferenceClick={onFileReferenceClick}
+      />,
+    );
+
+    const token = screen.getByRole("button", {
+      name: "Open ConversationMarkdown.tsx",
+    });
+    expect(token).toHaveClass("tx-markdown__file-ref");
+    expect(token).toHaveAttribute("data-file-path", "src/ConversationMarkdown.tsx");
+    expect(token).toHaveAttribute("data-file-line", "42");
+    expect(token).toHaveAttribute("data-file-column", "7");
+
+    await userEvent.click(token);
+
+    expect(onFileReferenceClick).toHaveBeenCalledWith({
+      rawTarget: "src/ConversationMarkdown.tsx:42:7",
+      filePath: "src/ConversationMarkdown.tsx",
+      line: 42,
+      column: 7,
+    });
   });
 
   it.each([

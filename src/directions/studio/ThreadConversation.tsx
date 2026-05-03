@@ -623,6 +623,7 @@ export function ThreadConversation({
             <ConversationItemRow
               key={entry.item.id}
               item={entry.item}
+              environmentId={environment.id}
               provider={providerForConversationItem(
                 entry.item,
                 snapshot?.provider ?? thread.provider,

@@ -42,6 +42,7 @@ vi.mock("../../lib/bridge", () => ({
   getComposerCatalog: vi.fn(),
   searchComposerFiles: vi.fn(),
   readImageAsDataUrl: vi.fn(),
+  openEnvironmentFile: vi.fn(),
   sendThreadMessage: vi.fn(),
   interruptThreadTurn: vi.fn(),
   respondToApprovalRequest: vi.fn(),
@@ -125,6 +126,7 @@ beforeEach(async () => {
   mockedBridge.readImageAsDataUrl.mockResolvedValue(
     "data:image/png;base64,aGVsbG8=",
   );
+  mockedBridge.openEnvironmentFile.mockResolvedValue(undefined);
   mockedBridge.getEnvironmentVoiceStatus.mockResolvedValue({
     environmentId: "env-1",
     available: false,
@@ -1164,6 +1166,7 @@ describe("ThreadConversation", () => {
     );
 
     const token = await screen.findByText("ThreadConversation.tsx");
+    expect(token.tagName).toBe("BUTTON");
     expect(token).toHaveClass("tx-markdown__file-ref");
     expect(token).toHaveAttribute("title", `${filePath}:544`);
     expect(token).toHaveAttribute("data-file-path", filePath);
@@ -1172,6 +1175,13 @@ describe("ThreadConversation", () => {
       "Updated ThreadConversation.tsx to reuse the renderer.",
     );
     expect(container.textContent).not.toContain(filePath);
+
+    await userEvent.click(token);
+
+    expect(mockedBridge.openEnvironmentFile).toHaveBeenCalledWith({
+      environmentId: "env-1",
+      path: filePath,
+    });
   });
 
   it("renders markdown inside expanded thinking details", async () => {

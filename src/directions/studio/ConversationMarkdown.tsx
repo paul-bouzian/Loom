@@ -13,6 +13,12 @@ import {
 type Props = {
   markdown: string;
   className?: string;
+  onFileReferenceClick?: (target: FileReferenceTarget) => void;
+};
+
+type InlineRenderOptions = {
+  linkifyPlainText?: boolean;
+  onFileReferenceClick?: (target: FileReferenceTarget) => void;
 };
 
 type HeadingDepth = 1 | 2 | 3 | 4 | 5 | 6;
@@ -52,18 +58,27 @@ const HEADING_PATTERN = /^(#{1,6})\s+(.+)$/;
 const UNORDERED_LIST_PATTERN = /^[-*]\s+(.*)$/;
 const ORDERED_LIST_PATTERN = /^\d+\.\s+(.*)$/;
 const BLOCKQUOTE_PATTERN = /^>\s?(.*)$/;
-export function ConversationMarkdown({ markdown, className }: Props) {
+export function ConversationMarkdown({
+  markdown,
+  className,
+  onFileReferenceClick,
+}: Props) {
   const blocks = parseMarkdownBlocks(markdown);
   const classes = ["tx-markdown", className].filter(Boolean).join(" ");
+  const inlineOptions = { onFileReferenceClick };
 
   return (
     <div className={classes}>
-      {blocks.map((block, index) => renderBlock(block, index))}
+      {blocks.map((block, index) => renderBlock(block, index, inlineOptions))}
     </div>
   );
 }
 
-function renderBlock(block: MarkdownBlock, index: number) {
+function renderBlock(
+  block: MarkdownBlock,
+  index: number,
+  inlineOptions: InlineRenderOptions,
+) {
   if (block.kind === "heading") {
     const HeadingTag = headingTagForDepth(block.depth);
 
@@ -72,7 +87,7 @@ function renderBlock(block: MarkdownBlock, index: number) {
         key={`${block.kind}-${index}`}
         className={`tx-markdown__heading tx-markdown__heading--${block.depth}`}
       >
-        {renderInlineMarkdown(block.text, `${block.kind}-${index}`)}
+        {renderInlineMarkdown(block.text, `${block.kind}-${index}`, inlineOptions)}
       </HeadingTag>
     );
   }
@@ -82,7 +97,7 @@ function renderBlock(block: MarkdownBlock, index: number) {
       <ul key={`${block.kind}-${index}`} className="tx-markdown__list">
         {block.items.map((item, itemIndex) => (
           <li key={`${block.kind}-${index}-${itemIndex}`}>
-            {renderInlineMarkdown(item, `${block.kind}-${index}-${itemIndex}`)}
+            {renderInlineMarkdown(item, `${block.kind}-${index}-${itemIndex}`, inlineOptions)}
           </li>
         ))}
       </ul>
@@ -94,7 +109,7 @@ function renderBlock(block: MarkdownBlock, index: number) {
       <ol key={`${block.kind}-${index}`} className="tx-markdown__list">
         {block.items.map((item, itemIndex) => (
           <li key={`${block.kind}-${index}-${itemIndex}`}>
-            {renderInlineMarkdown(item, `${block.kind}-${index}-${itemIndex}`)}
+            {renderInlineMarkdown(item, `${block.kind}-${index}-${itemIndex}`, inlineOptions)}
           </li>
         ))}
       </ol>
@@ -104,7 +119,7 @@ function renderBlock(block: MarkdownBlock, index: number) {
   if (block.kind === "blockquote") {
     return (
       <blockquote key={`${block.kind}-${index}`} className="tx-markdown__blockquote">
-        {renderInlineMarkdown(block.text, `${block.kind}-${index}`)}
+        {renderInlineMarkdown(block.text, `${block.kind}-${index}`, inlineOptions)}
       </blockquote>
     );
   }
@@ -119,7 +134,7 @@ function renderBlock(block: MarkdownBlock, index: number) {
 
   return (
     <p key={`${block.kind}-${index}`} className="tx-markdown__paragraph">
-      {renderInlineMarkdown(block.text, `${block.kind}-${index}`)}
+      {renderInlineMarkdown(block.text, `${block.kind}-${index}`, inlineOptions)}
     </p>
   );
 }
@@ -305,13 +320,13 @@ function headingTagForDepth(depth: HeadingDepth) {
 function renderInlineMarkdown(
   text: string,
   keyPrefix: string,
-  options: { linkifyPlainText?: boolean } = {},
+  options: InlineRenderOptions = {},
 ) {
   if (!text) {
     return null;
   }
 
-  const { linkifyPlainText = true } = options;
+  const { linkifyPlainText = true, onFileReferenceClick } = options;
   const nodes: ReactNode[] = [];
   let cursor = 0;
 
@@ -361,29 +376,22 @@ function renderInlineMarkdown(
       );
     } else if (token.kind === "fileReference") {
       nodes.push(
-        <span
-          key={key}
-          className="tx-inline-token tx-inline-token--file tx-markdown__file-ref"
-          title={token.target.rawTarget}
-          data-file-path={token.target.filePath}
-          data-file-line={token.target.line ?? undefined}
-          data-file-column={token.target.column ?? undefined}
-        >
-          {renderInlineMarkdown(token.label, `${key}-label`, {
-            linkifyPlainText: false,
-          })}
-        </span>,
+        renderFileReferenceToken(token, key, onFileReferenceClick),
       );
     } else if (token.kind === "strong") {
       nodes.push(
         <strong key={key}>
-          {renderInlineMarkdown(token.text, key)}
+          {renderInlineMarkdown(token.text, key, {
+            onFileReferenceClick,
+          })}
         </strong>,
       );
     } else {
       nodes.push(
         <em key={key}>
-          {renderInlineMarkdown(token.text, key)}
+          {renderInlineMarkdown(token.text, key, {
+            onFileReferenceClick,
+          })}
         </em>,
       );
     }
@@ -392,6 +400,43 @@ function renderInlineMarkdown(
   }
 
   return nodes;
+}
+
+function renderFileReferenceToken(
+  token: Extract<InlineTokenMatch, { kind: "fileReference" }>,
+  key: string,
+  onFileReferenceClick?: (target: FileReferenceTarget) => void,
+) {
+  const label = renderInlineMarkdown(token.label, `${key}-label`, {
+    linkifyPlainText: false,
+  });
+  const fileReferenceProps = {
+    className: "tx-inline-token tx-inline-token--file tx-markdown__file-ref",
+    title: token.target.rawTarget,
+    "data-file-path": token.target.filePath,
+    "data-file-line": token.target.line ?? undefined,
+    "data-file-column": token.target.column ?? undefined,
+  };
+
+  if (!onFileReferenceClick) {
+    return (
+      <span key={key} {...fileReferenceProps}>
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      key={key}
+      type="button"
+      {...fileReferenceProps}
+      aria-label={`Open ${token.label}`}
+      onClick={() => onFileReferenceClick(token.target)}
+    >
+      {label}
+    </button>
+  );
 }
 
 function renderPlainTextSegment(

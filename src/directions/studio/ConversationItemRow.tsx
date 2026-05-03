@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import * as bridge from "../../lib/bridge";
+import { dialog } from "../../lib/shell";
 import type {
   ConversationAutoApprovalReviewItem,
   ConversationItem,
@@ -26,23 +28,33 @@ import { ComposerTokenText } from "./ComposerTokenText";
 import { ConversationLinkedText } from "./ConversationLinkedText";
 import { ConversationMessageImages } from "./ConversationMessageImages";
 import { ConversationMarkdown } from "./ConversationMarkdown";
+import type { FileReferenceTarget } from "./conversation-file-references";
 import { shouldRenderConversationItem } from "./conversation-item-visibility";
 
 type Props = {
   item: ConversationItem;
   compact?: boolean;
+  environmentId?: string | null;
   provider?: ProviderKind;
 };
 
 export function ConversationItemRow({
   item,
   compact = false,
+  environmentId = null,
   provider = "codex",
 }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   if (item.kind === "message") {
-    return <ConversationMessageRow item={item} compact={compact} provider={provider} />;
+    return (
+      <ConversationMessageRow
+        item={item}
+        compact={compact}
+        environmentId={environmentId}
+        provider={provider}
+      />
+    );
   }
 
   if (item.kind === "reasoning") {
@@ -244,10 +256,12 @@ const USER_MESSAGE_COLLAPSE_MAX_HEIGHT = 280;
 function ConversationMessageRow({
   item,
   compact,
+  environmentId,
   provider,
 }: {
   item: ConversationMessageItem;
   compact: boolean;
+  environmentId: string | null;
   provider: ProviderKind;
 }) {
   const [copied, setCopied] = useState(false);
@@ -290,6 +304,30 @@ function ConversationMessageRow({
   ]
     .filter(Boolean)
     .join(" ");
+
+  const handleFileReferenceClick = useCallback(
+    async (target: FileReferenceTarget) => {
+      if (!environmentId) {
+        return;
+      }
+
+      try {
+        await bridge.openEnvironmentFile({
+          environmentId,
+          path: target.filePath,
+        });
+      } catch (cause: unknown) {
+        await dialog.message(
+          cause instanceof Error ? cause.message : "Failed to open file",
+          {
+            title: "Open File",
+            kind: "error",
+          },
+        );
+      }
+    },
+    [environmentId],
+  );
 
   useEffect(() => {
     return () => {
@@ -383,7 +421,11 @@ function ConversationMessageRow({
       </div>
       {hasImages ? <ConversationMessageImages images={item.images ?? []} /> : null}
       {shouldRenderMarkdown && hasText ? (
-        <ConversationMarkdown markdown={item.text} className={bodyClassName} />
+        <ConversationMarkdown
+          markdown={item.text}
+          className={bodyClassName}
+          onFileReferenceClick={environmentId ? handleFileReferenceClick : undefined}
+        />
       ) : null}
       {!shouldRenderMarkdown && hasText ? (
         <div ref={bodyWrapRef} className={bodyWrapClassName}>

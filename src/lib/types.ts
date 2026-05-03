@@ -1143,6 +1143,12 @@ export type OpenEnvironmentInput = {
   targetId?: string | null;
 };
 
+export type OpenEnvironmentFileInput = {
+  environmentId: string;
+  path: string;
+  targetId?: string | null;
+};
+
 export type ReorderProjectsRequest = {
   projectIds: string[];
 };
