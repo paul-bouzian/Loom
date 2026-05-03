@@ -39,6 +39,7 @@ import type {
   EnvironmentVoiceStatusSnapshot,
   FirstPromptRenameFailureEventPayload,
   OpenEnvironmentInput,
+  OpenEnvironmentFileInput,
   PersistThreadComposerDraftInput,
   ProjectActionStateEventPayload,
   ProjectRecord,
@@ -370,6 +371,12 @@ export function openEnvironment(
   input: OpenEnvironmentInput,
 ): Promise<void> {
   return invoke<void>("open_environment", { input });
+}
+
+export function openEnvironmentFile(
+  input: OpenEnvironmentFileInput,
+): Promise<void> {
+  return invoke<void>("open_environment_file", { input });
 }
 
 export function addProject(

@@ -41,6 +41,7 @@ export const DESKTOP_BACKEND_COMMANDS = [
   "interrupt_thread_turn",
   "list_project_branches",
   "open_environment",
+  "open_environment_file",
   "open_thread_conversation",
   "pull_git",
   "push_git",
