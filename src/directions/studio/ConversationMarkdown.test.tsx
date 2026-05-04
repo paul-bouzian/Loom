@@ -258,6 +258,19 @@ describe("ConversationMarkdown", () => {
     expect(token).toHaveAttribute("data-file-line", "42");
   });
 
+  it("keeps titled windows paths with parenthesized folders intact", () => {
+    render(
+      <ConversationMarkdown
+        markdown={'Inspect [page.tsx](C:\\repo\\(auth)\\page.tsx:42 "Open file").'}
+      />,
+    );
+
+    const token = screen.getByText("page.tsx");
+    expect(token).toHaveAttribute("title", "C:\\repo\\(auth)\\page.tsx:42");
+    expect(token).toHaveAttribute("data-file-path", "C:\\repo\\(auth)\\page.tsx");
+    expect(token).toHaveAttribute("data-file-line", "42");
+  });
+
   it.each([
     "www.example.com",
     "www.example.com:443",
@@ -378,22 +391,28 @@ describe("ConversationMarkdown", () => {
   });
 
   it("ignores code-copy completion after the code block unmounts", async () => {
-    let resolveClipboard: () => void = () => {};
-    clipboardWriteTextMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveClipboard = resolve;
-      }),
-    );
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      let resolveClipboard: () => void = () => {};
+      clipboardWriteTextMock.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveClipboard = resolve;
+        }),
+      );
 
-    const { unmount } = render(
-      <ConversationMarkdown markdown={"```ts\nconst value = 1;\n```"} />,
-    );
+      const { unmount } = render(
+        <ConversationMarkdown markdown={"```ts\nconst value = 1;\n```"} />,
+      );
 
-    await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
-    unmount();
-    resolveClipboard();
-    await Promise.resolve();
+      await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+      unmount();
+      resolveClipboard();
+      await Promise.resolve();
 
-    expect(clipboardWriteTextMock).toHaveBeenCalledWith("const value = 1;");
+      expect(clipboardWriteTextMock).toHaveBeenCalledWith("const value = 1;");
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 });

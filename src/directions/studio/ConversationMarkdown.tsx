@@ -16,6 +16,7 @@ import remarkMath from "remark-math";
 
 import { CheckIcon, CopyIcon } from "../../shared/Icons";
 import {
+  isWindowsAbsolutePath,
   parseFileReferenceTarget,
   type FileReferenceTarget,
 } from "./conversation-file-references";
@@ -992,9 +993,14 @@ function findMarkdownBracketEnd(value: string, startIndex: number): number {
 function findMarkdownParenEnd(value: string, startIndex: number): number {
   let depth = 0;
   let cursor = startIndex;
+  const targetStart = startIndex + 1;
 
   while (cursor < value.length) {
     if (value[cursor] === "\\") {
+      if (isWindowsPathSeparatorInMarkdownTarget(value, cursor, targetStart)) {
+        cursor += 1;
+        continue;
+      }
       cursor += 2;
       continue;
     }
@@ -1010,4 +1016,12 @@ function findMarkdownParenEnd(value: string, startIndex: number): number {
   }
 
   return -1;
+}
+
+function isWindowsPathSeparatorInMarkdownTarget(
+  value: string,
+  index: number,
+  targetStart: number,
+) {
+  return isWindowsAbsolutePath(value.slice(targetStart, index + 1));
 }
