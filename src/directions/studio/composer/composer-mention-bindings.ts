@@ -78,11 +78,11 @@ export function prepareComposerMentionBindingsForSend(
   return bindings
     .filter((binding) => isValidMentionBinding(text, binding))
     .sort((left, right) => left.start - right.start)
-    .map(({ mention, kind, path }) => ({
-      mention,
-      kind,
-      path,
-    }));
+    .map(({ mention, kind, path, start, end }) =>
+      kind === "file"
+        ? { mention, kind, path, start, end }
+        : { mention, kind, path },
+    );
 }
 
 export function sameComposerMentionBindings(

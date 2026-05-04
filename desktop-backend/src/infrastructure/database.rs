@@ -1745,6 +1745,8 @@ mod tests {
                     mention: "src/main.ts".to_string(),
                     kind: ComposerMentionBindingKind::File,
                     path: "src/main.ts".to_string(),
+                    start: Some(5),
+                    end: Some(17),
                 }]),
                 is_streaming: false,
             }));

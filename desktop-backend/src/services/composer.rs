@@ -1061,11 +1061,15 @@ mod tests {
                     mention: "github".to_string(),
                     kind: ComposerMentionBindingKind::App,
                     path: github_app.path.clone(),
+                    start: None,
+                    end: None,
                 },
                 ComposerMentionBindingInput {
                     mention: "github".to_string(),
                     kind: ComposerMentionBindingKind::Skill,
                     path: github_skill.path.clone(),
+                    start: None,
+                    end: None,
                 },
             ],
         )
@@ -1090,6 +1094,8 @@ mod tests {
                 mention: "src/main.ts".to_string(),
                 kind: ComposerMentionBindingKind::File,
                 path: "src/main.ts".to_string(),
+                start: None,
+                end: None,
             }],
         )
         .expect("file bindings should remain metadata-only");

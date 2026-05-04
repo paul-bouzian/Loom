@@ -216,6 +216,7 @@ pub struct ComposerTargetContext {
     pub codex_thread_id: Option<String>,
     pub codex_binary_path: Option<String>,
     pub file_search_enabled: bool,
+    pub file_search_cancellation_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1813,6 +1814,7 @@ impl WorkspaceService {
                     codex_thread_id: context.codex_thread_id,
                     codex_binary_path: context.codex_binary_path,
                     file_search_enabled: !matches!(environment_kind, EnvironmentKind::Chat),
+                    file_search_cancellation_key: format!("thread:{thread_id}"),
                 })
             }
             ComposerTarget::Environment {
@@ -1847,6 +1849,10 @@ impl WorkspaceService {
                     codex_thread_id,
                     codex_binary_path: runtime_target.codex_binary_path,
                     file_search_enabled: true,
+                    file_search_cancellation_key: format!(
+                        "environment:{environment_id}:{}",
+                        provider_value(selected_provider)
+                    ),
                 })
             }
             ComposerTarget::ChatWorkspace { provider } => {
@@ -1863,6 +1869,10 @@ impl WorkspaceService {
                     codex_thread_id: None,
                     codex_binary_path: settings.codex_binary_path,
                     file_search_enabled: false,
+                    file_search_cancellation_key: format!(
+                        "chat-workspace:{}",
+                        provider_value(selected_provider)
+                    ),
                 })
             }
         }
@@ -4795,6 +4805,7 @@ mod tests {
 
         assert_eq!(context.environment_id, CHAT_WORKSPACE_PROJECT_ID);
         assert!(!context.file_search_enabled);
+        assert_eq!(context.file_search_cancellation_key, "chat-workspace:codex");
 
         let chat = harness
             .service
@@ -4806,11 +4817,15 @@ mod tests {
         let thread_context = harness
             .service
             .composer_target_context(&ComposerTarget::Thread {
-                thread_id: chat.thread.id,
+                thread_id: chat.thread.id.clone(),
             })
             .expect("chat thread target should resolve");
 
         assert!(!thread_context.file_search_enabled);
+        assert_eq!(
+            thread_context.file_search_cancellation_key,
+            format!("thread:{}", chat.thread.id)
+        );
     }
 
     #[test]
@@ -4867,13 +4882,17 @@ mod tests {
         let context = harness
             .service
             .composer_target_context(&ComposerTarget::Environment {
-                environment_id,
+                environment_id: environment_id.clone(),
                 provider: Some(ProviderKind::Codex),
             })
             .expect("environment composer target should resolve");
 
         assert_eq!(context.provider, ProviderKind::Codex);
         assert!(context.file_search_enabled);
+        assert_eq!(
+            context.file_search_cancellation_key,
+            format!("environment:{environment_id}:codex")
+        );
     }
 
     #[test]

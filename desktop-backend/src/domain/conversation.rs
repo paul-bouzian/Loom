@@ -510,6 +510,10 @@ pub struct ComposerMentionBindingInput {
     pub mention: String,
     pub kind: ComposerMentionBindingKind,
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -759,11 +759,12 @@ function collectExplicitFileMentionTokens(
   }
 
   for (const binding of mentionBindings) {
-    for (const token of findFileMentionOccurrences(
+    const token = findFileMentionOccurrence(
       text,
-      binding.mention,
+      binding,
       occupiedRanges,
-    )) {
+    );
+    if (token) {
       tokens.push(token);
       occupiedRanges.push({ start: token.start, end: token.end });
     }
@@ -772,12 +773,22 @@ function collectExplicitFileMentionTokens(
   return tokens.sort((left, right) => left.start - right.start);
 }
 
-function findFileMentionOccurrences(
+function findFileMentionOccurrence(
   text: string,
-  mention: string,
+  binding: ComposerMentionBindingInput,
   occupied: Array<{ start: number; end: number }>,
-) {
-  const tokens: DecoratedToken[] = [];
+): DecoratedToken | null {
+  if (typeof binding.start === "number" && typeof binding.end === "number") {
+    return fileTokenFromRange(
+      text,
+      binding.start,
+      binding.end,
+      binding.mention,
+      occupied,
+    );
+  }
+
+  const mention = binding.mention;
   const needle = `@${mention}`;
   const lowerText = text.toLowerCase();
   const lowerNeedle = needle.toLowerCase();
@@ -791,14 +802,12 @@ function findFileMentionOccurrences(
     const end = start + needle.length;
     const token = fileTokenFromRange(text, start, end, mention, occupied);
     if (token) {
-      tokens.push(token);
-      index = end;
-    } else {
-      index = start + 1;
+      return token;
     }
+    index = start + 1;
   }
 
-  return tokens;
+  return null;
 }
 
 function fileTokenFromRange(

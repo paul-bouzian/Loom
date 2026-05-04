@@ -1,13 +1,19 @@
 use std::collections::VecDeque;
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use crate::domain::conversation::ComposerFileSearchResult;
 use crate::error::{AppError, AppResult};
-use crate::services::git::{command_output, stderr_message};
+use crate::services::git::stderr_message;
 
 const FILE_SEARCH_MAX_FILESYSTEM_ENTRIES: usize = 25_000;
+const FILE_SEARCH_CANCELLED_MESSAGE: &str = "File search cancelled.";
+const FILE_SEARCH_GIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FILE_SEARCH_IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
     ".next",
@@ -68,29 +74,69 @@ fn trim_file_search_results(paths: Vec<String>, limit: usize) -> Vec<ComposerFil
 
 fn ensure_file_search_not_cancelled(cancellation: &AtomicBool) -> AppResult<()> {
     if cancellation.load(Ordering::Relaxed) {
-        return Err(AppError::Runtime("File search cancelled.".to_string()));
+        return Err(file_search_cancelled_error());
     }
 
     Ok(())
 }
 
+fn file_search_cancelled_error() -> AppError {
+    AppError::Runtime(FILE_SEARCH_CANCELLED_MESSAGE.to_string())
+}
+
 fn list_git_workspace_files(root: &Path, cancellation: &AtomicBool) -> AppResult<Vec<String>> {
-    let output = command_output(
-        root,
-        [
+    let mut child = Command::new("git")
+        .current_dir(root)
+        .args([
             "ls-files",
             "--cached",
             "--others",
             "--exclude-standard",
             "-z",
-        ],
-    )?;
-    if !output.status.success() {
-        return Err(AppError::Git(stderr_message(&output.stderr)));
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(AppError::from)?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(AppError::Runtime(
+            "Git file search stdout was unavailable.".to_string(),
+        ));
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(AppError::Runtime(
+            "Git file search stderr was unavailable.".to_string(),
+        ));
+    };
+    let stdout_reader = read_child_stream(stdout);
+    let stderr_reader = read_child_stream(stderr);
+
+    let status = loop {
+        if cancellation.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = join_child_stream(stdout_reader);
+            let _ = join_child_stream(stderr_reader);
+            return Err(file_search_cancelled_error());
+        }
+        if let Some(status) = child.try_wait().map_err(AppError::from)? {
+            break status;
+        }
+        thread::sleep(FILE_SEARCH_GIT_POLL_INTERVAL);
+    };
+
+    let stdout = join_child_stream(stdout_reader)?;
+    let stderr = join_child_stream(stderr_reader)?;
+    if !status.success() {
+        return Err(AppError::Git(stderr_message(&stderr)));
     }
 
     let mut paths = Vec::new();
-    for token in output.stdout.split(|byte| *byte == 0) {
+    for token in stdout.split(|byte| *byte == 0) {
         ensure_file_search_not_cancelled(cancellation)?;
         if token.is_empty() {
             continue;
@@ -106,12 +152,31 @@ fn list_git_workspace_files(root: &Path, cancellation: &AtomicBool) -> AppResult
     Ok(paths)
 }
 
+fn read_child_stream<R>(mut stream: R) -> JoinHandle<io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        stream.read_to_end(&mut buffer)?;
+        Ok(buffer)
+    })
+}
+
+fn join_child_stream(handle: JoinHandle<io::Result<Vec<u8>>>) -> AppResult<Vec<u8>> {
+    handle
+        .join()
+        .map_err(|_| AppError::Runtime("Git file search reader panicked.".to_string()))?
+        .map_err(AppError::from)
+}
+
 fn list_filesystem_workspace_files(
     root: &Path,
     cancellation: &AtomicBool,
 ) -> AppResult<Vec<String>> {
     let mut pending = VecDeque::from([PathBuf::new()]);
     let mut paths = Vec::new();
+    let mut visited_entries = 0usize;
 
     while let Some(relative_dir) = pending.pop_front() {
         ensure_file_search_not_cancelled(cancellation)?;
@@ -130,6 +195,10 @@ fn list_filesystem_workspace_files(
 
         for entry in entries {
             ensure_file_search_not_cancelled(cancellation)?;
+            if visited_entries >= FILE_SEARCH_MAX_FILESYSTEM_ENTRIES {
+                return Ok(paths);
+            }
+            visited_entries += 1;
             let entry = entry?;
             let file_type = entry.file_type()?;
             let name = entry.file_name();
@@ -150,9 +219,6 @@ fn list_filesystem_workspace_files(
             } else if file_type.is_file() {
                 if let Some(path) = normalize_relative_file_path(&relative_path.to_string_lossy()) {
                     paths.push(path);
-                    if paths.len() >= FILE_SEARCH_MAX_FILESYSTEM_ENTRIES {
-                        return Ok(paths);
-                    }
                 }
             }
         }

@@ -186,6 +186,8 @@ describe("composer-mention-bindings", () => {
         mention: "src/main.ts",
         kind: "file",
         path: "src/main.ts",
+        start: 7,
+        end: 19,
       },
     ]);
   });

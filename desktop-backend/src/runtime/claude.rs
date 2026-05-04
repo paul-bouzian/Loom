@@ -2898,6 +2898,8 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-sent","m
                     mention: "github".to_string(),
                     kind: crate::domain::conversation::ComposerMentionBindingKind::App,
                     path: "app://github".to_string(),
+                    start: None,
+                    end: None,
                 }],
             )
             .await
@@ -2931,6 +2933,8 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-sent","m
             mention: "src/main.ts".to_string(),
             kind: crate::domain::conversation::ComposerMentionBindingKind::File,
             path: "src/main.ts".to_string(),
+            start: Some(7),
+            end: Some(19),
         };
 
         let result = session

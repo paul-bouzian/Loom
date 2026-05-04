@@ -454,6 +454,35 @@ describe("composer-model", () => {
     ]);
   });
 
+  it("uses persisted file mention ranges for repeated paths", () => {
+    const text = "First @src/app.ts then @src/app.ts";
+    const selectedStart = text.lastIndexOf("@src/app.ts");
+    const selectedEnd = selectedStart + "@src/app.ts".length;
+
+    const segments = decorateComposerText(text, null, "codex", {
+      decorateFileTokens: false,
+      mentionBindings: [
+        {
+          mention: "src/app.ts",
+          kind: "file",
+          path: "src/app.ts",
+          start: selectedStart,
+          end: selectedEnd,
+        },
+      ],
+    });
+
+    expect(segments).toEqual([
+      { kind: "text", text: "First @src/app.ts then " },
+      {
+        kind: "file",
+        text: "@src/app.ts",
+        start: selectedStart,
+        end: selectedEnd,
+      },
+    ]);
+  });
+
   it("can decorate submitted commands without relying on the current provider", () => {
     const segments = decorateComposerText(
       "Use /prompts:review() then /review and /release-notes but keep /workspace /run /mnt raw",
