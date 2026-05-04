@@ -803,12 +803,12 @@ function matchFenceDelimiter(
   value: string,
   index: number,
 ): { marker: "`" | "~"; length: number } | null {
-  const lineStart = value.lastIndexOf("\n", index - 1) + 1;
   const marker = value[index];
   if (marker !== "`" && marker !== "~") {
     return null;
   }
 
+  const lineStart = value.lastIndexOf("\n", index - 1) + 1;
   if (indentedFenceMarkerStart(value, lineStart, marker) !== index) {
     return null;
   }
