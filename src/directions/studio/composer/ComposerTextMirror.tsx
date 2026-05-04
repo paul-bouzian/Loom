@@ -6,13 +6,18 @@ import {
   useState,
 } from "react";
 
-import type { ProviderKind, ThreadComposerCatalog } from "../../../lib/types";
+import type {
+  ComposerDraftMentionBinding,
+  ProviderKind,
+  ThreadComposerCatalog,
+} from "../../../lib/types";
 import { ComposerTokenText } from "../ComposerTokenText";
 
 type Props = {
   draft: string;
   catalog: ThreadComposerCatalog | null;
   cursorIndex: number | null;
+  mentionBindings?: ComposerDraftMentionBinding[];
   placeholder: string;
   provider: ProviderKind;
   decorateFileTokens?: boolean;
@@ -30,6 +35,7 @@ export function ComposerTextMirror({
   draft,
   catalog,
   cursorIndex,
+  mentionBindings = [],
   decorateFileTokens = true,
   placeholder,
   provider,
@@ -58,11 +64,11 @@ export function ComposerTextMirror({
     );
   }, [showCaret, cursorIndex, draft]);
 
-  // `catalog` and `provider` change the mirror DOM (badges, classes) without
-  // changing the draft string, so they must invalidate the cached caret rect.
+  // Token decoration inputs change the mirror DOM without changing the draft
+  // string, so they must invalidate the cached caret rect.
   useLayoutEffect(() => {
     updateCaretPosition();
-  }, [updateCaretPosition, catalog, provider]);
+  }, [updateCaretPosition, catalog, provider, decorateFileTokens, mentionBindings]);
 
   // Window resizes and pane width changes can rewrap the mirror without a
   // draft or cursor change; observe the content box to keep the caret aligned.
@@ -95,6 +101,7 @@ export function ComposerTextMirror({
             catalog={catalog}
             cursorIndex={cursorIndex}
             decorateFileTokens={decorateFileTokens}
+            draftMentionBindings={mentionBindings}
             provider={provider}
             keyPrefix="composer-mirror"
           />

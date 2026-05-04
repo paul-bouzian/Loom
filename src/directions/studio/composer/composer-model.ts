@@ -1,4 +1,5 @@
 import type {
+  ComposerDraftMentionBinding,
   ComposerMentionBindingInput,
   ComposerPromptArgumentMode,
   ComposerPromptOption,
@@ -81,6 +82,7 @@ export type DecorateComposerTextOptions = {
   decorateAllProviderTokens?: boolean;
   decorateFileTokens?: boolean;
   decorateUnknownTokens?: boolean;
+  draftMentionBindings?: ComposerDraftMentionBinding[];
   mentionBindings?: ComposerMentionBindingInput[];
 };
 
@@ -401,10 +403,11 @@ export function decorateComposerText(
       )
       .map((binding) => [binding.mention.toLowerCase(), binding.kind]),
   );
-  const fileMentionBindingSet = new Set(
-    (options.mentionBindings ?? [])
-      .filter((binding) => binding.kind === "file")
-      .map((binding) => binding.mention.toLowerCase()),
+  const fileMentionBindings = (options.mentionBindings ?? []).filter(
+    (binding) => binding.kind === "file",
+  );
+  const draftFileMentionBindings = (options.draftMentionBindings ?? []).filter(
+    (binding) => binding.kind === "file",
   );
   const promptMap = new Map(
     (catalog?.prompts ?? []).map((prompt) => [prompt.name, prompt]),
@@ -473,25 +476,31 @@ export function decorateComposerText(
       });
     }
   }
-  const fileTokens: DecoratedToken[] = collectSpecialTokens(text, "@", occupied)
-    .flatMap((token) => {
-      const resolved = resolveFileMentionToken(
-        token.text,
-        fileMentionBindingSet,
-        decorateFileTokens,
-      );
-      if (!resolved) {
-        return [];
-      }
-      return [
-        {
+  const explicitFileTokens = collectExplicitFileMentionTokens(
+    text,
+    fileMentionBindings,
+    draftFileMentionBindings,
+    occupied,
+  );
+  const fileTokenRanges = [
+    ...occupied,
+    ...explicitFileTokens.map((token) => ({
+      start: token.start,
+      end: token.end,
+    })),
+  ];
+  const genericFileTokens: DecoratedToken[] = decorateFileTokens
+    ? collectSpecialTokens(text, "@", fileTokenRanges).map((token) => {
+        const resolved = resolveFileMentionToken(token.text);
+        return {
           kind: "file" as const,
           text: resolved,
           start: token.start,
           end: token.start + resolved.length,
-        },
-      ];
-    });
+        };
+      })
+    : [];
+  const fileTokens = [...explicitFileTokens, ...genericFileTokens];
   const tokens: DecoratedToken[] = [
     ...promptTokens,
     ...mentionTokens,
@@ -726,25 +735,125 @@ function resolveDollarMentionToken(
   return null;
 }
 
-function resolveFileMentionToken(
+function collectExplicitFileMentionTokens(
   text: string,
-  fileMentionBindingSet: Set<string>,
-  decorateFileTokens: boolean,
+  mentionBindings: ComposerMentionBindingInput[],
+  draftMentionBindings: ComposerDraftMentionBinding[],
+  occupied: Array<{ start: number; end: number }>,
+): DecoratedToken[] {
+  const tokens: DecoratedToken[] = [];
+  const occupiedRanges = [...occupied];
+
+  for (const binding of draftMentionBindings) {
+    const token = fileTokenFromRange(
+      text,
+      binding.start,
+      binding.end,
+      binding.mention,
+      occupiedRanges,
+    );
+    if (token) {
+      tokens.push(token);
+      occupiedRanges.push({ start: token.start, end: token.end });
+    }
+  }
+
+  for (const binding of mentionBindings) {
+    for (const token of findFileMentionOccurrences(
+      text,
+      binding.mention,
+      occupiedRanges,
+    )) {
+      tokens.push(token);
+      occupiedRanges.push({ start: token.start, end: token.end });
+    }
+  }
+
+  return tokens.sort((left, right) => left.start - right.start);
+}
+
+function findFileMentionOccurrences(
+  text: string,
+  mention: string,
+  occupied: Array<{ start: number; end: number }>,
 ) {
-  const normalized = text.slice(1).toLowerCase();
-  if (fileMentionBindingSet.has(normalized)) {
-    return text;
+  const tokens: DecoratedToken[] = [];
+  const needle = `@${mention}`;
+  const lowerText = text.toLowerCase();
+  const lowerNeedle = needle.toLowerCase();
+  let index = 0;
+
+  while (index < text.length) {
+    const start = lowerText.indexOf(lowerNeedle, index);
+    if (start === -1) {
+      break;
+    }
+    const end = start + needle.length;
+    const token = fileTokenFromRange(text, start, end, mention, occupied);
+    if (token) {
+      tokens.push(token);
+      index = end;
+    } else {
+      index = start + 1;
+    }
   }
 
-  const trimmed = trimTrailingTokenPunctuation(text);
+  return tokens;
+}
+
+function fileTokenFromRange(
+  text: string,
+  start: number,
+  end: number,
+  mention: string,
+  occupied: Array<{ start: number; end: number }>,
+): DecoratedToken | null {
   if (
-    trimmed !== text &&
-    fileMentionBindingSet.has(trimmed.slice(1).toLowerCase())
+    start < 0 ||
+    end > text.length ||
+    !rangeIsAvailable(start, end, occupied) ||
+    text.slice(start, end).toLowerCase() !== `@${mention}`.toLowerCase() ||
+    !hasTokenBoundaryBefore(text, start) ||
+    !hasFileMentionBoundaryAfter(text, end)
   ) {
-    return trimmed;
+    return null;
   }
 
-  return decorateFileTokens && trimmed.length > 1 ? trimmed : null;
+  return {
+    kind: "file",
+    text: text.slice(start, end),
+    start,
+    end,
+  };
+}
+
+function rangeIsAvailable(
+  start: number,
+  end: number,
+  occupied: Array<{ start: number; end: number }>,
+) {
+  return !occupied.some((range) => start < range.end && end > range.start);
+}
+
+function hasTokenBoundaryBefore(text: string, start: number) {
+  const previous = start > 0 ? (text[start - 1] ?? "") : "";
+  return !previous || TOKEN_BOUNDARY.test(previous);
+}
+
+function hasFileMentionBoundaryAfter(text: string, end: number) {
+  const next = text[end] ?? "";
+  if (!next) {
+    return true;
+  }
+  if (/[A-Za-z0-9_:/-]/.test(next)) {
+    return false;
+  }
+  return next !== "." || !/[A-Za-z0-9_-]/.test(text[end + 1] ?? "");
+}
+
+function resolveFileMentionToken(text: string) {
+  const trimmed = trimTrailingTokenPunctuation(text);
+  return trimmed.length > 1 ? trimmed : text;
 }
 
 function lookupDollarMentionKind(

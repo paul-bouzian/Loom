@@ -161,7 +161,10 @@ export function InlineComposer({
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [inputFocused, setInputFocused] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [autocompleteSelection, setAutocompleteSelection] = useState<{
+    tokenKey: string | null;
+    index: number;
+  }>({ tokenKey: null, index: 0 });
   const [dismissedTokenKey, setDismissedTokenKey] = useState<string | null>(
     null,
   );
@@ -466,23 +469,31 @@ export function InlineComposer({
   }
   const showAutocompleteMenu =
     hasAutocompleteItems || autocompleteStatusMessage !== null;
+  const activeIndex =
+    autocompleteItems.length === 0
+      ? 0
+      : Math.min(
+          autocompleteSelection.tokenKey === activeTokenKey
+            ? autocompleteSelection.index
+            : 0,
+          autocompleteItems.length - 1,
+        );
   const showVisualCaret =
     inputFocused &&
     !inputDisabled &&
     selection.start === selection.end &&
     draft.length > 0;
 
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [activeTokenKey]);
-
-  useEffect(() => {
-    setActiveIndex((current) =>
-      autocompleteItems.length === 0
-        ? 0
-        : Math.min(current, autocompleteItems.length - 1),
-    );
-  }, [autocompleteItems.length]);
+  function updateAutocompleteIndex(updater: (current: number) => number) {
+    setAutocompleteSelection((current) => {
+      const currentIndex =
+        current.tokenKey === activeTokenKey ? current.index : 0;
+      return {
+        tokenKey: activeTokenKey,
+        index: updater(currentIndex),
+      };
+    });
+  }
 
   useEffect(() => {
     if (!menuRef.current) {
@@ -553,7 +564,10 @@ export function InlineComposer({
       start,
       catalog,
       composer.provider,
-      { decorateFileTokens: fileSearchTarget !== null },
+      {
+        decorateFileTokens: fileSearchTarget !== null,
+        draftMentionBindings: mentionBindings,
+      },
     );
     if (!deletionRange) {
       return false;
@@ -683,6 +697,7 @@ export function InlineComposer({
             catalog={catalog}
             cursorIndex={selection.start}
             decorateFileTokens={fileSearchTarget !== null}
+            mentionBindings={mentionBindings}
             placeholder={placeholder}
             provider={composer.provider}
             showCaret={showVisualCaret}
@@ -746,14 +761,14 @@ export function InlineComposer({
               if (hasAutocompleteItems) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  setActiveIndex(
+                  updateAutocompleteIndex(
                     (current) => (current + 1) % autocompleteItems.length,
                   );
                   return;
                 }
                 if (event.key === "ArrowUp") {
                   event.preventDefault();
-                  setActiveIndex((current) =>
+                  updateAutocompleteIndex((current) =>
                     current === 0 ? autocompleteItems.length - 1 : current - 1,
                   );
                   return;

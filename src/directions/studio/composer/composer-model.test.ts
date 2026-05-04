@@ -434,6 +434,26 @@ describe("composer-model", () => {
     ]);
   });
 
+  it("decorates explicit file mention bindings with spaces in the path", () => {
+    const segments = decorateComposerText(
+      "Review @docs/My File.ts, then ask @alice",
+      null,
+      "codex",
+      {
+        decorateFileTokens: false,
+        mentionBindings: [
+          { mention: "docs/My File.ts", kind: "file", path: "docs/My File.ts" },
+        ],
+      },
+    );
+
+    expect(segments).toEqual([
+      { kind: "text", text: "Review " },
+      { kind: "file", text: "@docs/My File.ts", start: 7, end: 23 },
+      { kind: "text", text: ", then ask @alice" },
+    ]);
+  });
+
   it("can decorate submitted commands without relying on the current provider", () => {
     const segments = decorateComposerText(
       "Use /prompts:review() then /review and /release-notes but keep /workspace /run /mnt raw",
@@ -509,6 +529,29 @@ describe("composer-model", () => {
         },
       ),
     ).toBeNull();
+  });
+
+  it("uses draft binding spans when deleting file mentions with spaces", () => {
+    expect(
+      findComposerTokenDeletionRange(
+        "Review @docs/My File.ts ",
+        "Review @docs/My File.ts ".length,
+        null,
+        "codex",
+        {
+          decorateFileTokens: false,
+          draftMentionBindings: [
+            {
+              mention: "docs/My File.ts",
+              kind: "file",
+              path: "docs/My File.ts",
+              start: 7,
+              end: 23,
+            },
+          ],
+        },
+      ),
+    ).toEqual({ start: 7, end: 24 });
   });
 
   it("does not delete a decorated prompt while editing inside its arguments", () => {

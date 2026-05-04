@@ -959,6 +959,32 @@ describe("InlineComposer image attachments", () => {
     });
   });
 
+  it("keeps inserted file mentions with spaces as one deletable token", async () => {
+    mockedBridge.searchComposerFiles.mockResolvedValue([
+      { path: "docs/My File.ts" },
+    ]);
+
+    renderComposer("");
+
+    const user = userEvent.setup();
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await user.type(input, "@my");
+
+    expect(
+      await screen.findByRole("option", { name: /My File\.ts/i }),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{Tab}");
+    await waitFor(() => {
+      expect(input).toHaveValue("@docs/My File.ts ");
+    });
+
+    await user.keyboard("{Backspace}");
+    await waitFor(() => {
+      expect(input).toHaveValue("");
+    });
+  });
+
   it("opens file autocomplete from a bare at-sign trigger", async () => {
     mockedBridge.searchComposerFiles.mockResolvedValue([{ path: "src/App.tsx" }]);
 
@@ -1284,7 +1310,12 @@ function renderComposer(
         modelOptions={options.modelOptions ?? capabilitiesFixture.models}
         onChangeImages={setImages}
         onCancelRefine={() => undefined}
-        onChangeDraft={setDraft}
+        onChangeDraft={(value, bindings) => {
+          setDraft(value);
+          if (bindings) {
+            setMentionBindings(bindings);
+          }
+        }}
         onChangeMentionBindings={setMentionBindings}
         onInterrupt={() => undefined}
         onSend={(...args) => options.onSend?.(...args)}
@@ -1348,7 +1379,12 @@ function renderComposerWithExternalDraftAction(initialDraft: string) {
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={setDraft}
+          onChangeDraft={(value, bindings) => {
+            setDraft(value);
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}
@@ -1403,7 +1439,12 @@ function renderComposerWithManagedServiceTier(
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={setDraft}
+          onChangeDraft={(value, bindings) => {
+            setDraft(value);
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}
@@ -1485,7 +1526,12 @@ function renderComposerWithProviderToggle(initialDraft: string) {
           modelOptions={[...capabilitiesFixture.models, claudeModel]}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={setDraft}
+          onChangeDraft={(value, bindings) => {
+            setDraft(value);
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}
@@ -1537,7 +1583,12 @@ function renderComposerWithDynamicDisabledState(initialDraft: string) {
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={setDraft}
+          onChangeDraft={(value, bindings) => {
+            setDraft(value);
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}
@@ -1594,12 +1645,15 @@ function renderComposerWithDynamicThread(initialDraft: string) {
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={(value) =>
+          onChangeDraft={(value, bindings) => {
             setDraftByThreadId((state) => ({
               ...state,
               [threadId]: value,
-            }))
-          }
+            }));
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}
@@ -1647,7 +1701,12 @@ function renderComposerWithDynamicTransport(initialDraft: string) {
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={setDraft}
+          onChangeDraft={(value, bindings) => {
+            setDraft(value);
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}

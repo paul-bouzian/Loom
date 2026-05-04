@@ -1,4 +1,5 @@
 import type {
+  ComposerDraftMentionBinding,
   ComposerMentionBindingInput,
   ProviderKind,
   ThreadComposerCatalog,
@@ -25,6 +26,7 @@ type ComposerTokenTextProps = {
   decorateAllProviderTokens?: boolean;
   decorateFileTokens?: boolean;
   decorateUnknownTokens?: boolean;
+  draftMentionBindings?: ComposerDraftMentionBinding[];
   keyPrefix: string;
   linkifyText?: boolean;
   mentionBindings?: ComposerMentionBindingInput[];
@@ -38,6 +40,7 @@ export function ComposerTokenText({
   decorateAllProviderTokens = false,
   decorateFileTokens = true,
   decorateUnknownTokens = false,
+  draftMentionBindings = [],
   keyPrefix,
   linkifyText = false,
   mentionBindings = [],
@@ -46,6 +49,7 @@ export function ComposerTokenText({
     decorateAllProviderTokens,
     decorateFileTokens,
     decorateUnknownTokens,
+    draftMentionBindings,
     mentionBindings,
   });
   let sourceCursor = 0;
