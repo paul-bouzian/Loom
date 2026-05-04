@@ -27,6 +27,17 @@ type Props = {
   onFileReferenceClick?: (target: FileReferenceTarget) => void;
 };
 
+type MarkdownNode = {
+  properties?: Record<string, unknown>;
+};
+type MarkdownLinkAttributes = Pick<
+  ComponentProps<"a">,
+  "aria-describedby" | "className" | "id" | "title"
+> & {
+  "data-footnote-backref"?: string;
+  "data-footnote-ref"?: string;
+};
+
 const MARKDOWN_REMARK_PLUGINS = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
@@ -84,8 +95,35 @@ function createMarkdownComponents(
     h5: ({ children }) => renderHeading(5, children),
     h6: ({ children }) => renderHeading(6, children),
     p: ({ children }) => <p className="tx-markdown__paragraph">{children}</p>,
-    ul: ({ children }) => <ul className="tx-markdown__list">{children}</ul>,
-    ol: ({ children }) => <ol className="tx-markdown__list">{children}</ol>,
+    ul: ({ node, children, className, ...props }) => (
+      <ul
+        {...props}
+        className={mergeClassNames(
+          "tx-markdown__list",
+          className,
+          getNodeClassName(node),
+        )}
+      >
+        {children}
+      </ul>
+    ),
+    ol: ({ node, children, className, ...props }) => (
+      <ol
+        {...props}
+        className={mergeClassNames(
+          "tx-markdown__list",
+          className,
+          getNodeClassName(node),
+        )}
+      >
+        {children}
+      </ol>
+    ),
+    li: ({ node, children, className, ...props }) => (
+      <li {...props} className={mergeClassNames(className, getNodeClassName(node))}>
+        {children}
+      </li>
+    ),
     blockquote: ({ children }) => (
       <blockquote className="tx-markdown__blockquote">{children}</blockquote>
     ),
@@ -106,22 +144,28 @@ function createMarkdownComponents(
       </td>
     ),
     del: ({ children }) => <del className="tx-markdown__delete">{children}</del>,
-    input: ({ type, checked }) => {
+    input: ({ node, type, checked, className, ...props }) => {
       if (type !== "checkbox") {
-        return <input type={type} disabled readOnly />;
+        return <input {...props} type={type} className={className} disabled readOnly />;
       }
       return (
         <input
+          {...props}
           type="checkbox"
-          checked={Boolean(checked)}
-          className="tx-markdown__task-checkbox"
+          checked={Boolean(checked ?? getNodeBooleanProperty(node, "checked"))}
+          className={mergeClassNames("tx-markdown__task-checkbox", className)}
           disabled
           readOnly
         />
       );
     },
-    a: ({ children, href }) =>
-      renderMarkdownLink(children, href, onFileReferenceClick),
+    a: ({ node, children, href, className }) =>
+      renderMarkdownLink(
+        children,
+        href,
+        buildMarkdownLinkAttributes(node, className),
+        onFileReferenceClick,
+      ),
     img: ({ alt }) => (
       <span className="tx-markdown__image-placeholder">
         {alt ? `[image: ${alt}]` : "[image]"}
@@ -148,6 +192,7 @@ function renderHeading(depth: 1 | 2 | 3 | 4 | 5 | 6, children: ReactNode) {
 function renderMarkdownLink(
   children: ReactNode,
   href: string | undefined,
+  linkAttributes: MarkdownLinkAttributes,
   onFileReferenceClick?: (target: FileReferenceTarget) => void,
 ) {
   const safeHref = href ?? "";
@@ -170,7 +215,11 @@ function renderMarkdownLink(
 
   if (safeHref.startsWith("#")) {
     return (
-      <a className="tx-markdown__link" href={safeHref}>
+      <a
+        {...linkAttributes}
+        className={mergeClassNames("tx-markdown__link", linkAttributes.className)}
+        href={safeHref}
+      >
         {children}
       </a>
     );
@@ -179,7 +228,8 @@ function renderMarkdownLink(
   if (isValidExternalUrl(safeHref)) {
     return (
       <a
-        className="tx-markdown__link"
+        {...linkAttributes}
+        className={mergeClassNames("tx-markdown__link", linkAttributes.className)}
         href={safeHref}
         rel="noreferrer"
         onClick={(event) => handleExternalLinkClick(event, safeHref)}
@@ -251,10 +301,12 @@ function MarkdownCodeBlock({
   language: string | null;
 }) {
   const [copied, setCopied] = useState(false);
+  const mountedRef = useRef(true);
   const timerRef = useRef<number | null>(null);
 
   useEffect(
     () => () => {
+      mountedRef.current = false;
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current);
       }
@@ -268,6 +320,9 @@ function MarkdownCodeBlock({
     void clipboard
       .writeText(code)
       .then(() => {
+        if (!mountedRef.current) {
+          return;
+        }
         setCopied(true);
         if (timerRef.current !== null) {
           window.clearTimeout(timerRef.current);
@@ -331,6 +386,74 @@ function nodeToPlainText(node: ReactNode): string {
   }
   if (isValidElement<{ children?: ReactNode }>(node)) {
     return nodeToPlainText(node.props.children);
+  }
+  return "";
+}
+
+function buildMarkdownLinkAttributes(
+  node: MarkdownNode | undefined,
+  className: string | undefined,
+): MarkdownLinkAttributes {
+  return {
+    "aria-describedby": getNodeStringProperty(node, "aria-describedby", "ariaDescribedBy"),
+    className: mergeClassNames(className, getNodeClassName(node)),
+    "data-footnote-backref": getNodeStringProperty(
+      node,
+      "data-footnote-backref",
+      "dataFootnoteBackref",
+    ),
+    "data-footnote-ref": getNodeStringProperty(
+      node,
+      "data-footnote-ref",
+      "dataFootnoteRef",
+    ),
+    id: getNodeStringProperty(node, "id"),
+    title: getNodeStringProperty(node, "title"),
+  };
+}
+
+function getNodeClassName(node: MarkdownNode | undefined): string {
+  return classNameFromUnknown(node?.properties?.className);
+}
+
+function getNodeStringProperty(
+  node: MarkdownNode | undefined,
+  ...names: string[]
+): string | undefined {
+  for (const name of names) {
+    const value = node?.properties?.[name];
+    if (typeof value === "string" || typeof value === "number") {
+      return String(value);
+    }
+    if (value === true) {
+      return "";
+    }
+  }
+  return undefined;
+}
+
+function getNodeBooleanProperty(
+  node: MarkdownNode | undefined,
+  name: string,
+): boolean | undefined {
+  const value = node?.properties?.[name];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function mergeClassNames(...values: unknown[]): string | undefined {
+  const className = values
+    .map((value) => classNameFromUnknown(value))
+    .filter(Boolean)
+    .join(" ");
+  return className || undefined;
+}
+
+function classNameFromUnknown(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => classNameFromUnknown(entry)).filter(Boolean).join(" ");
   }
   return "";
 }
@@ -558,16 +681,31 @@ function isLineStart(value: string, index: number): boolean {
   return index === 0 || value[index - 1] === "\n";
 }
 
+function indentedFenceMarkerStart(
+  value: string,
+  lineStart: number,
+  marker: "`" | "~",
+): number | null {
+  let markerStart = lineStart;
+  while (value[markerStart] === " ") {
+    markerStart += 1;
+  }
+  return markerStart - lineStart <= 3 && value[markerStart] === marker
+    ? markerStart
+    : null;
+}
+
 function matchFenceDelimiter(
   value: string,
   index: number,
 ): { marker: "`" | "~"; length: number } | null {
-  if (!isLineStart(value, index)) {
+  const lineStart = value.lastIndexOf("\n", index - 1) + 1;
+  const marker = value[index];
+  if (marker !== "`" && marker !== "~") {
     return null;
   }
 
-  const marker = value[index];
-  if (marker !== "`" && marker !== "~") {
+  if (indentedFenceMarkerStart(value, lineStart, marker) !== index) {
     return null;
   }
 
@@ -592,12 +730,13 @@ function findFenceEndIndex(
   cursor += 1;
 
   while (cursor < value.length) {
-    if (isLineStart(value, cursor) && value[cursor] === marker) {
-      let markerEnd = cursor;
+    if (isLineStart(value, cursor)) {
+      const markerStart = indentedFenceMarkerStart(value, cursor, marker);
+      let markerEnd = markerStart ?? cursor;
       while (value[markerEnd] === marker) {
         markerEnd += 1;
       }
-      if (markerEnd - cursor >= length) {
+      if (markerStart !== null && markerEnd - markerStart >= length) {
         const lineEnd = value.indexOf("\n", markerEnd);
         return lineEnd === -1 ? value.length : lineEnd + 1;
       }

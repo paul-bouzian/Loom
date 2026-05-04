@@ -288,7 +288,11 @@ describe("ConversationMarkdown", () => {
     expect(checkboxes[0]).toBeChecked();
     expect(checkboxes[1]).not.toBeChecked();
     expect(screen.getByText("legacy parser").tagName).toBe("DEL");
+    expect(container.querySelector(".contains-task-list")).not.toBeNull();
+    expect(container.querySelector(".task-list-item")).not.toBeNull();
     expect(container.querySelector(".footnotes")).not.toBeNull();
+    expect(container.querySelector("[data-footnote-ref]")).not.toBeNull();
+    expect(container.querySelector("[data-footnote-backref]")).not.toBeNull();
     expect(screen.getByText("Verified through GFM.")).toBeInTheDocument();
   });
 
@@ -321,6 +325,44 @@ describe("ConversationMarkdown", () => {
 
     expect(screen.getByText("ts")).toHaveClass("tx-markdown__code-language-label");
     await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    expect(clipboardWriteTextMock).toHaveBeenCalledWith("const value = 1;");
+  });
+
+  it("leaves markdown-looking content untouched inside indented fenced code blocks", () => {
+    const { container } = render(
+      <ConversationMarkdown
+        markdown={[
+          "- Debug output:",
+          "  ```md",
+          "  [literal](www.example.com:443)",
+          "  Budget $400 and `inline`",
+          "  ```",
+        ].join("\n")}
+      />,
+    );
+
+    const codeBlock = container.querySelector(".tx-markdown__code-block code");
+    expect(codeBlock).toHaveTextContent("[literal](www.example.com:443)");
+    expect(codeBlock).toHaveTextContent("Budget $400 and `inline`");
+  });
+
+  it("ignores code-copy completion after the code block unmounts", async () => {
+    let resolveClipboard: () => void = () => {};
+    clipboardWriteTextMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveClipboard = resolve;
+      }),
+    );
+
+    const { unmount } = render(
+      <ConversationMarkdown markdown={"```ts\nconst value = 1;\n```"} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    unmount();
+    resolveClipboard();
+    await Promise.resolve();
 
     expect(clipboardWriteTextMock).toHaveBeenCalledWith("const value = 1;");
   });
