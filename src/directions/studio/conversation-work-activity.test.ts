@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { OPTIMISTIC_FIRST_TURN_ID } from "../../lib/conversation-constants";
+import type { ConversationImageAttachment } from "../../lib/types";
 import { makeConversationSnapshot } from "../../test/fixtures/conversation";
 import { buildConversationTimeline } from "./conversation-work-activity";
 
@@ -105,6 +106,47 @@ describe("buildConversationTimeline", () => {
 
       expect(firstGroup.startedAt).toBe(firstStartedAt);
       expect(secondGroup.startedAt).toBe(secondStartedAt);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("preserves optimistic timing when local images are rewritten to hosted URLs", () => {
+    const dateNow = vi.spyOn(Date, "now");
+    const optimisticStartedAt = new Date("2026-05-01T10:00:00Z").getTime();
+    const providerStartedAt = new Date("2026-05-01T10:00:04Z").getTime();
+    try {
+      dateNow.mockReturnValue(optimisticStartedAt);
+      optimisticWorkActivityGroup({
+        threadId: "thread-image-rewrite-timing",
+        messageId: "optimistic-user-image",
+        text: "Use this screenshot",
+        images: [{ type: "localImage", path: "/tmp/screenshot.png" }],
+      });
+
+      dateNow.mockReturnValue(providerStartedAt);
+      const confirmedGroup = onlyWorkActivityGroup(
+        buildConversationTimeline(
+          makeConversationSnapshot({
+            threadId: "thread-image-rewrite-timing",
+            status: "running",
+            activeTurnId: "turn-image-rewrite",
+            items: [
+              {
+                kind: "message",
+                id: "user-image-confirmed",
+                turnId: "turn-image-rewrite",
+                role: "user",
+                text: "Use this screenshot",
+                images: [{ type: "image", url: "https://provider.example/screenshot.png" }],
+                isStreaming: false,
+              },
+            ],
+          }),
+        ),
+      );
+
+      expect(confirmedGroup.startedAt).toBe(optimisticStartedAt);
     } finally {
       dateNow.mockRestore();
     }
@@ -359,10 +401,12 @@ function optimisticWorkActivityGroup({
   threadId,
   messageId,
   text,
+  images = null,
 }: {
   threadId: string;
   messageId: string;
   text: string;
+  images?: ConversationImageAttachment[] | null;
 }) {
   return onlyWorkActivityGroup(
     buildConversationTimeline(
@@ -376,7 +420,7 @@ function optimisticWorkActivityGroup({
             id: messageId,
             role: "user",
             text,
-            images: null,
+            images,
             isStreaming: false,
           },
         ],

@@ -569,12 +569,11 @@ function timingFingerprintForGroup(
       ? userMessageAtActiveTurnAnchor(snapshot)
       : firstUserMessageForTurn(snapshot, turnId);
   if (!userMessage) return null;
-  const images = (userMessage.images ?? [])
-    .map((image) =>
-      image.type === "image" ? `image:${image.url}` : `localImage:${image.path}`,
-    )
-    .join("\n");
-  return JSON.stringify([snapshot.threadId, userMessage.text, images]);
+  return JSON.stringify([
+    snapshot.threadId,
+    userMessage.text,
+    userMessage.images?.length ?? 0,
+  ]);
 }
 
 function userMessageAtActiveTurnAnchor(
