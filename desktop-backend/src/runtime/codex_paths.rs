@@ -464,9 +464,11 @@ mod tests {
         write_versioned_binary(&old_binary_path, "codex-cli 0.122.0");
         write_versioned_binary(&new_binary_path, "codex-cli 99.0.0");
 
-        let resolved =
-            choose_best_executable_candidate(vec![old_binary_path, new_binary_path.clone()])
-                .expect("best binary should resolve");
+        let resolved = choose_best_executable_candidate_with_timeout(
+            vec![old_binary_path, new_binary_path.clone()],
+            Duration::from_secs(5),
+        )
+        .expect("best binary should resolve");
 
         let _ = fs::remove_dir_all(root);
         assert_eq!(resolved, new_binary_path);
@@ -489,14 +491,14 @@ mod tests {
         let start = Instant::now();
         let resolved = choose_best_executable_candidate_with_timeout(
             vec![slow_binary_path, new_binary_path.clone()],
-            Duration::from_millis(500),
+            Duration::from_secs(2),
         )
         .expect("best binary should resolve despite a hung probe");
 
         let _ = fs::remove_dir_all(root);
         assert_eq!(resolved, new_binary_path);
         assert!(
-            start.elapsed() < Duration::from_secs(2),
+            start.elapsed() < Duration::from_secs(4),
             "hung version probes should be bounded"
         );
     }

@@ -12,17 +12,18 @@ use uuid::Uuid;
 
 use crate::domain::conversation::{
     ApprovalResponseInput, CollaborationModeOption, CommandApprovalDecisionInput,
-    ConversationApprovalKind, ConversationComposerSettings, ConversationErrorSnapshot,
-    ConversationEventPayload, ConversationImageAttachment, ConversationInteraction,
-    ConversationItem, ConversationItemStatus, ConversationMessageItem, ConversationRole,
-    ConversationStatus, ConversationTaskSnapshot, ConversationTaskStatus, ConversationTone,
-    ConversationToolItem, EnvironmentCapabilitiesSnapshot, FileChangeApprovalDecisionInput,
-    InputModality, ModelOption, PendingApprovalRequest, PendingUserInputOption,
-    PendingUserInputQuestion, PendingUserInputRequest, PermissionsApprovalDecisionInput,
-    PlanDecisionAction, ProposedPlanSnapshot, ProposedPlanStatus, ProposedPlanStep,
-    ProposedPlanStepStatus, ProviderOption, RespondToUserInputRequestInput, SubagentStatus,
-    SubagentThreadSnapshot, SubmitPlanDecisionInput, ThreadConversationOpenResponse,
-    ThreadConversationSnapshot, ThreadTokenUsageSnapshot, TokenUsageBreakdown,
+    ComposerMentionBindingInput, ComposerMentionBindingKind, ConversationApprovalKind,
+    ConversationComposerSettings, ConversationErrorSnapshot, ConversationEventPayload,
+    ConversationImageAttachment, ConversationInteraction, ConversationItem, ConversationItemStatus,
+    ConversationMessageItem, ConversationRole, ConversationStatus, ConversationTaskSnapshot,
+    ConversationTaskStatus, ConversationTone, ConversationToolItem,
+    EnvironmentCapabilitiesSnapshot, FileChangeApprovalDecisionInput, InputModality, ModelOption,
+    PendingApprovalRequest, PendingUserInputOption, PendingUserInputQuestion,
+    PendingUserInputRequest, PermissionsApprovalDecisionInput, PlanDecisionAction,
+    ProposedPlanSnapshot, ProposedPlanStatus, ProposedPlanStep, ProposedPlanStepStatus,
+    ProviderOption, RespondToUserInputRequestInput, SubagentStatus, SubagentThreadSnapshot,
+    SubmitPlanDecisionInput, ThreadConversationOpenResponse, ThreadConversationSnapshot,
+    ThreadTokenUsageSnapshot, TokenUsageBreakdown,
 };
 use crate::domain::settings::{
     ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort, ServiceTier,
@@ -559,7 +560,7 @@ impl ClaudeRuntimeSession {
         context: ThreadRuntimeContext,
         text: String,
         images: Vec<ConversationImageAttachment>,
-        _mention_bindings: Vec<crate::domain::conversation::ComposerMentionBindingInput>,
+        mention_bindings: Vec<ComposerMentionBindingInput>,
         show_user_message: bool,
         accept_plan_markdown: bool,
     ) -> AppResult<SendMessageResult> {
@@ -600,6 +601,7 @@ impl ClaudeRuntimeSession {
                 ));
             }
             let rollback_snapshot = snapshot.clone();
+            let visible_mention_bindings = visible_claude_mention_bindings(&mention_bindings);
             snapshot.status = ConversationStatus::Running;
             snapshot.active_turn_id = Some(active_turn_id.clone());
             snapshot.error = None;
@@ -617,6 +619,7 @@ impl ClaudeRuntimeSession {
                         } else {
                             Some(images.clone())
                         },
+                        mention_bindings: visible_mention_bindings,
                         is_streaming: false,
                     }));
             }
@@ -1388,6 +1391,17 @@ fn validate_claude_message_content(
     Ok(())
 }
 
+fn visible_claude_mention_bindings(
+    mention_bindings: &[ComposerMentionBindingInput],
+) -> Option<Vec<ComposerMentionBindingInput>> {
+    let file_bindings = mention_bindings
+        .iter()
+        .filter(|binding| matches!(binding.kind, ComposerMentionBindingKind::File))
+        .cloned()
+        .collect::<Vec<_>>();
+    (!file_bindings.is_empty()).then_some(file_bindings)
+}
+
 fn changed_provider_thread_id(current: Option<&str>, next: Option<String>) -> Option<String> {
     next.filter(|id| current != Some(id.as_str()))
 }
@@ -1423,6 +1437,7 @@ fn snapshot_from_claude_messages(
                 role: message.role,
                 text: message.text,
                 images: message.images,
+                mention_bindings: None,
                 is_streaming: false,
             })
         })
@@ -1486,6 +1501,7 @@ fn merge_claude_messages(
                 role: message.role,
                 text: message.text,
                 images: message.images,
+                mention_bindings: None,
                 is_streaming: false,
             }));
     }
@@ -2238,6 +2254,7 @@ fn append_assistant_delta(
             role: ConversationRole::Assistant,
             text: delta.to_string(),
             images: None,
+            mention_bindings: None,
             is_streaming: true,
         }));
 }
@@ -2826,6 +2843,19 @@ mod tests {
         }
     }
 
+    fn first_user_message(snapshot: &ThreadConversationSnapshot) -> &ConversationMessageItem {
+        snapshot
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ConversationItem::Message(message) if message.role == ConversationRole::User => {
+                    Some(message)
+                }
+                _ => None,
+            })
+            .expect("local user message should be projected")
+    }
+
     #[test]
     fn claude_message_validation_allows_image_only_prompts() {
         let images = vec![ConversationImageAttachment::Image {
@@ -2878,6 +2908,43 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-sent","m
             Some("provider-sent")
         );
         assert_eq!(result.snapshot.status, ConversationStatus::Completed);
+        let user_message = first_user_message(&result.snapshot);
+        assert_eq!(user_message.mention_bindings, None);
+    }
+
+    #[tokio::test]
+    async fn claude_send_preserves_file_mention_bindings_for_display() {
+        let _guard = claude_worker_env_lock().lock().await;
+        let worker_path =
+            std::env::temp_dir().join(format!("skein-claude-send-worker-{}.sh", Uuid::now_v7()));
+        std::fs::write(
+            &worker_path,
+            r#"read line
+printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-sent","messages":[],"messagesAuthoritative":false,"planMarkdown":null}}'
+"#,
+        )
+        .expect("fake Claude worker should be written");
+        let _worker_path = EnvVarOverride::set(CLAUDE_WORKER_PATH_ENV, &worker_path);
+        let _node_executable = EnvVarOverride::set(NODE_EXECUTABLE_ENV, "/bin/sh");
+        let session = ClaudeRuntimeSession::new(EventSink::noop(), "test".to_string());
+        let binding = crate::domain::conversation::ComposerMentionBindingInput {
+            mention: "src/main.ts".to_string(),
+            kind: crate::domain::conversation::ComposerMentionBindingKind::File,
+            path: "src/main.ts".to_string(),
+        };
+
+        let result = session
+            .send_message(
+                context(),
+                "Review @src/main.ts".to_string(),
+                Vec::new(),
+                vec![binding.clone()],
+            )
+            .await
+            .expect("Claude send should preserve file mention bindings");
+
+        let user_message = first_user_message(&result.snapshot);
+        assert_eq!(user_message.mention_bindings, Some(vec![binding]));
     }
 
     #[test]
@@ -2925,6 +2992,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                 role: ConversationRole::Assistant,
                 text: "stale cached answer".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }));
         session
@@ -3155,6 +3223,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                 role: ConversationRole::User,
                 text: "Fais un plan.".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }));
         snapshot.items.push(ConversationItem::System(
@@ -3183,6 +3252,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                 role: ConversationRole::Assistant,
                 text: "Done.".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: true,
             }));
 
@@ -3210,6 +3280,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                 role: ConversationRole::Assistant,
                 text: "Done".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }));
 
@@ -3249,6 +3320,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                 role: ConversationRole::User,
                 text: "Thanks".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }));
         snapshot
@@ -3259,6 +3331,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                 role: ConversationRole::Assistant,
                 text: "Done".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: true,
             }));
 
@@ -3965,6 +4038,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                 role: ConversationRole::User,
                 text: plan_approval_message().to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }),
         ];
@@ -4061,6 +4135,7 @@ printf '%s\n' '{"id":1,"ok":true,"result":{"providerThreadId":"provider-refreshe
                 role: ConversationRole::User,
                 text: visible_text.to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }));
 

@@ -36,7 +36,6 @@ pub struct SendThreadMessageInput {
 #[serde(rename_all = "camelCase")]
 pub struct SearchComposerFilesInput {
     pub target: ComposerTarget,
-    pub request_key: String,
     pub query: String,
     pub limit: Option<usize>,
 }
@@ -122,6 +121,7 @@ fn empty_snapshot_for_context(context: &ThreadRuntimeContext) -> ThreadConversat
                         role: message.role,
                         text: message.text.clone(),
                         images: message.images.clone(),
+                        mention_bindings: None,
                         is_streaming: false,
                     })
                 })
@@ -153,12 +153,11 @@ pub async fn search_composer_files_impl(
     input: SearchComposerFilesInput,
 ) -> Result<Vec<ComposerFileSearchResult>, CommandError> {
     validate_composer_target(&input.target)?;
-    validate_non_blank_request_key(&input.request_key)?;
     let context = state.workspace.composer_target_context(&input.target)?;
     let limit = input.limit.unwrap_or(50).min(200);
     Ok(state
         .runtime
-        .search_composer_files(context, &input.request_key, input.query, limit)
+        .search_composer_files(context, input.query, limit)
         .await?)
 }
 
@@ -661,14 +660,6 @@ fn validate_composer_target(target: &ComposerTarget) -> Result<(), CommandError>
     Ok(())
 }
 
-fn validate_non_blank_request_key(request_key: &str) -> Result<(), CommandError> {
-    if request_key.trim().is_empty() {
-        return Err(AppError::Validation("Request key cannot be empty.".to_string()).into());
-    }
-
-    Ok(())
-}
-
 fn emit_workspace_event(events: &EventSink, payload: WorkspaceEvent) {
     events.emit(WORKSPACE_EVENT_NAME, payload);
 }
@@ -688,8 +679,8 @@ where
 mod tests {
     use super::{
         first_prompt_auto_rename_timing, handoff_bootstrap_status_is_complete,
-        validate_composer_target, validate_non_blank_request_key, validate_non_blank_thread_id,
-        validate_thread_composer_draft, FirstPromptAutoRenameTiming,
+        validate_composer_target, validate_non_blank_thread_id, validate_thread_composer_draft,
+        FirstPromptAutoRenameTiming,
     };
     use crate::domain::conversation::{
         ComposerDraftMentionBinding, ComposerMentionBindingKind, ComposerTarget,
@@ -740,15 +731,6 @@ mod tests {
 
         assert_eq!(error.code, "validation_error");
         assert!(error.message.contains("Environment id cannot be empty"));
-    }
-
-    #[test]
-    fn request_key_rejects_blank_values() {
-        let error =
-            validate_non_blank_request_key("   ").expect_err("blank request key should fail");
-
-        assert_eq!(error.code, "validation_error");
-        assert!(error.message.contains("Request key cannot be empty"));
     }
 
     #[test]

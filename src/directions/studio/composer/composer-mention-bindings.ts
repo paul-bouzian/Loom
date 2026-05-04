@@ -117,9 +117,10 @@ function commonSuffixLength(left: string, right: string, prefixLength: number) {
 }
 
 function isValidMentionBinding(text: string, binding: ComposerDraftMentionBinding) {
+  const prefix = binding.kind === "file" ? "@" : "$";
   if (
     text.slice(binding.start, binding.end).toLowerCase() !==
-    `$${binding.mention}`.toLowerCase()
+    `${prefix}${binding.mention}`.toLowerCase()
   ) {
     return false;
   }
@@ -130,7 +131,14 @@ function isValidMentionBinding(text: string, binding: ComposerDraftMentionBindin
   }
 
   const nextCharacter = text[binding.end] ?? "";
-  if (nextCharacter && /[A-Za-z0-9_:-]/.test(nextCharacter)) {
+  if (nextCharacter && /[A-Za-z0-9_:/-]/.test(nextCharacter)) {
+    return false;
+  }
+  if (
+    binding.kind === "file" &&
+    nextCharacter === "." &&
+    /[A-Za-z0-9_-]/.test(text[binding.end + 1] ?? "")
+  ) {
     return false;
   }
 

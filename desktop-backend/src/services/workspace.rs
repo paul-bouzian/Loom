@@ -1797,13 +1797,22 @@ impl WorkspaceService {
             ComposerTarget::Thread { thread_id } => {
                 validate_non_blank_id(thread_id, "Thread")?;
                 let context = self.thread_runtime_context(thread_id)?;
+                let connection = self.database.open()?;
+                let environment_kind = connection
+                    .query_row(
+                        "SELECT kind FROM environments WHERE id = ?1",
+                        params![&context.environment_id],
+                        |row| environment_kind_from_str(&row.get::<_, String>(0)?),
+                    )
+                    .optional()?
+                    .ok_or_else(|| AppError::NotFound("Environment not found.".to_string()))?;
                 Ok(ComposerTargetContext {
                     environment_id: context.environment_id,
                     environment_path: context.environment_path,
                     provider: context.provider,
                     codex_thread_id: context.codex_thread_id,
                     codex_binary_path: context.codex_binary_path,
-                    file_search_enabled: true,
+                    file_search_enabled: !matches!(environment_kind, EnvironmentKind::Chat),
                 })
             }
             ComposerTarget::Environment {
@@ -4334,6 +4343,7 @@ mod tests {
                 role: ConversationRole::User,
                 text: "salut".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }),
             ConversationItem::Message(ConversationMessageItem {
@@ -4342,6 +4352,7 @@ mod tests {
                 role: ConversationRole::Assistant,
                 text: "Salut !".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }),
         ];
@@ -4414,6 +4425,7 @@ mod tests {
                 role: ConversationRole::User,
                 text: "salut".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }));
 
@@ -4504,6 +4516,7 @@ mod tests {
                 images: Some(vec![ConversationImageAttachment::LocalImage {
                     path: "/tmp/skein-image.png".to_string(),
                 }]),
+                mention_bindings: None,
                 is_streaming: false,
             }));
 
@@ -4782,6 +4795,22 @@ mod tests {
 
         assert_eq!(context.environment_id, CHAT_WORKSPACE_PROJECT_ID);
         assert!(!context.file_search_enabled);
+
+        let chat = harness
+            .service
+            .create_chat_thread(CreateChatThreadRequest {
+                title: Some("Standalone chat".to_string()),
+                overrides: None,
+            })
+            .expect("chat thread should be created");
+        let thread_context = harness
+            .service
+            .composer_target_context(&ComposerTarget::Thread {
+                thread_id: chat.thread.id,
+            })
+            .expect("chat thread target should resolve");
+
+        assert!(!thread_context.file_search_enabled);
     }
 
     #[test]

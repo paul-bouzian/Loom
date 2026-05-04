@@ -311,26 +311,6 @@ pub struct AppsListResponse {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum FuzzyFileSearchMatchTypeWire {
-    File,
-    Directory,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FuzzyFileSearchResultWire {
-    pub path: String,
-    pub match_type: FuzzyFileSearchMatchTypeWire,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FuzzyFileSearchResponse {
-    pub files: Vec<FuzzyFileSearchResultWire>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutgoingTextElement {
     pub start: usize,
@@ -1520,6 +1500,7 @@ pub fn normalize_item(turn_id: Option<&str>, value: &Value) -> Option<Conversati
                 role: ConversationRole::User,
                 text,
                 images: (!images.is_empty()).then_some(images),
+                mention_bindings: None,
                 is_streaming: false,
             }))
         }
@@ -1534,6 +1515,7 @@ pub fn normalize_item(turn_id: Option<&str>, value: &Value) -> Option<Conversati
                 role: ConversationRole::Assistant,
                 text,
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }))
         }
@@ -2178,6 +2160,7 @@ pub fn append_agent_delta(
         role: ConversationRole::Assistant,
         text: delta.to_string(),
         images: None,
+        mention_bindings: None,
         is_streaming: true,
     }));
 }
@@ -2360,6 +2343,9 @@ fn merge_conversation_items(
                 incoming_message.text
             },
             images: incoming_message.images.or(existing_message.images),
+            mention_bindings: incoming_message
+                .mention_bindings
+                .or(existing_message.mention_bindings),
             is_streaming: incoming_message.is_streaming,
         }),
         (ConversationItem::Tool(existing_tool), ConversationItem::Tool(incoming_tool)) => {
@@ -2862,6 +2848,9 @@ fn merge_existing_with_persisted_item(
             role: existing_message.role,
             text: existing_message.text,
             images: existing_message.images.or(persisted_message.images),
+            mention_bindings: existing_message
+                .mention_bindings
+                .or(persisted_message.mention_bindings),
             is_streaming: existing_message.is_streaming,
         }),
         (
@@ -3254,6 +3243,7 @@ mod tests {
             role: ConversationRole::User,
             text: "Salut".to_string(),
             images: None,
+            mention_bindings: None,
             is_streaming: false,
         })];
 
@@ -3265,6 +3255,7 @@ mod tests {
                 role: ConversationRole::User,
                 text: "Salut".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }),
         );
@@ -3286,6 +3277,7 @@ mod tests {
             images: Some(vec![ConversationImageAttachment::LocalImage {
                 path: "/tmp/capture.png".to_string(),
             }]),
+            mention_bindings: None,
             is_streaming: false,
         })];
 
@@ -3299,6 +3291,7 @@ mod tests {
                 images: Some(vec![ConversationImageAttachment::Image {
                     url: "https://example.com/capture.png".to_string(),
                 }]),
+                mention_bindings: None,
                 is_streaming: false,
             }),
         );
@@ -3329,6 +3322,7 @@ mod tests {
             role: ConversationRole::User,
             text: visible_text.to_string(),
             images: None,
+            mention_bindings: None,
             is_streaming: false,
         })];
 
@@ -3373,6 +3367,7 @@ mod tests {
             role: ConversationRole::User,
             text: visible_text.to_string(),
             images: None,
+            mention_bindings: None,
             is_streaming: false,
         })];
 
@@ -3413,6 +3408,7 @@ mod tests {
             role: ConversationRole::Assistant,
             text: "Je cherche la météo pour demain à Bordeaux.".to_string(),
             images: None,
+            mention_bindings: None,
             is_streaming: false,
         })];
 
@@ -3424,6 +3420,7 @@ mod tests {
                 role: ConversationRole::Assistant,
                 text: "Old local projection".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             })],
         );
@@ -3445,6 +3442,7 @@ mod tests {
             role: ConversationRole::Assistant,
             text: "Image context".to_string(),
             images: None,
+            mention_bindings: None,
             is_streaming: false,
         })];
 
@@ -3458,6 +3456,7 @@ mod tests {
                 images: Some(vec![ConversationImageAttachment::Image {
                     url: "https://example.com/screenshot.png".to_string(),
                 }]),
+                mention_bindings: None,
                 is_streaming: false,
             })],
         );

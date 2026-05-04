@@ -5,6 +5,7 @@ import type {
   ProviderKind,
   ThreadComposerCatalog,
 } from "../../../lib/types";
+import { filePathDisplay } from "./file-path-display";
 
 export const PROMPT_PREFIX = "/prompts:";
 const TOKEN_BOUNDARY = /[\s([{'"`,.;:!?)}\]]/;
@@ -291,13 +292,23 @@ export function buildAutocompleteItems(
     return [...skills, ...apps];
   }
 
-  return filePaths.map((path) => ({
-    id: `file:${path}`,
-    group: "Files",
-    label: path,
-    insertText: `@${path}`,
-    appendSpace: true,
-  }));
+  return filePaths.map((path) => {
+    const display = filePathDisplay(path);
+    return {
+      id: `file:${path}`,
+      group: "Files",
+      label: display.label,
+      description: display.directory ?? undefined,
+      hint: "@",
+      insertText: `@${path}`,
+      appendSpace: true,
+      mentionBinding: {
+        mention: path,
+        kind: "file",
+        path,
+      },
+    };
+  });
 }
 
 function buildClaudeSlashAutocompleteItems(
@@ -382,11 +393,18 @@ export function decorateComposerText(
   const decorateAllProviderTokens = options.decorateAllProviderTokens === true;
   const decorateFileTokens = options.decorateFileTokens !== false;
   const decorateUnknownTokens = options.decorateUnknownTokens === true;
-  const mentionBindingMap = new Map(
-    (options.mentionBindings ?? []).map((binding) => [
-      binding.mention.toLowerCase(),
-      binding.kind,
-    ]),
+  const dollarMentionBindingMap = new Map(
+    (options.mentionBindings ?? [])
+      .filter(
+        (binding): binding is ComposerMentionBindingInput & { kind: "skill" | "app" } =>
+          binding.kind === "skill" || binding.kind === "app",
+      )
+      .map((binding) => [binding.mention.toLowerCase(), binding.kind]),
+  );
+  const fileMentionBindingSet = new Set(
+    (options.mentionBindings ?? [])
+      .filter((binding) => binding.kind === "file")
+      .map((binding) => binding.mention.toLowerCase()),
   );
   const promptMap = new Map(
     (catalog?.prompts ?? []).map((prompt) => [prompt.name, prompt]),
@@ -441,7 +459,7 @@ export function decorateComposerText(
   for (const token of collectSpecialTokens(text, "$", occupied)) {
     const resolved = resolveDollarMentionToken(
       token.text,
-      mentionBindingMap,
+      dollarMentionBindingMap,
       skillMap,
       appMap,
       decorateUnknownTokens,
@@ -455,14 +473,25 @@ export function decorateComposerText(
       });
     }
   }
-  const fileTokens: DecoratedToken[] = decorateFileTokens
-    ? collectSpecialTokens(text, "@", occupied).map((token) => ({
-        kind: "file",
-        text: token.text,
-        start: token.start,
-        end: token.end,
-      }))
-    : [];
+  const fileTokens: DecoratedToken[] = collectSpecialTokens(text, "@", occupied)
+    .flatMap((token) => {
+      const resolved = resolveFileMentionToken(
+        token.text,
+        fileMentionBindingSet,
+        decorateFileTokens,
+      );
+      if (!resolved) {
+        return [];
+      }
+      return [
+        {
+          kind: "file" as const,
+          text: resolved,
+          start: token.start,
+          end: token.start + resolved.length,
+        },
+      ];
+    });
   const tokens: DecoratedToken[] = [
     ...promptTokens,
     ...mentionTokens,
@@ -489,12 +518,13 @@ export function findComposerTokenDeletionRange(
   cursor: number,
   catalog: ThreadComposerCatalog | null,
   provider: ProviderKind = "codex",
+  options: DecorateComposerTextOptions = {},
 ) {
   if (cursor <= 0 || cursor > text.length) {
     return null;
   }
 
-  const segments = decorateComposerText(text, catalog, provider);
+  const segments = decorateComposerText(text, catalog, provider, options);
   for (const segment of segments) {
     if (segment.kind === "text") {
       continue;
@@ -694,6 +724,27 @@ function resolveDollarMentionToken(
     return { kind: "skill", text: trimmed };
   }
   return null;
+}
+
+function resolveFileMentionToken(
+  text: string,
+  fileMentionBindingSet: Set<string>,
+  decorateFileTokens: boolean,
+) {
+  const normalized = text.slice(1).toLowerCase();
+  if (fileMentionBindingSet.has(normalized)) {
+    return text;
+  }
+
+  const trimmed = trimTrailingTokenPunctuation(text);
+  if (
+    trimmed !== text &&
+    fileMentionBindingSet.has(trimmed.slice(1).toLowerCase())
+  ) {
+    return trimmed;
+  }
+
+  return decorateFileTokens && trimmed.length > 1 ? trimmed : null;
 }
 
 function lookupDollarMentionKind(

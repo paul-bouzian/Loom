@@ -104,6 +104,7 @@ mod tests {
             role: ConversationRole::Assistant,
             text: "Je cherche la météo.".to_string(),
             images: None,
+            mention_bindings: None,
             is_streaming: false,
         });
         let assistant_without_turn = ConversationItem::Message(ConversationMessageItem {
@@ -112,6 +113,7 @@ mod tests {
             role: ConversationRole::Assistant,
             text: "Réponse historique.".to_string(),
             images: None,
+            mention_bindings: None,
             is_streaming: false,
         });
         let user = ConversationItem::Message(ConversationMessageItem {
@@ -120,6 +122,7 @@ mod tests {
             role: ConversationRole::User,
             text: "Fais une recherche météo.".to_string(),
             images: None,
+            mention_bindings: None,
             is_streaming: false,
         });
 

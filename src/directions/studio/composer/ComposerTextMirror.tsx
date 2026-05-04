@@ -15,6 +15,7 @@ type Props = {
   cursorIndex: number | null;
   placeholder: string;
   provider: ProviderKind;
+  decorateFileTokens?: boolean;
   showCaret: boolean;
   scrollTop: number;
 };
@@ -29,6 +30,7 @@ export function ComposerTextMirror({
   draft,
   catalog,
   cursorIndex,
+  decorateFileTokens = true,
   placeholder,
   provider,
   showCaret,
@@ -92,6 +94,7 @@ export function ComposerTextMirror({
             text={draft}
             catalog={catalog}
             cursorIndex={cursorIndex}
+            decorateFileTokens={decorateFileTokens}
             provider={provider}
             keyPrefix="composer-mirror"
           />

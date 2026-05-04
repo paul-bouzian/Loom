@@ -226,7 +226,6 @@ export function getComposerCatalog(
 
 export function searchComposerFiles(input: {
   target: ComposerTarget;
-  requestKey: string;
   query: string;
   limit?: number;
 }): Promise<ComposerFileSearchResult[]> {

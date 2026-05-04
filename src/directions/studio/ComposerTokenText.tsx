@@ -15,6 +15,7 @@ import {
   type ComposerMirrorSegment,
   PROMPT_PREFIX,
 } from "./composer/composer-model";
+import { filePathDisplay } from "./composer/file-path-display";
 
 type ComposerTokenTextProps = {
   text: string;
@@ -154,9 +155,13 @@ function displayForComposerToken(
   }
 
   if (segment.kind === "file") {
+    const path = segment.text.startsWith("@")
+      ? segment.text.slice(1)
+      : segment.text;
+    const display = filePathDisplay(path, segment.text);
     return {
-      label: segment.text,
-      detail: null,
+      label: display.label,
+      detail: display.directory,
       tone: "file",
     };
   }

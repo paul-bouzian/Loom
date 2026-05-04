@@ -1556,6 +1556,13 @@ ol.tx-markdown__list {
   flex: 1;
 }
 
+.tx-composer-menu__status {
+  padding: var(--tx-space-sm);
+  color: var(--tx-text-muted);
+  font-size: var(--tx-text-sm);
+  line-height: 1.4;
+}
+
 /* ── Inline tokens ── */
 
 .tx-inline-token {

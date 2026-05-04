@@ -164,4 +164,52 @@ describe("composer-mention-bindings", () => {
       },
     ]);
   });
+
+  it("adds file autocomplete bindings with at-mention ranges", () => {
+    const item: ComposerAutocompleteItem = {
+      id: "file:src/main.ts",
+      group: "Files",
+      label: "main.ts",
+      insertText: "@src/main.ts",
+      appendSpace: true,
+      mentionBinding: {
+        mention: "src/main.ts",
+        kind: "file",
+        path: "src/main.ts",
+      },
+    };
+
+    const bindings = addComposerMentionBinding([], item, 7);
+
+    expect(prepareComposerMentionBindingsForSend("Review @src/main.ts", bindings)).toEqual([
+      {
+        mention: "src/main.ts",
+        kind: "file",
+        path: "src/main.ts",
+      },
+    ]);
+  });
+
+  it("drops stale file bindings when the selected path is extended", () => {
+    const bindings = [
+      {
+        mention: "src/main.ts",
+        kind: "file" as const,
+        path: "src/main.ts",
+        start: 7,
+        end: 19,
+      },
+    ];
+
+    expect(
+      prepareComposerMentionBindingsForSend(
+        "Review @src/main.ts.old",
+        rebaseComposerMentionBindings(
+          "Review @src/main.ts",
+          "Review @src/main.ts.old",
+          bindings,
+        ),
+      ),
+    ).toEqual([]);
+  });
 });

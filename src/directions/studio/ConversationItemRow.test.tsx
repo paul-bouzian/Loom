@@ -95,6 +95,28 @@ describe("ConversationItemRow", () => {
     expect(container.querySelector(".tx-inline-token--file")).toBeNull();
   });
 
+  it("renders selected user file mention bindings as file badges", () => {
+    render(
+      <ConversationItemRow
+        provider="codex"
+        item={messageItem({
+          id: "user-file-mention",
+          role: "user",
+          text: "Review @src/app.tsx.",
+          mentionBindings: [
+            { mention: "src/app.tsx", kind: "file", path: "src/app.tsx" },
+          ],
+        })}
+      />,
+    );
+
+    const badge = screen.getByText("app.tsx").closest(".tx-inline-token-badge");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveClass("tx-inline-token--file");
+    expect(badge).toHaveAttribute("title", "@src/app.tsx");
+    expect(screen.getByText("src")).toBeInTheDocument();
+  });
+
   it("renders Codex auto-review status and risk details", async () => {
     render(
       <ConversationItemRow
