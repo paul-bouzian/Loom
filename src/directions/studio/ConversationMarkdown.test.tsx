@@ -295,6 +295,16 @@ describe("ConversationMarkdown", () => {
     expect(container.textContent).toBe("Ignore [ratio](1/2) and keep it literal.");
   });
 
+  it("preserves label formatting when rendering unsupported links as literal text", () => {
+    const { container } = render(
+      <ConversationMarkdown markdown={"Ignore [**ratio**](1/2) and keep it literal."} />,
+    );
+
+    expect(screen.queryByRole("link", { name: "ratio" })).toBeNull();
+    expect(screen.getByText("ratio").tagName).toBe("STRONG");
+    expect(container.textContent).toBe("Ignore [ratio](1/2) and keep it literal.");
+  });
+
   it("renders GFM tables instead of collapsing table rows into a paragraph", () => {
     const { container } = render(
       <ConversationMarkdown
@@ -334,8 +344,14 @@ describe("ConversationMarkdown", () => {
     expect(container.querySelector(".contains-task-list")).not.toBeNull();
     expect(container.querySelector(".task-list-item")).not.toBeNull();
     expect(container.querySelector(".footnotes")).not.toBeNull();
-    expect(container.querySelector("[data-footnote-ref]")).not.toBeNull();
-    expect(container.querySelector("[data-footnote-backref]")).not.toBeNull();
+    expect(container.querySelector("#footnote-label")).toHaveClass("sr-only");
+    expect(container.querySelector("[data-footnote-ref]")).toHaveAttribute(
+      "aria-describedby",
+      "footnote-label",
+    );
+    expect(container.querySelector("[data-footnote-backref]")).toHaveAttribute(
+      "aria-label",
+    );
     expect(screen.getByText("Verified through GFM.")).toBeInTheDocument();
   });
 

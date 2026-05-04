@@ -33,7 +33,7 @@ type MarkdownNode = {
 };
 type MarkdownLinkAttributes = Pick<
   ComponentProps<"a">,
-  "aria-describedby" | "className" | "id" | "title"
+  "aria-describedby" | "aria-label" | "className" | "id" | "title"
 > & {
   "data-footnote-backref"?: string;
   "data-footnote-ref"?: string;
@@ -93,12 +93,18 @@ function createMarkdownComponents(
   onFileReferenceClick?: (target: FileReferenceTarget) => void,
 ): Components {
   return {
-    h1: ({ children }) => renderHeading(1, children),
-    h2: ({ children }) => renderHeading(2, children),
-    h3: ({ children }) => renderHeading(3, children),
-    h4: ({ children }) => renderHeading(4, children),
-    h5: ({ children }) => renderHeading(5, children),
-    h6: ({ children }) => renderHeading(6, children),
+    h1: ({ node, children, className, ...props }) =>
+      renderHeading(1, children, mergeClassNames(className, getNodeClassName(node)), props),
+    h2: ({ node, children, className, ...props }) =>
+      renderHeading(2, children, mergeClassNames(className, getNodeClassName(node)), props),
+    h3: ({ node, children, className, ...props }) =>
+      renderHeading(3, children, mergeClassNames(className, getNodeClassName(node)), props),
+    h4: ({ node, children, className, ...props }) =>
+      renderHeading(4, children, mergeClassNames(className, getNodeClassName(node)), props),
+    h5: ({ node, children, className, ...props }) =>
+      renderHeading(5, children, mergeClassNames(className, getNodeClassName(node)), props),
+    h6: ({ node, children, className, ...props }) =>
+      renderHeading(6, children, mergeClassNames(className, getNodeClassName(node)), props),
     p: ({ children }) => <p className="tx-markdown__paragraph">{children}</p>,
     ul: ({ node, children, className, ...props }) => (
       <ul
@@ -164,11 +170,11 @@ function createMarkdownComponents(
         />
       );
     },
-    a: ({ node, children, href, className }) =>
+    a: ({ node, children, href, className, ...props }) =>
       renderMarkdownLink(
         children,
         href,
-        buildMarkdownLinkAttributes(node, className),
+        buildMarkdownLinkAttributes(node, className, props),
         onFileReferenceClick,
       ),
     img: ({ alt }) => (
@@ -185,10 +191,21 @@ function createMarkdownComponents(
   };
 }
 
-function renderHeading(depth: 1 | 2 | 3 | 4 | 5 | 6, children: ReactNode) {
+function renderHeading(
+  depth: 1 | 2 | 3 | 4 | 5 | 6,
+  children: ReactNode,
+  className?: string,
+  props: Omit<ComponentProps<"h1">, "children" | "className"> = {},
+) {
   const HeadingTag = `h${depth}` as const;
   return (
-    <HeadingTag className={`tx-markdown__heading tx-markdown__heading--${depth}`}>
+    <HeadingTag
+      {...props}
+      className={mergeClassNames(
+        `tx-markdown__heading tx-markdown__heading--${depth}`,
+        className,
+      )}
+    >
       {children}
     </HeadingTag>
   );
@@ -211,7 +228,7 @@ function renderMarkdownLink(
   }
 
   if (literalHref !== null) {
-    return <>{`[${label}](${literalHref})`}</>;
+    return renderLiteralMarkdownLink(children, literalHref);
   }
 
   if (fileReference) {
@@ -244,7 +261,15 @@ function renderMarkdownLink(
     );
   }
 
-  return <>{`[${label}](${safeHref})`}</>;
+  return renderLiteralMarkdownLink(children, safeHref);
+}
+
+function renderLiteralMarkdownLink(children: ReactNode, href: string) {
+  return (
+    <>
+      [{children}]({href})
+    </>
+  );
 }
 
 function renderFileReferenceToken(
@@ -398,22 +423,23 @@ function nodeToPlainText(node: ReactNode): string {
 function buildMarkdownLinkAttributes(
   node: MarkdownNode | undefined,
   className: string | undefined,
+  attributes: Partial<MarkdownLinkAttributes> = {},
 ): MarkdownLinkAttributes {
   return {
-    "aria-describedby": getNodeStringProperty(node, "aria-describedby", "ariaDescribedBy"),
-    className: mergeClassNames(className, getNodeClassName(node)),
-    "data-footnote-backref": getNodeStringProperty(
-      node,
-      "data-footnote-backref",
-      "dataFootnoteBackref",
-    ),
-    "data-footnote-ref": getNodeStringProperty(
-      node,
-      "data-footnote-ref",
-      "dataFootnoteRef",
-    ),
-    id: getNodeStringProperty(node, "id"),
-    title: getNodeStringProperty(node, "title"),
+    "aria-describedby":
+      attributes["aria-describedby"] ??
+      getNodeStringProperty(node, "aria-describedby", "ariaDescribedBy"),
+    "aria-label":
+      attributes["aria-label"] ?? getNodeStringProperty(node, "aria-label", "ariaLabel"),
+    className: mergeClassNames(className, attributes.className, getNodeClassName(node)),
+    "data-footnote-backref":
+      attributes["data-footnote-backref"] ??
+      getNodeStringProperty(node, "data-footnote-backref", "dataFootnoteBackref"),
+    "data-footnote-ref":
+      attributes["data-footnote-ref"] ??
+      getNodeStringProperty(node, "data-footnote-ref", "dataFootnoteRef"),
+    id: attributes.id ?? getNodeStringProperty(node, "id"),
+    title: attributes.title ?? getNodeStringProperty(node, "title"),
   };
 }
 
