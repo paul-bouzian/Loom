@@ -1,9 +1,22 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { openExternalMock } from "../../test/desktop-mock";
 import { ConversationMarkdown } from "./ConversationMarkdown";
+
+const clipboardWriteTextMock = vi.fn();
+
+beforeEach(() => {
+  clipboardWriteTextMock.mockReset();
+  clipboardWriteTextMock.mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (...args: unknown[]) => clipboardWriteTextMock(...args),
+    },
+  });
+});
 
 describe("ConversationMarkdown", () => {
   it("renders markdown links as external links and opens them with the desktop opener", async () => {
@@ -237,5 +250,78 @@ describe("ConversationMarkdown", () => {
 
     expect(screen.queryByRole("link", { name: "ratio" })).toBeNull();
     expect(container.textContent).toBe("Ignore [ratio](1/2) and keep it literal.");
+  });
+
+  it("renders GFM tables instead of collapsing table rows into a paragraph", () => {
+    const { container } = render(
+      <ConversationMarkdown
+        markdown={[
+          "Comparison:",
+          "",
+          "| CV | OFF | ON | Delta | Statut |",
+          "| --- | ---: | ---: | ---: | --- |",
+          "| Abdu Yener | 91% | 87% | -4 | succeeded |",
+          "| Alessandro Amoretti | 79% | 85% | +6 | succeeded |",
+        ].join("\n")}
+      />,
+    );
+
+    const table = container.querySelector(".tx-markdown__table");
+    expect(table).not.toBeNull();
+    expect(screen.getByRole("columnheader", { name: "CV" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Alessandro Amoretti" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "+6" })).toHaveStyle({ textAlign: "right" });
+    expect(container.textContent).not.toContain("| --- |");
+  });
+
+  it("renders GFM task lists, strikethrough and footnotes", () => {
+    const { container } = render(
+      <ConversationMarkdown
+        markdown={
+          "- [x] Parsed tables\n- [ ] Review ~~legacy parser~~ output\n\nFootnote marker.[^1]\n\n[^1]: Verified through GFM."
+        }
+      />,
+    );
+
+    const checkboxes = container.querySelectorAll(".tx-markdown__task-checkbox");
+    expect(checkboxes).toHaveLength(2);
+    expect(checkboxes[0]).toBeChecked();
+    expect(checkboxes[1]).not.toBeChecked();
+    expect(screen.getByText("legacy parser").tagName).toBe("DEL");
+    expect(container.querySelector(".footnotes")).not.toBeNull();
+    expect(screen.getByText("Verified through GFM.")).toBeInTheDocument();
+  });
+
+  it("renders math while preserving literal dollars in prose", () => {
+    const { container } = render(
+      <ConversationMarkdown markdown={"Budget $400 and formula $x+1$.\n\n$$E=mc^2$$"} />,
+    );
+
+    expect(container.textContent).toContain("Budget $400");
+    expect(container.querySelectorAll(".katex")).not.toHaveLength(0);
+    expect(container.textContent).toContain("x+1");
+    expect(container.textContent).toContain("E=mc");
+  });
+
+  it("does not render markdown images as remote image elements", () => {
+    const { container } = render(
+      <ConversationMarkdown markdown={"![diagram](https://example.com/diagram.png)"} />,
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("[image: diagram]")).toHaveClass(
+      "tx-markdown__image-placeholder",
+    );
+  });
+
+  it("exposes a copy action for fenced code blocks", async () => {
+    render(
+      <ConversationMarkdown markdown={"```ts\nconst value = 1;\n```"} />,
+    );
+
+    expect(screen.getByText("ts")).toHaveClass("tx-markdown__code-language-label");
+    await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    expect(clipboardWriteTextMock).toHaveBeenCalledWith("const value = 1;");
   });
 });

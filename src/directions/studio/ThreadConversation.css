@@ -730,11 +730,29 @@ ol.tx-markdown__list {
   list-style-type: decimal;
 }
 
+.tx-markdown__list .tx-markdown__list {
+  margin-top: var(--tx-space-xs);
+}
+
+.tx-markdown__list .tx-markdown__paragraph {
+  display: inline;
+}
+
+.tx-markdown__list input[type="checkbox"] {
+  margin-right: var(--tx-space-xs);
+}
+
 .tx-markdown__blockquote {
   margin: 0;
   padding-left: var(--tx-space-md);
   border-left: 2px solid var(--tx-border-muted);
   color: var(--tx-text-secondary);
+}
+
+.tx-markdown__rule {
+  margin: var(--tx-space-md) 0;
+  border: 0;
+  border-top: 1px solid var(--tx-border-subtle);
 }
 
 .tx-markdown__code,
@@ -746,9 +764,15 @@ ol.tx-markdown__list {
   font-size: var(--tx-text-xs);
 }
 
+.tx-markdown__code-block-shell {
+  position: relative;
+  margin: 0;
+}
+
 .tx-markdown__code-block {
   margin: 0;
   padding: var(--tx-space-md);
+  padding-right: calc(var(--tx-space-md) + 28px);
   border-radius: var(--tx-radius-md);
   border: 1px solid var(--tx-border-subtle);
   background: color-mix(in srgb, #000000 15%, var(--tx-bg-base));
@@ -763,11 +787,141 @@ ol.tx-markdown__list {
   white-space: pre;
 }
 
+.tx-markdown__code-copy-button {
+  appearance: none;
+  position: absolute;
+  top: var(--tx-space-sm);
+  right: var(--tx-space-sm);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--tx-border-subtle);
+  border-radius: var(--tx-radius-sm);
+  background: color-mix(in srgb, var(--tx-bg-base) 88%, transparent);
+  color: var(--tx-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.tx-markdown__code-block-shell:hover .tx-markdown__code-copy-button,
+.tx-markdown__code-block-shell:focus-within .tx-markdown__code-copy-button {
+  opacity: 1;
+}
+
+.tx-markdown__code-copy-button:hover {
+  color: var(--tx-text-primary);
+  border-color: var(--tx-border-muted);
+}
+
+.tx-markdown__code-copy-button:focus-visible {
+  opacity: 1;
+  outline: 2px solid color-mix(in srgb, currentcolor 44%, transparent);
+  outline-offset: 2px;
+}
+
+.tx-markdown__code-language-label {
+  position: absolute;
+  top: var(--tx-space-sm);
+  right: calc(var(--tx-space-sm) + 30px);
+  z-index: 1;
+  color: var(--tx-text-secondary);
+  font-family: var(--tx-font-mono);
+  font-size: var(--tx-text-xs);
+  line-height: 24px;
+  pointer-events: none;
+}
+
 .tx-markdown__link {
   color: var(--tx-accent);
   text-decoration: underline;
   text-underline-offset: 3px;
   text-decoration-color: color-mix(in srgb, var(--tx-accent) 40%, transparent);
+}
+
+.tx-markdown__table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--tx-border-subtle);
+  border-radius: var(--tx-radius-md);
+}
+
+.tx-markdown__table {
+  width: 100%;
+  min-width: max-content;
+  border-collapse: collapse;
+  color: var(--tx-text-primary);
+  font-size: var(--tx-text-sm);
+}
+
+.tx-markdown__table-cell {
+  padding: var(--tx-space-xs) var(--tx-space-sm);
+  border-right: 1px solid var(--tx-border-subtle);
+  border-bottom: 1px solid var(--tx-border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+
+.tx-markdown__table-cell:last-child {
+  border-right: 0;
+}
+
+.tx-markdown__table tr:last-child > .tx-markdown__table-cell {
+  border-bottom: 0;
+}
+
+.tx-markdown__table-cell--header {
+  background: color-mix(in srgb, var(--tx-bg-hover) 70%, transparent);
+  font-weight: var(--tx-weight-semibold);
+}
+
+.tx-markdown__task-checkbox {
+  accent-color: var(--tx-accent);
+  transform: translateY(1px);
+}
+
+.tx-markdown__delete {
+  color: var(--tx-text-secondary);
+}
+
+.tx-markdown__image-placeholder {
+  color: var(--tx-text-secondary);
+  font-family: var(--tx-font-mono);
+  font-size: var(--tx-text-xs);
+}
+
+.tx-markdown .katex,
+.tx-markdown .katex * {
+  color: inherit;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.tx-markdown .katex-display {
+  max-width: 100%;
+  margin: var(--tx-space-sm) 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: var(--tx-space-xs);
+  scrollbar-width: thin;
+}
+
+.tx-markdown .footnotes {
+  margin-top: var(--tx-space-md);
+  padding-top: var(--tx-space-sm);
+  border-top: 1px solid var(--tx-border-subtle);
+  color: var(--tx-text-secondary);
+  font-size: var(--tx-text-xs);
+}
+
+.tx-markdown .footnotes ol {
+  padding-left: var(--tx-space-lg);
 }
 
 .tx-markdown__file-ref {

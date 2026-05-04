@@ -1,14 +1,25 @@
-import { Fragment, type ReactNode } from "react";
 import {
-  isWindowsAbsolutePath,
+  Children,
+  isValidElement,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
+import type { Components } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+
+import { CheckIcon, CopyIcon } from "../../shared/Icons";
+import {
   parseFileReferenceTarget,
   type FileReferenceTarget,
 } from "./conversation-file-references";
-import {
-  handleExternalLinkClick,
-  isValidExternalUrl,
-  renderTextWithExternalLinks,
-} from "./conversation-links";
+import { handleExternalLinkClick, isValidExternalUrl } from "./conversation-links";
 
 type Props = {
   markdown: string;
@@ -16,622 +27,686 @@ type Props = {
   onFileReferenceClick?: (target: FileReferenceTarget) => void;
 };
 
-type InlineRenderOptions = {
-  linkifyPlainText?: boolean;
-  onFileReferenceClick?: (target: FileReferenceTarget) => void;
-};
+const MARKDOWN_REMARK_PLUGINS = [
+  remarkGfm,
+  [remarkMath, { singleDollarTextMath: true }],
+] satisfies NonNullable<ComponentProps<typeof ReactMarkdown>["remarkPlugins"]>;
+const MARKDOWN_REHYPE_PLUGINS = [
+  [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
+] satisfies NonNullable<ComponentProps<typeof ReactMarkdown>["rehypePlugins"]>;
 
-type HeadingDepth = 1 | 2 | 3 | 4 | 5 | 6;
+type TextTransform = (value: string) => string;
 
-type MarkdownBlock =
-  | { kind: "heading"; depth: HeadingDepth; text: string }
-  | { kind: "paragraph"; text: string }
-  | { kind: "unorderedList"; items: string[] }
-  | { kind: "orderedList"; items: string[] }
-  | { kind: "blockquote"; text: string }
-  | { kind: "codeBlock"; code: string };
+const CODE_FENCE_LANGUAGE_PATTERN = /(?:^|\s)language-([^\s]+)/;
+const ESCAPED_MARKDOWN_DOLLAR = "\\$";
+const FILE_REFERENCE_HREF_PREFIX = "https://skein.local/__file_reference__/";
+const LITERAL_LINK_HREF_PREFIX = "https://skein.local/__literal_link__/";
+const INLINE_MATH_HINT_PATTERN = /[\\^_=+\-*/<>()[\]{}]/;
+const ALL_CAPS_DOLLAR_IDENTIFIER_PATTERN = /^[A-Z][A-Z0-9_]{1,31}$/;
 
-type InlineTokenMatch =
-  | {
-      kind: "code" | "strong" | "emphasis";
-      start: number;
-      end: number;
-      text: string;
-    }
-  | {
-      kind: "externalLink";
-      start: number;
-      end: number;
-      label: string;
-      href: string;
-    }
-  | {
-      kind: "fileReference";
-      start: number;
-      end: number;
-      label: string;
-      target: FileReferenceTarget;
-    };
-
-const FENCE_PATTERN = /^```([a-zA-Z0-9_+-]+)?\s*$/;
-const HEADING_PATTERN = /^(#{1,6})\s+(.+)$/;
-const UNORDERED_LIST_PATTERN = /^[-*]\s+(.*)$/;
-const ORDERED_LIST_PATTERN = /^\d+\.\s+(.*)$/;
-const BLOCKQUOTE_PATTERN = /^>\s?(.*)$/;
 export function ConversationMarkdown({
   markdown,
   className,
   onFileReferenceClick,
 }: Props) {
-  const blocks = parseMarkdownBlocks(markdown);
   const classes = ["tx-markdown", className].filter(Boolean).join(" ");
-  const inlineOptions = { onFileReferenceClick };
+  const normalizedMarkdown = useMemo(
+    () => normalizeMarkdownLinkTargets(protectLiteralMarkdownDollars(markdown)),
+    [markdown],
+  );
+  const components = useMemo<Components>(
+    () => createMarkdownComponents(onFileReferenceClick),
+    [onFileReferenceClick],
+  );
 
   return (
     <div className={classes}>
-      {blocks.map((block, index) => renderBlock(block, index, inlineOptions))}
+      <ReactMarkdown
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        components={components}
+        urlTransform={markdownUrlTransform}
+      >
+        {normalizedMarkdown}
+      </ReactMarkdown>
     </div>
   );
 }
 
-function renderBlock(
-  block: MarkdownBlock,
-  index: number,
-  inlineOptions: InlineRenderOptions,
-) {
-  if (block.kind === "heading") {
-    const HeadingTag = headingTagForDepth(block.depth);
+function createMarkdownComponents(
+  onFileReferenceClick?: (target: FileReferenceTarget) => void,
+): Components {
+  return {
+    h1: ({ children }) => renderHeading(1, children),
+    h2: ({ children }) => renderHeading(2, children),
+    h3: ({ children }) => renderHeading(3, children),
+    h4: ({ children }) => renderHeading(4, children),
+    h5: ({ children }) => renderHeading(5, children),
+    h6: ({ children }) => renderHeading(6, children),
+    p: ({ children }) => <p className="tx-markdown__paragraph">{children}</p>,
+    ul: ({ children }) => <ul className="tx-markdown__list">{children}</ul>,
+    ol: ({ children }) => <ol className="tx-markdown__list">{children}</ol>,
+    blockquote: ({ children }) => (
+      <blockquote className="tx-markdown__blockquote">{children}</blockquote>
+    ),
+    hr: () => <hr className="tx-markdown__rule" />,
+    table: ({ children }) => (
+      <div className="tx-markdown__table-scroll">
+        <table className="tx-markdown__table">{children}</table>
+      </div>
+    ),
+    th: ({ children, style }) => (
+      <th className="tx-markdown__table-cell tx-markdown__table-cell--header" style={style}>
+        {children}
+      </th>
+    ),
+    td: ({ children, style }) => (
+      <td className="tx-markdown__table-cell" style={style}>
+        {children}
+      </td>
+    ),
+    del: ({ children }) => <del className="tx-markdown__delete">{children}</del>,
+    input: ({ type, checked }) => {
+      if (type !== "checkbox") {
+        return <input type={type} disabled readOnly />;
+      }
+      return (
+        <input
+          type="checkbox"
+          checked={Boolean(checked)}
+          className="tx-markdown__task-checkbox"
+          disabled
+          readOnly
+        />
+      );
+    },
+    a: ({ children, href }) =>
+      renderMarkdownLink(children, href, onFileReferenceClick),
+    img: ({ alt }) => (
+      <span className="tx-markdown__image-placeholder">
+        {alt ? `[image: ${alt}]` : "[image]"}
+      </span>
+    ),
+    code: ({ children, className }) => (
+      <code className={className ? `tx-markdown__code ${className}` : "tx-markdown__code"}>
+        {children}
+      </code>
+    ),
+    pre: ({ children }) => renderCodeBlock(children),
+  };
+}
 
+function renderHeading(depth: 1 | 2 | 3 | 4 | 5 | 6, children: ReactNode) {
+  const HeadingTag = `h${depth}` as const;
+  return (
+    <HeadingTag className={`tx-markdown__heading tx-markdown__heading--${depth}`}>
+      {children}
+    </HeadingTag>
+  );
+}
+
+function renderMarkdownLink(
+  children: ReactNode,
+  href: string | undefined,
+  onFileReferenceClick?: (target: FileReferenceTarget) => void,
+) {
+  const safeHref = href ?? "";
+  const fileReferenceHref = decodePlaceholderHref(safeHref, FILE_REFERENCE_HREF_PREFIX);
+  const literalHref = decodePlaceholderHref(safeHref, LITERAL_LINK_HREF_PREFIX);
+  const label = nodeToPlainText(children);
+  const fileReference = parseFileReferenceTarget(fileReferenceHref ?? safeHref);
+
+  if (fileReferenceHref && fileReference) {
+    return renderFileReferenceToken(children, label, fileReference, onFileReferenceClick);
+  }
+
+  if (literalHref !== null) {
+    return <>{`[${label}](${literalHref})`}</>;
+  }
+
+  if (fileReference) {
+    return renderFileReferenceToken(children, label, fileReference, onFileReferenceClick);
+  }
+
+  if (safeHref.startsWith("#")) {
     return (
-      <HeadingTag
-        key={`${block.kind}-${index}`}
-        className={`tx-markdown__heading tx-markdown__heading--${block.depth}`}
+      <a className="tx-markdown__link" href={safeHref}>
+        {children}
+      </a>
+    );
+  }
+
+  if (isValidExternalUrl(safeHref)) {
+    return (
+      <a
+        className="tx-markdown__link"
+        href={safeHref}
+        rel="noreferrer"
+        onClick={(event) => handleExternalLinkClick(event, safeHref)}
       >
-        {renderInlineMarkdown(block.text, `${block.kind}-${index}`, inlineOptions)}
-      </HeadingTag>
+        {children}
+      </a>
     );
   }
 
-  if (block.kind === "unorderedList") {
-    return (
-      <ul key={`${block.kind}-${index}`} className="tx-markdown__list">
-        {block.items.map((item, itemIndex) => (
-          <li key={`${block.kind}-${index}-${itemIndex}`}>
-            {renderInlineMarkdown(item, `${block.kind}-${index}-${itemIndex}`, inlineOptions)}
-          </li>
-        ))}
-      </ul>
-    );
-  }
-
-  if (block.kind === "orderedList") {
-    return (
-      <ol key={`${block.kind}-${index}`} className="tx-markdown__list">
-        {block.items.map((item, itemIndex) => (
-          <li key={`${block.kind}-${index}-${itemIndex}`}>
-            {renderInlineMarkdown(item, `${block.kind}-${index}-${itemIndex}`, inlineOptions)}
-          </li>
-        ))}
-      </ol>
-    );
-  }
-
-  if (block.kind === "blockquote") {
-    return (
-      <blockquote key={`${block.kind}-${index}`} className="tx-markdown__blockquote">
-        {renderInlineMarkdown(block.text, `${block.kind}-${index}`, inlineOptions)}
-      </blockquote>
-    );
-  }
-
-  if (block.kind === "codeBlock") {
-    return (
-      <pre key={`${block.kind}-${index}`} className="tx-markdown__code-block">
-        <code>{block.code}</code>
-      </pre>
-    );
-  }
-
-  return (
-    <p key={`${block.kind}-${index}`} className="tx-markdown__paragraph">
-      {renderInlineMarkdown(block.text, `${block.kind}-${index}`, inlineOptions)}
-    </p>
-  );
-}
-
-function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
-  const lines = markdown.split(/\r?\n/);
-  const blocks: MarkdownBlock[] = [];
-  let index = 0;
-
-  while (index < lines.length) {
-    const currentLine = lines[index] ?? "";
-    const trimmed = currentLine.trim();
-
-    if (!trimmed) {
-      index += 1;
-      continue;
-    }
-
-    if (FENCE_PATTERN.test(trimmed)) {
-      const [codeBlock, nextIndex] = consumeCodeBlock(lines, index);
-      blocks.push(codeBlock);
-      index = nextIndex;
-      continue;
-    }
-
-    const heading = trimmed.match(HEADING_PATTERN);
-    if (heading) {
-      blocks.push({
-        kind: "heading",
-        depth: Math.min(heading[1].length, 6) as HeadingDepth,
-        text: heading[2].trim(),
-      });
-      index += 1;
-      continue;
-    }
-
-    if (UNORDERED_LIST_PATTERN.test(trimmed)) {
-      const [items, nextIndex] = consumeListItems(lines, index, UNORDERED_LIST_PATTERN);
-      if (items.length > 0) {
-        blocks.push({ kind: "unorderedList", items });
-      }
-      index = nextIndex;
-      continue;
-    }
-
-    if (ORDERED_LIST_PATTERN.test(trimmed)) {
-      const [items, nextIndex] = consumeListItems(lines, index, ORDERED_LIST_PATTERN);
-      if (items.length > 0) {
-        blocks.push({ kind: "orderedList", items });
-      }
-      index = nextIndex;
-      continue;
-    }
-
-    if (BLOCKQUOTE_PATTERN.test(trimmed)) {
-      const [text, nextIndex] = consumeBlockquote(lines, index);
-      blocks.push({ kind: "blockquote", text });
-      index = nextIndex;
-      continue;
-    }
-
-    const [text, nextIndex] = consumeParagraph(lines, index);
-    blocks.push({ kind: "paragraph", text });
-    index = nextIndex;
-  }
-
-  return blocks;
-}
-
-function consumeCodeBlock(lines: string[], startIndex: number) {
-  const codeLines: string[] = [];
-  let index = startIndex + 1;
-
-  while (index < lines.length) {
-    const candidate = lines[index] ?? "";
-    if (FENCE_PATTERN.test(candidate.trim())) {
-      return [
-        {
-          kind: "codeBlock",
-          code: codeLines.join("\n"),
-        } satisfies MarkdownBlock,
-        index + 1,
-      ] as const;
-    }
-    codeLines.push(candidate);
-    index += 1;
-  }
-
-  return [
-    {
-      kind: "codeBlock",
-      code: codeLines.join("\n"),
-    } satisfies MarkdownBlock,
-    index,
-  ] as const;
-}
-
-function consumeListItems(lines: string[], startIndex: number, pattern: RegExp) {
-  const items: string[] = [];
-  let index = startIndex;
-
-  while (index < lines.length) {
-    const candidate = lines[index]?.trim() ?? "";
-    const match = candidate.match(pattern);
-    if (!match) {
-      break;
-    }
-
-    const item = match[1]?.trim() ?? "";
-    if (item) {
-      items.push(item);
-    }
-    index += 1;
-  }
-
-  return [items, index] as const;
-}
-
-function consumeBlockquote(lines: string[], startIndex: number) {
-  const items: string[] = [];
-  let index = startIndex;
-
-  while (index < lines.length) {
-    const candidate = lines[index]?.trim() ?? "";
-    const match = candidate.match(BLOCKQUOTE_PATTERN);
-    if (!match) {
-      break;
-    }
-    const item = match[1]?.trim() ?? "";
-    if (item) {
-      items.push(item);
-    }
-    index += 1;
-  }
-
-  return [items.join(" "), index] as const;
-}
-
-function consumeParagraph(lines: string[], startIndex: number) {
-  const paragraphLines: string[] = [];
-  let index = startIndex;
-
-  while (index < lines.length) {
-    const candidate = lines[index] ?? "";
-    const trimmed = candidate.trim();
-    if (!trimmed || isBlockStart(trimmed)) {
-      break;
-    }
-    paragraphLines.push(trimmed);
-    index += 1;
-  }
-
-  return [paragraphLines.join(" "), index] as const;
-}
-
-function isBlockStart(trimmedLine: string) {
-  return (
-    FENCE_PATTERN.test(trimmedLine) ||
-    HEADING_PATTERN.test(trimmedLine) ||
-    UNORDERED_LIST_PATTERN.test(trimmedLine) ||
-    ORDERED_LIST_PATTERN.test(trimmedLine) ||
-    BLOCKQUOTE_PATTERN.test(trimmedLine)
-  );
-}
-
-function headingTagForDepth(depth: HeadingDepth) {
-  switch (depth) {
-    case 1:
-      return "h1";
-    case 2:
-      return "h2";
-    case 3:
-      return "h3";
-    case 4:
-      return "h4";
-    case 5:
-      return "h5";
-    default:
-      return "h6";
-  }
-}
-
-function renderInlineMarkdown(
-  text: string,
-  keyPrefix: string,
-  options: InlineRenderOptions = {},
-) {
-  if (!text) {
-    return null;
-  }
-
-  const { linkifyPlainText = true, onFileReferenceClick } = options;
-  const nodes: ReactNode[] = [];
-  let cursor = 0;
-
-  while (cursor < text.length) {
-    const token = findNextInlineToken(text, cursor);
-    if (!token) {
-      nodes.push(
-        ...renderPlainTextSegment(
-          text.slice(cursor),
-          `${keyPrefix}-text-${cursor}`,
-          linkifyPlainText,
-        ),
-      );
-      break;
-    }
-
-    if (token.start > cursor) {
-      nodes.push(
-        ...renderPlainTextSegment(
-          text.slice(cursor, token.start),
-          `${keyPrefix}-text-${cursor}`,
-          linkifyPlainText,
-        ),
-      );
-    }
-
-    const key = `${keyPrefix}-${token.kind}-${token.start}`;
-    if (token.kind === "code") {
-      nodes.push(
-        <code key={key} className="tx-markdown__code">
-          {token.text}
-        </code>,
-      );
-    } else if (token.kind === "externalLink") {
-      nodes.push(
-        <a
-          key={key}
-          className="tx-markdown__link"
-          href={token.href}
-          rel="noreferrer"
-          onClick={(event) => handleExternalLinkClick(event, token.href)}
-        >
-          {renderInlineMarkdown(token.label, key, {
-            linkifyPlainText: false,
-          })}
-        </a>,
-      );
-    } else if (token.kind === "fileReference") {
-      nodes.push(
-        renderFileReferenceToken(token, key, onFileReferenceClick),
-      );
-    } else if (token.kind === "strong") {
-      nodes.push(
-        <strong key={key}>
-          {renderInlineMarkdown(token.text, key, {
-            onFileReferenceClick,
-          })}
-        </strong>,
-      );
-    } else {
-      nodes.push(
-        <em key={key}>
-          {renderInlineMarkdown(token.text, key, {
-            onFileReferenceClick,
-          })}
-        </em>,
-      );
-    }
-
-    cursor = token.end;
-  }
-
-  return nodes;
+  return <>{`[${label}](${safeHref})`}</>;
 }
 
 function renderFileReferenceToken(
-  token: Extract<InlineTokenMatch, { kind: "fileReference" }>,
-  key: string,
+  children: ReactNode,
+  label: string,
+  target: FileReferenceTarget,
   onFileReferenceClick?: (target: FileReferenceTarget) => void,
 ) {
-  const label = renderInlineMarkdown(token.label, `${key}-label`, {
-    linkifyPlainText: false,
-  });
   const fileReferenceProps = {
     className: "tx-inline-token tx-inline-token--file tx-markdown__file-ref",
-    title: token.target.rawTarget,
-    "data-file-path": token.target.filePath,
-    "data-file-line": token.target.line ?? undefined,
-    "data-file-column": token.target.column ?? undefined,
+    title: target.rawTarget,
+    "data-file-path": target.filePath,
+    "data-file-line": target.line ?? undefined,
+    "data-file-column": target.column ?? undefined,
   };
 
   if (!onFileReferenceClick) {
     return (
-      <span key={key} {...fileReferenceProps}>
-        {label}
+      <span {...fileReferenceProps}>
+        {children}
       </span>
     );
   }
 
   return (
     <button
-      key={key}
       type="button"
       {...fileReferenceProps}
-      aria-label={`Open ${token.label}`}
-      onClick={() => onFileReferenceClick(token.target)}
+      aria-label={`Open ${label}`}
+      onClick={() => onFileReferenceClick(target)}
     >
-      {label}
+      {children}
     </button>
   );
 }
 
-function renderPlainTextSegment(
-  text: string,
-  keyPrefix: string,
-  linkifyPlainText: boolean,
-) {
-  if (!text) {
-    return [];
+function renderCodeBlock(children: ReactNode) {
+  const codeBlock = extractCodeBlock(children);
+  if (!codeBlock) {
+    return <pre className="tx-markdown__code-block">{children}</pre>;
   }
 
-  if (!linkifyPlainText) {
-    return [<Fragment key={keyPrefix}>{text}</Fragment>];
-  }
-
-  return renderTextWithExternalLinks(text, keyPrefix);
+  return (
+    <MarkdownCodeBlock code={codeBlock.code} language={codeBlock.language}>
+      <pre className="tx-markdown__code-block">
+        <code className={codeBlock.className}>{codeBlock.code}</code>
+      </pre>
+    </MarkdownCodeBlock>
+  );
 }
 
-function findNextInlineToken(text: string, startIndex: number): InlineTokenMatch | null {
-  const matches = [
-    findCodeToken(text, startIndex),
-    findLinkToken(text, startIndex),
-    findStrongToken(text, startIndex),
-    findEmphasisToken(text, startIndex),
-  ].filter((candidate): candidate is InlineTokenMatch => candidate !== null);
+function MarkdownCodeBlock({
+  children,
+  code,
+  language,
+}: {
+  children: ReactNode;
+  code: string;
+  language: string | null;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | null>(null);
 
-  if (matches.length === 0) {
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+      }
+    },
+    [],
+  );
+
+  const handleCopy = () => {
+    const clipboard = typeof navigator === "undefined" ? null : navigator.clipboard;
+    if (!clipboard?.writeText) return;
+    void clipboard
+      .writeText(code)
+      .then(() => {
+        setCopied(true);
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+        }
+        timerRef.current = window.setTimeout(() => {
+          setCopied(false);
+          timerRef.current = null;
+        }, 1200);
+      })
+      .catch(() => undefined);
+  };
+
+  return (
+    <div className="tx-markdown__code-block-shell">
+      <button
+        type="button"
+        className="tx-markdown__code-copy-button"
+        aria-label={copied ? "Copied code" : "Copy code"}
+        title={copied ? "Copied code" : "Copy code"}
+        onClick={handleCopy}
+      >
+        {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+      </button>
+      {language ? <span className="tx-markdown__code-language-label">{language}</span> : null}
+      {children}
+    </div>
+  );
+}
+
+function extractCodeBlock(children: ReactNode) {
+  const childNodes = Children.toArray(children);
+  if (childNodes.length !== 1) {
     return null;
   }
 
-  matches.sort((left, right) => left.start - right.start);
-  return matches[0] ?? null;
-}
-
-function findCodeToken(text: string, startIndex: number): InlineTokenMatch | null {
-  let tokenStart = text.indexOf("`", startIndex);
-  while (tokenStart !== -1) {
-    const tokenEnd = text.indexOf("`", tokenStart + 1);
-    if (tokenEnd === -1) {
-      return null;
-    }
-
-    if (tokenEnd > tokenStart + 1) {
-      return {
-        kind: "code",
-        start: tokenStart,
-        end: tokenEnd + 1,
-        text: text.slice(tokenStart + 1, tokenEnd),
-      };
-    }
-
-    tokenStart = text.indexOf("`", tokenEnd + 1);
+  const codeElement = childNodes[0];
+  if (!isValidElement<{ children?: ReactNode; className?: string }>(codeElement)) {
+    return null;
   }
 
-  return null;
+  const className = codeElement.props.className;
+  const language = extractFenceLanguage(className);
+  return {
+    className,
+    code: nodeToPlainText(codeElement.props.children).replace(/\n$/, ""),
+    language,
+  };
 }
 
-function findLinkToken(text: string, startIndex: number): InlineTokenMatch | null {
-  let tokenStart = text.indexOf("[", startIndex);
-  while (tokenStart !== -1) {
-    const labelEnd = text.indexOf("]", tokenStart + 1);
-    if (labelEnd === -1 || text[labelEnd + 1] !== "(") {
-      tokenStart = text.indexOf("[", tokenStart + 1);
+function extractFenceLanguage(className: string | undefined) {
+  const match = className?.match(CODE_FENCE_LANGUAGE_PATTERN);
+  return match?.[1] ?? null;
+}
+
+function nodeToPlainText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map((child) => nodeToPlainText(child)).join("");
+  }
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return nodeToPlainText(node.props.children);
+  }
+  return "";
+}
+
+function markdownUrlTransform(url: string) {
+  if (
+    url.startsWith("#") ||
+    isValidExternalUrl(url) ||
+    parseFileReferenceTarget(url)
+  ) {
+    return url;
+  }
+  return defaultUrlTransform(url);
+}
+
+function normalizeMarkdownLinkTargets(value: string): string {
+  return transformOutsideCode(value, normalizeMarkdownLinkTargetsInPlainText);
+}
+
+function protectLiteralMarkdownDollars(value: string): string {
+  return transformOutsideCode(value, protectLiteralDollarsOutsideMarkdownLinks);
+}
+
+function transformOutsideCode(value: string, transformPlainText: TextTransform): string {
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    const fence = matchFenceDelimiter(value, cursor);
+    if (fence) {
+      const end = findFenceEndIndex(value, cursor, fence.marker, fence.length);
+      result += value.slice(cursor, end);
+      cursor = end;
       continue;
     }
 
-    const urlEnd = findMarkdownTargetEnd(text, labelEnd + 2);
-    if (urlEnd === -1) {
-      tokenStart = text.indexOf("[", tokenStart + 1);
+    if (value[cursor] === "`") {
+      const end = findInlineCodeEndIndex(value, cursor);
+      result += value.slice(cursor, end);
+      cursor = end;
       continue;
     }
 
-    const label = text.slice(tokenStart + 1, labelEnd).trim();
-    const target = text.slice(labelEnd + 2, urlEnd).trim();
-    if (!label) {
-      tokenStart = text.indexOf("[", tokenStart + 1);
-      continue;
-    }
-
-    if (isValidExternalUrl(target)) {
-      return {
-        kind: "externalLink",
-        start: tokenStart,
-        end: urlEnd + 1,
-        label,
-        href: target,
-      };
-    }
-
-    const fileReference = parseFileReferenceTarget(target);
-    if (fileReference) {
-      return {
-        kind: "fileReference",
-        start: tokenStart,
-        end: urlEnd + 1,
-        label,
-        target: fileReference,
-      };
-    }
-
-    tokenStart = text.indexOf("[", tokenStart + 1);
+    const nextProtectedIndex = findNextCodeLikeIndex(value, cursor);
+    result += transformPlainText(value.slice(cursor, nextProtectedIndex));
+    cursor = nextProtectedIndex;
   }
 
-  return null;
+  return result;
 }
 
-function findMarkdownTargetEnd(text: string, startIndex: number) {
-  let parenthesisDepth = 0;
-  const isWindowsPath = isWindowsAbsolutePath(text.slice(startIndex));
+function normalizeMarkdownLinkTargetsInPlainText(value: string): string {
+  let result = "";
+  let cursor = 0;
 
-  for (let index = startIndex; index < text.length; index += 1) {
-    const character = text[index];
-    if (character === "\\") {
-      const nextCharacter = text[index + 1];
-      const escapesMarkdownTarget =
-        !isWindowsPath &&
-        (nextCharacter === "\\" ||
-          nextCharacter === "(" ||
-          nextCharacter === ")");
-      if (escapesMarkdownTarget) {
-        index += 1;
+  while (cursor < value.length) {
+    const link = readInlineMarkdownLink(value, cursor);
+    if (!link) {
+      result += value[cursor] ?? "";
+      cursor += 1;
+      continue;
+    }
+
+    const target = value.slice(link.targetStart, link.targetEnd);
+    const normalizedTarget = normalizeMarkdownLinkTarget(target);
+    result +=
+      value.slice(cursor, link.targetStart) +
+      normalizedTarget +
+      value.slice(link.targetEnd, link.end);
+    cursor = link.end;
+  }
+
+  return result;
+}
+
+function normalizeMarkdownLinkTarget(target: string): string {
+  if (target.startsWith("#") || isValidExternalUrl(target)) {
+    return target;
+  }
+  if (parseFileReferenceTarget(target)) {
+    return `${FILE_REFERENCE_HREF_PREFIX}${encodeURIComponent(target)}`;
+  }
+  return `${LITERAL_LINK_HREF_PREFIX}${encodeURIComponent(target)}`;
+}
+
+function decodePlaceholderHref(value: string, prefix: string): string | null {
+  if (!value.startsWith(prefix)) {
+    return null;
+  }
+  try {
+    return decodeURIComponent(value.slice(prefix.length));
+  } catch {
+    return value.slice(prefix.length);
+  }
+}
+
+function protectLiteralDollarsOutsideMarkdownLinks(value: string): string {
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    const isLinkStart =
+      value[cursor] === "[" || (value[cursor] === "!" && value[cursor + 1] === "[");
+    if (!isLinkStart) {
+      const nextLink = value.indexOf("[", cursor);
+      const nextImage = value.indexOf("![", cursor);
+      const candidates = [nextLink, nextImage].filter((index) => index >= 0);
+      const nextIndex = candidates.length > 0 ? Math.min(...candidates) : value.length;
+      result += protectLiteralDollarsInPlainText(value.slice(cursor, nextIndex));
+      cursor = nextIndex;
+      continue;
+    }
+
+    const link = readInlineMarkdownLink(value, cursor);
+    if (!link) {
+      result += protectLiteralDollarsInPlainText(value[cursor] ?? "");
+      cursor += 1;
+      continue;
+    }
+
+    result += value.slice(cursor, link.end);
+    cursor = link.end;
+  }
+
+  return result;
+}
+
+function protectLiteralDollarsInPlainText(value: string): string {
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    if (value[cursor] === "\\" && value[cursor + 1] === "$") {
+      result += ESCAPED_MARKDOWN_DOLLAR;
+      cursor += 2;
+      continue;
+    }
+
+    if (value.startsWith("$$", cursor)) {
+      const closingIndex = value.indexOf("$$", cursor + 2);
+      if (closingIndex === -1) {
+        result += `${ESCAPED_MARKDOWN_DOLLAR}${ESCAPED_MARKDOWN_DOLLAR}`;
+        cursor += 2;
         continue;
       }
-    }
-
-    if (character === "(") {
-      parenthesisDepth += 1;
+      result += value.slice(cursor, closingIndex + 2);
+      cursor = closingIndex + 2;
       continue;
     }
 
-    if (character === ")") {
-      if (parenthesisDepth === 0) {
-        return index;
+    if (value[cursor] === "$") {
+      if (!canOpenInlineMath(value, cursor)) {
+        result += ESCAPED_MARKDOWN_DOLLAR;
+        cursor += 1;
+        continue;
       }
-      parenthesisDepth -= 1;
+
+      const closingIndex = findInlineMathClosingDollar(value, cursor + 1);
+      if (closingIndex === -1) {
+        result += ESCAPED_MARKDOWN_DOLLAR;
+        cursor += 1;
+        continue;
+      }
+
+      const content = value.slice(cursor + 1, closingIndex);
+      result += looksLikeInlineMath(content)
+        ? `$${content}$`
+        : `${ESCAPED_MARKDOWN_DOLLAR}${content}${ESCAPED_MARKDOWN_DOLLAR}`;
+      cursor = closingIndex + 1;
+      continue;
     }
+
+    result += value[cursor];
+    cursor += 1;
+  }
+
+  return result;
+}
+
+function looksLikeInlineMath(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed || ALL_CAPS_DOLLAR_IDENTIFIER_PATTERN.test(trimmed)) {
+    return false;
+  }
+  return INLINE_MATH_HINT_PATTERN.test(trimmed) || /^[A-Za-z][A-Za-z0-9]{0,15}$/.test(trimmed);
+}
+
+function canOpenInlineMath(value: string, index: number): boolean {
+  const next = value[index + 1];
+  return Boolean(next && !/\s|\d/.test(next));
+}
+
+function canCloseInlineMath(value: string, index: number): boolean {
+  const previous = value[index - 1];
+  return Boolean(previous && !/\s/.test(previous));
+}
+
+function findInlineMathClosingDollar(value: string, index: number): number {
+  let cursor = index;
+  while (cursor < value.length) {
+    if (value[cursor] === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (value[cursor] === "$") {
+      return canCloseInlineMath(value, cursor) ? cursor : -1;
+    }
+    cursor += 1;
+  }
+  return -1;
+}
+
+function findNextCodeLikeIndex(value: string, startIndex: number): number {
+  let cursor = startIndex;
+  while (cursor < value.length) {
+    if (value[cursor] === "`" || matchFenceDelimiter(value, cursor)) {
+      return cursor;
+    }
+    cursor += 1;
+  }
+  return value.length;
+}
+
+function isLineStart(value: string, index: number): boolean {
+  return index === 0 || value[index - 1] === "\n";
+}
+
+function matchFenceDelimiter(
+  value: string,
+  index: number,
+): { marker: "`" | "~"; length: number } | null {
+  if (!isLineStart(value, index)) {
+    return null;
+  }
+
+  const marker = value[index];
+  if (marker !== "`" && marker !== "~") {
+    return null;
+  }
+
+  let cursor = index;
+  while (value[cursor] === marker) {
+    cursor += 1;
+  }
+
+  return cursor - index >= 3 ? { marker, length: cursor - index } : null;
+}
+
+function findFenceEndIndex(
+  value: string,
+  index: number,
+  marker: "`" | "~",
+  length: number,
+): number {
+  let cursor = value.indexOf("\n", index);
+  if (cursor === -1) {
+    return value.length;
+  }
+  cursor += 1;
+
+  while (cursor < value.length) {
+    if (isLineStart(value, cursor) && value[cursor] === marker) {
+      let markerEnd = cursor;
+      while (value[markerEnd] === marker) {
+        markerEnd += 1;
+      }
+      if (markerEnd - cursor >= length) {
+        const lineEnd = value.indexOf("\n", markerEnd);
+        return lineEnd === -1 ? value.length : lineEnd + 1;
+      }
+    }
+
+    const nextLine = value.indexOf("\n", cursor);
+    if (nextLine === -1) {
+      return value.length;
+    }
+    cursor = nextLine + 1;
+  }
+
+  return value.length;
+}
+
+function findInlineCodeEndIndex(value: string, index: number): number {
+  let markerEnd = index;
+  while (value[markerEnd] === "`") {
+    markerEnd += 1;
+  }
+
+  const length = markerEnd - index;
+  let cursor = markerEnd;
+  while (cursor < value.length) {
+    if (value[cursor] !== "`") {
+      cursor += 1;
+      continue;
+    }
+
+    let end = cursor;
+    while (value[end] === "`") {
+      end += 1;
+    }
+    if (end - cursor === length) {
+      return end;
+    }
+    cursor = end;
+  }
+
+  return value.length;
+}
+
+function readInlineMarkdownLink(
+  value: string,
+  index: number,
+): { end: number; targetStart: number; targetEnd: number } | null {
+  const bracketStart = value[index] === "!" && value[index + 1] === "[" ? index + 1 : index;
+  if (value[bracketStart] !== "[") {
+    return null;
+  }
+
+  const bracketEnd = findMarkdownBracketEnd(value, bracketStart);
+  if (bracketEnd === -1 || value[bracketEnd + 1] !== "(") {
+    return null;
+  }
+
+  const parenEnd = findMarkdownParenEnd(value, bracketEnd + 1);
+  if (parenEnd === -1) {
+    return null;
+  }
+  return {
+    end: parenEnd + 1,
+    targetEnd: parenEnd,
+    targetStart: bracketEnd + 2,
+  };
+}
+
+function findMarkdownBracketEnd(value: string, startIndex: number): number {
+  let depth = 0;
+  let cursor = startIndex;
+
+  while (cursor < value.length) {
+    if (value[cursor] === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (value[cursor] === "[") {
+      depth += 1;
+    } else if (value[cursor] === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return cursor;
+      }
+    }
+    cursor += 1;
   }
 
   return -1;
 }
 
-function findStrongToken(text: string, startIndex: number): InlineTokenMatch | null {
-  let tokenStart = text.indexOf("**", startIndex);
-  while (tokenStart !== -1) {
-    const tokenEnd = text.indexOf("**", tokenStart + 2);
-    if (tokenEnd === -1) {
-      return null;
-    }
+function findMarkdownParenEnd(value: string, startIndex: number): number {
+  let depth = 0;
+  let cursor = startIndex;
 
-    if (tokenEnd > tokenStart + 2) {
-      return {
-        kind: "strong",
-        start: tokenStart,
-        end: tokenEnd + 2,
-        text: text.slice(tokenStart + 2, tokenEnd),
-      };
-    }
-
-    tokenStart = text.indexOf("**", tokenEnd + 2);
-  }
-
-  return null;
-}
-
-function findEmphasisToken(text: string, startIndex: number): InlineTokenMatch | null {
-  let tokenStart = text.indexOf("*", startIndex);
-  while (tokenStart !== -1) {
-    if (isAsteriskAt(text, tokenStart - 1) || isAsteriskAt(text, tokenStart + 1)) {
-      tokenStart = text.indexOf("*", tokenStart + 1);
+  while (cursor < value.length) {
+    if (value[cursor] === "\\") {
+      cursor += 2;
       continue;
     }
-
-    let tokenEnd = text.indexOf("*", tokenStart + 1);
-    while (
-      tokenEnd !== -1 &&
-      (isAsteriskAt(text, tokenEnd - 1) || isAsteriskAt(text, tokenEnd + 1))
-    ) {
-      tokenEnd = text.indexOf("*", tokenEnd + 1);
+    if (value[cursor] === "(") {
+      depth += 1;
+    } else if (value[cursor] === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return cursor;
+      }
     }
-
-    if (tokenEnd > tokenStart + 1) {
-      return {
-        kind: "emphasis",
-        start: tokenStart,
-        end: tokenEnd + 1,
-        text: text.slice(tokenStart + 1, tokenEnd),
-      };
-    }
-
-    tokenStart = text.indexOf("*", tokenStart + 1);
+    cursor += 1;
   }
 
-  return null;
-}
-
-function isAsteriskAt(text: string, index: number) {
-  return index >= 0 && index < text.length && text[index] === "*";
+  return -1;
 }

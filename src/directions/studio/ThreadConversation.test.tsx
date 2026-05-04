@@ -3936,14 +3936,17 @@ describe("ThreadConversation", () => {
     expect(screen.getByText("bold").tagName).toBe("STRONG");
   });
 
-  it("renders single-asterisk emphasis and keeps current mixed-asterisk behavior", () => {
-    render(
+  it("renders single-asterisk emphasis with standard markdown fallback for mixed markers", () => {
+    const { container } = render(
       <ConversationMarkdown markdown={"*text*\n\n*text**more*\n\n**text*"} />,
     );
 
-    expect(screen.getByText("text").tagName).toBe("EM");
+    const emphasisNodes = container.querySelectorAll("em");
+    expect(emphasisNodes).toHaveLength(3);
+    expect(emphasisNodes[0]).toHaveTextContent("text");
     expect(screen.getByText("text**more").tagName).toBe("EM");
-    expect(screen.getByText("**text*").tagName).toBe("P");
+    expect(emphasisNodes[2]).toHaveTextContent("text");
+    expect(emphasisNodes[2]?.parentElement).toHaveTextContent("*text");
   });
 
   describe("timeline scroll follow", () => {
