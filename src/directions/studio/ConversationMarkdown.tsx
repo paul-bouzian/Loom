@@ -495,6 +495,13 @@ function transformOutsideCode(value: string, transformPlainText: TextTransform):
       continue;
     }
 
+    const indentedCodeEnd = findIndentedCodeBlockEnd(value, cursor);
+    if (indentedCodeEnd !== null) {
+      result += value.slice(cursor, indentedCodeEnd);
+      cursor = indentedCodeEnd;
+      continue;
+    }
+
     if (value[cursor] === "`") {
       const end = findInlineCodeEndIndex(value, cursor);
       result += value.slice(cursor, end);
@@ -705,12 +712,47 @@ function findInlineMathClosingDollar(value: string, index: number): number {
 function findNextCodeLikeIndex(value: string, startIndex: number): number {
   let cursor = startIndex;
   while (cursor < value.length) {
-    if (value[cursor] === "`" || matchFenceDelimiter(value, cursor)) {
+    if (
+      value[cursor] === "`" ||
+      matchFenceDelimiter(value, cursor) ||
+      findIndentedCodeBlockEnd(value, cursor) !== null
+    ) {
       return cursor;
     }
     cursor += 1;
   }
   return value.length;
+}
+
+function findIndentedCodeBlockEnd(value: string, index: number): number | null {
+  if (!isLineStart(value, index) || !isIndentedCodeLine(value, index)) {
+    return null;
+  }
+
+  let cursor = index;
+  while (cursor < value.length) {
+    if (!isIndentedCodeLine(value, cursor) && !isBlankLine(value, cursor)) {
+      return cursor;
+    }
+
+    const lineEnd = value.indexOf("\n", cursor);
+    if (lineEnd === -1) {
+      return value.length;
+    }
+    cursor = lineEnd + 1;
+  }
+
+  return value.length;
+}
+
+function isIndentedCodeLine(value: string, lineStart: number): boolean {
+  return value[lineStart] === "\t" || value.startsWith("    ", lineStart);
+}
+
+function isBlankLine(value: string, lineStart: number): boolean {
+  const lineEnd = value.indexOf("\n", lineStart);
+  const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
+  return /^[ \t]*$/.test(line);
 }
 
 function isLineStart(value: string, index: number): boolean {

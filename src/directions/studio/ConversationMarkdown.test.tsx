@@ -390,6 +390,27 @@ describe("ConversationMarkdown", () => {
     expect(codeBlock).toHaveTextContent("Budget $400 and `inline`");
   });
 
+  it("leaves markdown-looking content untouched inside indented code blocks", () => {
+    const { container } = render(
+      <ConversationMarkdown
+        markdown={[
+          "Log output:",
+          "",
+          "    [literal](1/2)",
+          "    Budget $400 and `inline`",
+          "",
+          "Done.",
+        ].join("\n")}
+      />,
+    );
+
+    const codeBlock = container.querySelector(".tx-markdown__code-block code");
+    expect(codeBlock).toHaveTextContent("[literal](1/2)");
+    expect(codeBlock).toHaveTextContent("Budget $400 and `inline`");
+    expect(codeBlock?.textContent).not.toContain("skein.local");
+    expect(container.textContent).toContain("Done.");
+  });
+
   it("ignores code-copy completion after the code block unmounts", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
