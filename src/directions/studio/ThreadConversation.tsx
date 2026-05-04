@@ -276,6 +276,7 @@ export function ThreadConversation({
     () => ({ kind: "thread" as const, threadId: thread.id }),
     [thread.id],
   );
+  const fileSearchTarget = environment.kind === "chat" ? null : composerTarget;
   const resolvedComposer = composer ?? snapshot?.composer ?? fallbackComposer;
   const approveComposer = snapshot ? resolvedComposer : null;
   const isConnectionError =
@@ -696,7 +697,7 @@ export function ThreadConversation({
         modelOptions={capabilities?.models ?? []}
         catalogTarget={composerTarget}
         catalogRefreshKey={snapshot?.codexThreadId ?? thread.codexThreadId ?? null}
-        fileSearchTarget={composerTarget}
+        fileSearchTarget={fileSearchTarget}
         transportEnabled={transportReady}
         onChangeImages={(nextImages) =>
           updateDraft(thread.id, (currentDraft) => ({

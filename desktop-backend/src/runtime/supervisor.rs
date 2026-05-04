@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,6 +29,7 @@ use crate::runtime::session::{AppServerAuthStatus, RuntimeSession, SendMessageRe
 use crate::serde_helpers::deserialize_explicit_optional;
 use crate::services::composer::{
     build_claude_thread_catalog, load_claude_command_definitions, load_claude_skill_definitions,
+    search_workspace_files,
 };
 use crate::services::workspace::{
     ComposerTargetContext, EnvironmentRuntimeTarget, ThreadRuntimeContext,
@@ -111,6 +112,7 @@ pub struct RuntimeSupervisor {
     environment_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     headless_sessions: Arc<Mutex<HashMap<String, HeadlessSession>>>,
     account_usage: Arc<Mutex<AccountUsageState>>,
+    composer_file_search_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     usage_updates: mpsc::UnboundedSender<RuntimeUsageUpdate>,
 }
 
@@ -254,6 +256,7 @@ impl RuntimeSupervisor {
         let environment_locks = Arc::new(Mutex::new(HashMap::new()));
         let headless_sessions = Arc::new(Mutex::new(HashMap::new()));
         let account_usage = Arc::new(Mutex::new(AccountUsageState::default()));
+        let composer_file_search_cancellations = Arc::new(Mutex::new(HashMap::new()));
         let (usage_updates, usage_update_rx) = mpsc::unbounded_channel();
         spawn_usage_update_task(
             events.clone(),
@@ -275,6 +278,7 @@ impl RuntimeSupervisor {
             environment_locks,
             headless_sessions,
             account_usage,
+            composer_file_search_cancellations,
             usage_updates,
         }
     }
@@ -566,16 +570,6 @@ impl RuntimeSupervisor {
             .clone()
     }
 
-    async fn resolve_file_search_target(
-        &self,
-        environment_id: &str,
-        environment_path: &str,
-        codex_binary_path: Option<String>,
-    ) -> AppResult<RuntimeReadTarget> {
-        self.resolve_shared_headless_target(environment_id, environment_path, codex_binary_path)
-            .await
-    }
-
     async fn resolve_shared_headless_target(
         &self,
         environment_id: &str,
@@ -811,32 +805,39 @@ impl RuntimeSupervisor {
     pub async fn search_composer_files(
         &self,
         context: ComposerTargetContext,
-        request_key: &str,
         query: String,
         limit: usize,
     ) -> AppResult<Vec<crate::domain::conversation::ComposerFileSearchResult>> {
         validate_composer_file_search_context(&context)?;
-        if matches!(context.provider, ProviderKind::Claude) {
-            return Err(AppError::Validation(
-                "File search is not available in Claude composer yet.".to_string(),
-            ));
+        let cancellation_key = context.file_search_cancellation_key.clone();
+        let environment_path = context.environment_path;
+        let cancellation = Arc::new(AtomicBool::new(false));
+        {
+            let mut cancellations = self.composer_file_search_cancellations.lock().await;
+            if let Some(previous) =
+                cancellations.insert(cancellation_key.clone(), cancellation.clone())
+            {
+                previous.store(true, Ordering::Relaxed);
+            }
         }
 
-        let read_target = self
-            .resolve_file_search_target(
-                &context.environment_id,
-                &context.environment_path,
-                context.codex_binary_path.clone(),
-            )
-            .await?;
-        search_files_from_target(
-            read_target,
-            &context.environment_path,
-            request_key,
-            query,
-            limit,
-        )
-        .await
+        let result = tokio::task::spawn_blocking({
+            let cancellation = cancellation.clone();
+            move || search_workspace_files(&environment_path, &query, limit, &cancellation)
+        })
+        .await;
+
+        {
+            let mut cancellations = self.composer_file_search_cancellations.lock().await;
+            if cancellations
+                .get(&cancellation_key)
+                .is_some_and(|current| Arc::ptr_eq(current, &cancellation))
+            {
+                cancellations.remove(&cancellation_key);
+            }
+        }
+
+        result.map_err(|error| AppError::Runtime(error.to_string()))?
     }
 
     pub async fn send_thread_message(
@@ -1691,35 +1692,6 @@ async fn read_composer_catalog_from_target(
     }
 }
 
-async fn search_files_from_target(
-    read_target: RuntimeReadTarget,
-    environment_path: &str,
-    cancellation_token: &str,
-    query: String,
-    limit: usize,
-) -> AppResult<Vec<crate::domain::conversation::ComposerFileSearchResult>> {
-    match read_target {
-        RuntimeReadTarget::Running(session) => {
-            session
-                .search_files(environment_path, cancellation_token, query, limit)
-                .await
-        }
-        RuntimeReadTarget::SharedHeadless(lease) => {
-            lease
-                .session()
-                .search_files(environment_path, cancellation_token, query, limit)
-                .await
-        }
-        RuntimeReadTarget::Headless(session) => {
-            let result = session
-                .search_files(environment_path, cancellation_token, query, limit)
-                .await;
-            let stop_result = session.stop().await;
-            finish_headless_read(result, stop_result)
-        }
-    }
-}
-
 async fn read_auth_status_from_target(
     read_target: RuntimeReadTarget,
     include_token: bool,
@@ -1900,14 +1872,13 @@ mod tests {
         finish_headless_session, latest_running_usage_source, merge_account_usage_snapshot,
         prime_running_runtime_usage, read_account_from_target, read_auth_status_from_target,
         read_capabilities_from_target, read_composer_catalog_from_target, resolve_binary_path,
-        search_files_from_target, should_stop_idle_runtime_candidate,
-        store_account_usage_snapshot_from_read, store_headless_session,
-        take_idle_headless_sessions, take_mismatched_headless_session, touch_headless_session,
-        touch_running_runtime, usage_snapshot_is_empty, usage_snapshot_patch_from_snapshot,
-        validate_composer_file_search_context, AccountUsageState, AppServerAuthStatus,
-        CodexRateLimitSnapshotPatch, HeadlessSession, RunningRuntime, RuntimeReadTarget,
-        RuntimeRegistry, RuntimeSupervisor, RuntimeUsageUpdate, SharedHeadlessHandle,
-        UsageConfirmationFallback, UsageUpdateOrigin,
+        should_stop_idle_runtime_candidate, store_account_usage_snapshot_from_read,
+        store_headless_session, take_idle_headless_sessions, take_mismatched_headless_session,
+        touch_headless_session, touch_running_runtime, usage_snapshot_is_empty,
+        usage_snapshot_patch_from_snapshot, validate_composer_file_search_context,
+        AccountUsageState, AppServerAuthStatus, CodexRateLimitSnapshotPatch, HeadlessSession,
+        RunningRuntime, RuntimeReadTarget, RuntimeRegistry, RuntimeSupervisor, RuntimeUsageUpdate,
+        SharedHeadlessHandle, UsageConfirmationFallback, UsageUpdateOrigin,
     };
     use crate::app_identity::CODEX_USAGE_EVENT_NAME;
     use crate::domain::conversation::{
@@ -2126,30 +2097,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn running_search_files_uses_the_active_session() {
-        let (session, harness) = spawn_test_session().await;
-
-        let results = search_files_from_target(
-            RuntimeReadTarget::Running(Arc::new(session)),
-            "/tmp/skein",
-            "draft:topLeft",
-            "main".to_string(),
-            50,
-        )
-        .await
-        .expect("running file search should load");
-
-        assert_eq!(results.len(), 2);
-        let requests = harness.requests().await;
-        let search_request = requests
-            .iter()
-            .find(|request| request.method == "fuzzyFileSearch")
-            .expect("fuzzyFileSearch request should be recorded");
-        assert_eq!(search_request.params["roots"][0], "/tmp/skein");
-        assert_eq!(search_request.params["cancellationToken"], "draft:topLeft");
-    }
-
-    #[tokio::test]
     async fn finish_headless_session_clears_cached_session() {
         let now = Utc::now();
         let cached_session = SharedHeadlessHandle::new(Arc::new(
@@ -2288,12 +2235,27 @@ mod tests {
             codex_thread_id: None,
             codex_binary_path: Some(String::new()),
             file_search_enabled: false,
+            file_search_cancellation_key: "chat-workspace:codex".to_string(),
         })
         .expect_err("standalone chats should reject file search");
 
         assert!(
             matches!(error, AppError::Validation(message) if message == "File search is unavailable for standalone chats.")
         );
+    }
+
+    #[test]
+    fn composer_file_search_context_allows_claude_project_targets() {
+        validate_composer_file_search_context(&ComposerTargetContext {
+            environment_id: "env-1".to_string(),
+            environment_path: "/tmp/skein".to_string(),
+            provider: ProviderKind::Claude,
+            codex_thread_id: None,
+            codex_binary_path: Some(String::new()),
+            file_search_enabled: true,
+            file_search_cancellation_key: "environment:env-1:claude".to_string(),
+        })
+        .expect("project file search should be provider-neutral");
     }
 
     #[tokio::test]
@@ -3412,6 +3374,7 @@ mod tests {
                     role: ConversationRole::Assistant,
                     text: "Done".to_string(),
                     images: None,
+                    mention_bindings: None,
                     is_streaming: false,
                 },
             ));
@@ -3496,28 +3459,6 @@ mod tests {
                         "jsonrpc": "2.0",
                         "id": id,
                         "result": { "data": [], "nextCursor": null }
-                    }),
-                    "fuzzyFileSearch" => json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": {
-                            "files": [
-                                {
-                                    "root": "/tmp/skein",
-                                    "path": "src/main.ts",
-                                    "matchType": "file",
-                                    "fileName": "main.ts",
-                                    "score": 100
-                                },
-                                {
-                                    "root": "/tmp/skein",
-                                    "path": "src/lib.rs",
-                                    "matchType": "file",
-                                    "fileName": "lib.rs",
-                                    "score": 90
-                                }
-                            ]
-                        }
                     }),
                     "account/read" => json!({
                         "jsonrpc": "2.0",

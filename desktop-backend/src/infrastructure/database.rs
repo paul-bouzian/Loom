@@ -778,9 +778,9 @@ fn legacy_database_backup_path(legacy_db_path: &Path) -> PathBuf {
 mod tests {
     use super::{migrate_legacy_database_file, AppDatabase, CURRENT_SCHEMA_VERSION};
     use crate::domain::conversation::{
-        ComposerDraftMentionBinding, ComposerMentionBindingKind, ConversationComposerDraft,
-        ConversationComposerSettings, ConversationImageAttachment, ConversationItem,
-        ConversationMessageItem, ConversationRole, ThreadConversationSnapshot,
+        ComposerDraftMentionBinding, ComposerMentionBindingInput, ComposerMentionBindingKind,
+        ConversationComposerDraft, ConversationComposerSettings, ConversationImageAttachment,
+        ConversationItem, ConversationMessageItem, ConversationRole, ThreadConversationSnapshot,
     };
     use crate::domain::settings::{
         ApprovalPolicy, CollaborationMode, ProviderKind, ReasoningEffort,
@@ -1694,6 +1694,7 @@ mod tests {
                         role: ConversationRole::Assistant,
                         text: text.to_string(),
                         images: None,
+                        mention_bindings: None,
                         is_streaming: false,
                     }),
                 )
@@ -1738,8 +1739,15 @@ mod tests {
                 id: "user-1".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 role: ConversationRole::User,
-                text: "Show instantly".to_string(),
+                text: "Show @src/main.ts instantly".to_string(),
                 images: None,
+                mention_bindings: Some(vec![ComposerMentionBindingInput {
+                    mention: "src/main.ts".to_string(),
+                    kind: ComposerMentionBindingKind::File,
+                    path: "src/main.ts".to_string(),
+                    start: Some(5),
+                    end: Some(17),
+                }]),
                 is_streaming: false,
             }));
 

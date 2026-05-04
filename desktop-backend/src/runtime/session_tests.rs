@@ -244,32 +244,6 @@ fn spawn_fake_codex(
                     }],
                     "nextCursor": null
                 }),
-                "fuzzyFileSearch" => {
-                    let root = params
-                        .get("roots")
-                        .and_then(Value::as_array)
-                        .and_then(|roots| roots.first())
-                        .and_then(Value::as_str)
-                        .unwrap_or("/tmp/skein");
-                    json!({
-                        "files": [
-                            {
-                                "root": root,
-                                "path": "src/main.ts",
-                                "matchType": "file",
-                                "fileName": "main.ts",
-                                "score": 100
-                            },
-                            {
-                                "root": root,
-                                "path": "src",
-                                "matchType": "directory",
-                                "fileName": "src",
-                                "score": 50
-                            }
-                        ]
-                    })
-                }
                 "thread/read" => {
                     if params["threadId"] == "subagent-new" {
                         json!({

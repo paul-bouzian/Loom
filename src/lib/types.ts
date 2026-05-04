@@ -836,8 +836,10 @@ export type ConversationImageAttachment =
 
 export type ComposerMentionBindingInput = {
   mention: string;
-  kind: "skill" | "app";
+  kind: "skill" | "app" | "file";
   path: string;
+  start?: number | null;
+  end?: number | null;
 };
 
 export type ComposerDraftMentionBinding = ComposerMentionBindingInput & {

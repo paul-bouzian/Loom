@@ -510,6 +510,10 @@ pub struct ComposerMentionBindingInput {
     pub mention: String,
     pub kind: ComposerMentionBindingKind,
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -534,6 +538,7 @@ pub enum ConversationImageAttachment {
 pub enum ComposerMentionBindingKind {
     Skill,
     App,
+    File,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -580,6 +585,8 @@ pub struct ConversationMessageItem {
     pub role: ConversationRole,
     pub text: String,
     pub images: Option<Vec<ConversationImageAttachment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_bindings: Option<Vec<ComposerMentionBindingInput>>,
     pub is_streaming: bool,
 }
 

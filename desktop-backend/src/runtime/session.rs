@@ -50,9 +50,8 @@ use crate::runtime::protocol::{
     task_plan_from_item, task_plan_from_turn_update, task_status_from_turn_status,
     token_usage_snapshot, upsert_item, user_input_payload, AccountRateLimitsReadResponse,
     AccountReadResponse, AppInfoWire, AppsListResponse, CollaborationModeListResponse,
-    ErrorNotification, FuzzyFileSearchMatchTypeWire, FuzzyFileSearchResponse, IncomingMessage,
-    ItemDeltaNotification, ItemNotification, ModelListResponse, OutgoingNamedInput,
-    OutgoingTextElement, OutgoingUserInputPayload, PlanDeltaNotification,
+    ErrorNotification, IncomingMessage, ItemDeltaNotification, ItemNotification, ModelListResponse,
+    OutgoingNamedInput, OutgoingTextElement, OutgoingUserInputPayload, PlanDeltaNotification,
     ReasoningBoundaryNotification, SkillsListResponse, ThreadListResponse,
     ThreadLoadedListResponse, ThreadMetadataReadResponse, ThreadReadResponse, ThreadStartResponse,
     ThreadStatusChangedNotification, TokenUsageNotification, TurnCompletedNotification,
@@ -63,7 +62,7 @@ use crate::runtime::supervisor::RuntimeUsageUpdate;
 use crate::runtime::{item_store, snapshot_store};
 use crate::services::composer::{
     build_thread_catalog, connector_mention_slug, load_prompt_definitions, resolve_composer_text,
-    trim_file_search_results, AppBinding, SkillBinding,
+    AppBinding, SkillBinding,
 };
 use crate::services::workspace::ThreadRuntimeContext;
 
@@ -939,32 +938,6 @@ impl RuntimeSession {
         Ok(build_thread_catalog(&prompts, &skills, &apps))
     }
 
-    pub async fn search_files(
-        &self,
-        environment_path: &str,
-        cancellation_token: &str,
-        query: String,
-        limit: usize,
-    ) -> AppResult<Vec<crate::domain::conversation::ComposerFileSearchResult>> {
-        let response = self
-            .request_typed::<FuzzyFileSearchResponse>(
-                "fuzzyFileSearch",
-                serde_json::json!({
-                    "query": query,
-                    "roots": [environment_path],
-                    "cancellationToken": cancellation_token,
-                }),
-            )
-            .await?;
-        let paths = response
-            .files
-            .into_iter()
-            .filter(|entry| entry.match_type == FuzzyFileSearchMatchTypeWire::File)
-            .map(|entry| entry.path)
-            .collect::<Vec<_>>();
-        Ok(trim_file_search_results(paths, limit))
-    }
-
     async fn ensure_capabilities(&self) -> AppResult<EnvironmentCapabilitiesSnapshot> {
         self.load_capabilities(false).await
     }
@@ -1225,6 +1198,8 @@ impl RuntimeSession {
                 role: ConversationRole::User,
                 text: trimmed.to_string(),
                 images: (!images.is_empty()).then_some(images.clone()),
+                mention_bindings: (!mention_bindings.is_empty())
+                    .then_some(mention_bindings.clone()),
                 is_streaming: false,
             });
             upsert_item(&mut open.snapshot.items, user_item);
@@ -1875,6 +1850,7 @@ fn imported_handoff_items(context: &ThreadRuntimeContext) -> Vec<ConversationIte
                         role: message.role,
                         text: message.text.clone(),
                         images: message.images.clone(),
+                        mention_bindings: None,
                         is_streaming: false,
                     })
                 })
@@ -2857,6 +2833,7 @@ fn set_assistant_message_text(
         role: ConversationRole::Assistant,
         text,
         images: None,
+        mention_bindings: None,
         is_streaming,
     });
     upsert_item(&mut snapshot.items, item);
@@ -3703,6 +3680,7 @@ mod tests {
                 role: ConversationRole::Assistant,
                 text: "Something went wrong".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }));
 
@@ -4108,6 +4086,7 @@ mod tests {
                 role: ConversationRole::Assistant,
                 text: "Done".to_string(),
                 images: None,
+                mention_bindings: None,
                 is_streaming: false,
             }));
         snapshot
@@ -4182,6 +4161,7 @@ mod tests {
             role: ConversationRole::Assistant,
             text: text.to_string(),
             images: None,
+            mention_bindings: None,
             is_streaming: true,
         })];
         snapshot

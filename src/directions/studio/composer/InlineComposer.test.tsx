@@ -562,6 +562,18 @@ describe("InlineComposer voice dictation", () => {
     expect(input).toHaveValue("Use $code-review ");
   });
 
+  it("does not intercept at-mention backspace when file autocomplete is disabled", async () => {
+    renderComposer("Ask @alice", { fileSearchTarget: null });
+
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    const tokenEnd = "Ask @alice".length;
+    input.focus();
+    (input as HTMLTextAreaElement).setSelectionRange(tokenEnd, tokenEnd);
+    await userEvent.keyboard("{Backspace}");
+
+    expect(input).toHaveValue("Ask @alic");
+  });
+
   it("clears stale autocomplete items while a provider catalog reloads", async () => {
     const claudeCatalog = createDeferred<ThreadComposerCatalog>();
     mockedBridge.getComposerCatalog
@@ -885,7 +897,7 @@ describe("InlineComposer image attachments", () => {
     ).toBeInTheDocument();
   });
 
-  it("uses the composer thread id as the file search request key", async () => {
+  it("searches files against the active composer target", async () => {
     renderComposer("@main", {
       threadId: "draft:topLeft",
       fileSearchTarget: { kind: "environment", environmentId: "env-1" },
@@ -894,7 +906,197 @@ describe("InlineComposer image attachments", () => {
     await waitFor(() => {
       expect(mockedBridge.searchComposerFiles).toHaveBeenCalledWith({
         target: { kind: "environment", environmentId: "env-1" },
-        requestKey: "draft:topLeft",
+        query: "main",
+        limit: 50,
+      });
+    });
+  });
+
+  it("shows file search results and autocompletes selected file mentions", async () => {
+    mockedBridge.searchComposerFiles.mockResolvedValue([{ path: "src/main.ts" }]);
+
+    renderComposer("");
+
+    const user = userEvent.setup();
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await user.type(input, "Review @mai");
+
+    expect(
+      await screen.findByRole("option", { name: /main\.ts/i }),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{Tab}");
+    await waitFor(() => {
+      expect(input).toHaveValue("Review @src/main.ts ");
+    });
+  });
+
+  it("resets file autocomplete selection when the active query changes", async () => {
+    mockedBridge.searchComposerFiles.mockImplementation(async ({ query }) =>
+      query === ""
+        ? [{ path: "src/alpha.ts" }, { path: "src/beta.ts" }]
+        : [{ path: "src/main.ts" }, { path: "src/map.ts" }],
+    );
+
+    renderComposer("");
+
+    const user = userEvent.setup();
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await user.type(input, "@");
+    expect(
+      await screen.findByRole("option", { name: /alpha\.ts/i }),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{ArrowDown}");
+    await user.type(input, "ma");
+    expect(
+      await screen.findByRole("option", { name: /main\.ts/i }),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{Tab}");
+    await waitFor(() => {
+      expect(input).toHaveValue("@src/main.ts ");
+    });
+  });
+
+  it("keeps inserted file mentions with spaces as one deletable token", async () => {
+    mockedBridge.searchComposerFiles.mockResolvedValue([
+      { path: "docs/My File.ts" },
+    ]);
+
+    renderComposer("");
+
+    const user = userEvent.setup();
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await user.type(input, "@my");
+
+    expect(
+      await screen.findByRole("option", { name: /My File\.ts/i }),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{Tab}");
+    await waitFor(() => {
+      expect(input).toHaveValue("@docs/My File.ts ");
+    });
+
+    await user.keyboard("{Backspace}");
+    await waitFor(() => {
+      expect(input).toHaveValue("");
+    });
+  });
+
+  it("opens file autocomplete from a bare at-sign trigger", async () => {
+    mockedBridge.searchComposerFiles.mockResolvedValue([{ path: "src/App.tsx" }]);
+
+    renderComposer("");
+
+    const user = userEvent.setup();
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await user.type(input, "@");
+
+    expect(
+      await screen.findByRole("option", { name: /App\.tsx/i }),
+    ).toBeInTheDocument();
+    expect(mockedBridge.searchComposerFiles).toHaveBeenCalledWith({
+      target: { kind: "thread", threadId: "thread-1" },
+      query: "",
+      limit: 50,
+    });
+  });
+
+  it("shows a loading state while file autocomplete searches", async () => {
+    const fileSearch = createDeferred<Array<{ path: string }>>();
+    mockedBridge.searchComposerFiles.mockReturnValueOnce(fileSearch.promise);
+
+    renderComposer("");
+
+    const user = userEvent.setup();
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await user.type(input, "@");
+
+    expect(await screen.findByText("Searching files...")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockedBridge.searchComposerFiles).toHaveBeenCalledWith({
+        target: { kind: "thread", threadId: "thread-1" },
+        query: "",
+        limit: 50,
+      });
+    });
+
+    await act(async () => {
+      fileSearch.resolve([{ path: "src/App.tsx" }]);
+      await fileSearch.promise;
+    });
+
+    expect(
+      await screen.findByRole("option", { name: /App\.tsx/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps file autocomplete disabled when no file search target exists", async () => {
+    const { container } = renderComposer("", { fileSearchTarget: null });
+
+    const user = userEvent.setup();
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await user.type(input, "@");
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(container.querySelector(".tx-inline-token--file")).toBeNull();
+    expect(mockedBridge.searchComposerFiles).not.toHaveBeenCalled();
+  });
+
+  it("does not delete undecorated at-sign text as a file token", async () => {
+    renderComposer("Ask @alice", { fileSearchTarget: null });
+
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    const cursor = "Ask @alice".length;
+    input.focus();
+    (input as HTMLTextAreaElement).setSelectionRange(cursor, cursor);
+    fireEvent.select(input);
+    fireEvent.keyDown(input, { key: "Backspace" });
+
+    expect(input).toHaveValue("Ask @alice");
+  });
+
+  it("shows an empty state when file autocomplete has no matches", async () => {
+    mockedBridge.searchComposerFiles.mockResolvedValueOnce([]);
+
+    renderComposer("");
+
+    const user = userEvent.setup();
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await user.type(input, "@missing");
+
+    expect(await screen.findByText("No matching files.")).toBeInTheDocument();
+  });
+
+  it("searches files for Claude composers because file mentions are provider-neutral text", async () => {
+    const claudeModel: ModelOption = {
+      provider: "claude",
+      id: "claude-sonnet-4-6",
+      displayName: "Claude Sonnet 4.6",
+      description: "Balanced Anthropic model.",
+      defaultReasoningEffort: "high",
+      supportedReasoningEfforts: ["low", "medium", "high", "max"],
+      inputModalities: ["text", "image"],
+      supportedServiceTiers: [],
+      supportsThinking: true,
+      isDefault: false,
+    };
+
+    renderComposer("@main", {
+      composer: {
+        ...baseComposer,
+        provider: "claude",
+        model: claudeModel.id,
+      },
+      modelOptions: [...capabilitiesFixture.models, claudeModel],
+      fileSearchTarget: { kind: "environment", environmentId: "env-1" },
+    });
+
+    await waitFor(() => {
+      expect(mockedBridge.searchComposerFiles).toHaveBeenCalledWith({
+        target: { kind: "environment", environmentId: "env-1" },
         query: "main",
         limit: 50,
       });
@@ -1108,7 +1310,12 @@ function renderComposer(
         modelOptions={options.modelOptions ?? capabilitiesFixture.models}
         onChangeImages={setImages}
         onCancelRefine={() => undefined}
-        onChangeDraft={setDraft}
+        onChangeDraft={(value, bindings) => {
+          setDraft(value);
+          if (bindings) {
+            setMentionBindings(bindings);
+          }
+        }}
         onChangeMentionBindings={setMentionBindings}
         onInterrupt={() => undefined}
         onSend={(...args) => options.onSend?.(...args)}
@@ -1172,7 +1379,12 @@ function renderComposerWithExternalDraftAction(initialDraft: string) {
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={setDraft}
+          onChangeDraft={(value, bindings) => {
+            setDraft(value);
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}
@@ -1227,7 +1439,12 @@ function renderComposerWithManagedServiceTier(
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={setDraft}
+          onChangeDraft={(value, bindings) => {
+            setDraft(value);
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}
@@ -1309,7 +1526,12 @@ function renderComposerWithProviderToggle(initialDraft: string) {
           modelOptions={[...capabilitiesFixture.models, claudeModel]}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={setDraft}
+          onChangeDraft={(value, bindings) => {
+            setDraft(value);
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}
@@ -1361,7 +1583,12 @@ function renderComposerWithDynamicDisabledState(initialDraft: string) {
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={setDraft}
+          onChangeDraft={(value, bindings) => {
+            setDraft(value);
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}
@@ -1418,12 +1645,15 @@ function renderComposerWithDynamicThread(initialDraft: string) {
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={(value) =>
+          onChangeDraft={(value, bindings) => {
             setDraftByThreadId((state) => ({
               ...state,
               [threadId]: value,
-            }))
-          }
+            }));
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}
@@ -1471,7 +1701,12 @@ function renderComposerWithDynamicTransport(initialDraft: string) {
           modelOptions={capabilitiesFixture.models}
           onChangeImages={setImages}
           onCancelRefine={() => undefined}
-          onChangeDraft={setDraft}
+          onChangeDraft={(value, bindings) => {
+            setDraft(value);
+            if (bindings) {
+              setMentionBindings(bindings);
+            }
+          }}
           onChangeMentionBindings={setMentionBindings}
           onInterrupt={() => undefined}
           onSend={() => undefined}

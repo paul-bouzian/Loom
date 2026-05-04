@@ -69,6 +69,49 @@ describe("composer-model", () => {
     ]);
   });
 
+  it("detects file mention tokens", () => {
+    const token = findActiveComposerToken("Review @src/mai", 15, 15);
+
+    expect(token).toEqual({
+      kind: "file",
+      start: 7,
+      end: 15,
+      raw: "@src/mai",
+      query: "src/mai",
+    });
+  });
+
+  it("builds file suggestions with file mention bindings", () => {
+    const token = findActiveComposerToken("Review @mai", 11, 11);
+    const items = buildAutocompleteItems(
+      token,
+      catalog,
+      ["src/main.ts", "README.md"],
+      "codex",
+    );
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        group: "Files",
+        label: "main.ts",
+        description: "src",
+        hint: "@",
+        insertText: "@src/main.ts",
+        mentionBinding: {
+          mention: "src/main.ts",
+          kind: "file",
+          path: "src/main.ts",
+        },
+      }),
+      expect.objectContaining({
+        group: "Files",
+        label: "README.md",
+        description: undefined,
+        insertText: "@README.md",
+      }),
+    ]);
+  });
+
   it("builds Codex slash suggestions from prompt options", () => {
     const token = findActiveComposerToken("/rel", 4, 4);
     const items = buildAutocompleteItems(
@@ -371,6 +414,75 @@ describe("composer-model", () => {
     ]);
   });
 
+  it("decorates explicit file mention bindings even when generic file decoration is disabled", () => {
+    const segments = decorateComposerText(
+      "Review @src/app.tsx. Ask @alice later",
+      null,
+      "codex",
+      {
+        decorateFileTokens: false,
+        mentionBindings: [
+          { mention: "src/app.tsx", kind: "file", path: "src/app.tsx" },
+        ],
+      },
+    );
+
+    expect(segments).toEqual([
+      { kind: "text", text: "Review " },
+      { kind: "file", text: "@src/app.tsx", start: 7, end: 19 },
+      { kind: "text", text: ". Ask @alice later" },
+    ]);
+  });
+
+  it("decorates explicit file mention bindings with spaces in the path", () => {
+    const segments = decorateComposerText(
+      "Review @docs/My File.ts, then ask @alice",
+      null,
+      "codex",
+      {
+        decorateFileTokens: false,
+        mentionBindings: [
+          { mention: "docs/My File.ts", kind: "file", path: "docs/My File.ts" },
+        ],
+      },
+    );
+
+    expect(segments).toEqual([
+      { kind: "text", text: "Review " },
+      { kind: "file", text: "@docs/My File.ts", start: 7, end: 23 },
+      { kind: "text", text: ", then ask @alice" },
+    ]);
+  });
+
+  it("uses persisted file mention ranges for repeated paths", () => {
+    const text = "First @src/app.ts then @src/app.ts";
+    const selectedStart = text.lastIndexOf("@src/app.ts");
+    const selectedEnd = selectedStart + "@src/app.ts".length;
+
+    const segments = decorateComposerText(text, null, "codex", {
+      decorateFileTokens: false,
+      mentionBindings: [
+        {
+          mention: "src/app.ts",
+          kind: "file",
+          path: "src/app.ts",
+          start: selectedStart,
+          end: selectedEnd,
+        },
+      ],
+    });
+
+    expect(segments).toEqual([
+      { kind: "text", text: "First @src/app.ts then " },
+      {
+        kind: "file",
+        text: "@src/app.ts",
+        start: selectedStart,
+        end: selectedEnd,
+      },
+    ]);
+  });
+
   it("can decorate submitted commands without relying on the current provider", () => {
     const segments = decorateComposerText(
       "Use /prompts:review() then /review and /release-notes but keep /workspace /run /mnt raw",
@@ -432,6 +544,43 @@ describe("composer-model", () => {
         "codex",
       ),
     ).toEqual({ start: 4, end: 15 });
+  });
+
+  it("does not delete file-shaped tokens when file decoration is disabled", () => {
+    expect(
+      findComposerTokenDeletionRange(
+        "Ask @alice",
+        "Ask @alice".length,
+        null,
+        "codex",
+        {
+          decorateFileTokens: false,
+        },
+      ),
+    ).toBeNull();
+  });
+
+  it("uses draft binding spans when deleting file mentions with spaces", () => {
+    expect(
+      findComposerTokenDeletionRange(
+        "Review @docs/My File.ts ",
+        "Review @docs/My File.ts ".length,
+        null,
+        "codex",
+        {
+          decorateFileTokens: false,
+          draftMentionBindings: [
+            {
+              mention: "docs/My File.ts",
+              kind: "file",
+              path: "docs/My File.ts",
+              start: 7,
+              end: 23,
+            },
+          ],
+        },
+      ),
+    ).toEqual({ start: 7, end: 24 });
   });
 
   it("does not delete a decorated prompt while editing inside its arguments", () => {

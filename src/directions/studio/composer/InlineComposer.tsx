@@ -73,6 +73,8 @@ import "./ComposerVoice.css";
 
 const COMPOSER_CATALOG_RETRY_DELAYS_MS = [250, 1_000, 3_000] as const;
 
+type FileSearchStatus = "idle" | "loading" | "ready" | "error";
+
 type Props = {
   environmentId: string;
   threadId: string;
@@ -154,10 +156,15 @@ export function InlineComposer({
   const [fileResults, setFileResults] = useState<ComposerFileSearchResult[]>(
     [],
   );
+  const [fileSearchStatus, setFileSearchStatus] =
+    useState<FileSearchStatus>("idle");
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [inputFocused, setInputFocused] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [autocompleteSelection, setAutocompleteSelection] = useState<{
+    tokenKey: string | null;
+    index: number;
+  }>({ tokenKey: null, index: 0 });
   const [dismissedTokenKey, setDismissedTokenKey] = useState<string | null>(
     null,
   );
@@ -393,38 +400,41 @@ export function InlineComposer({
   }, [draft, mentionBindings, onChangeMentionBindings]);
 
   useEffect(() => {
-    if (!fileSearchTarget) {
+    if (!activeToken || activeToken.kind !== "file" || !fileSearchTarget) {
       fileSearchRequestRef.current += 1;
       setFileResults([]);
-      return;
-    }
-    if (!activeToken || activeToken.kind !== "file") {
-      fileSearchRequestRef.current += 1;
-      setFileResults([]);
+      setFileSearchStatus("idle");
       return;
     }
     const requestId = fileSearchRequestRef.current + 1;
     fileSearchRequestRef.current = requestId;
+    setFileResults([]);
+    setFileSearchStatus("loading");
+    let cancelled = false;
     const timeout = window.setTimeout(() => {
       void searchComposerFiles({
         target: fileSearchTarget,
-        requestKey: threadId,
         query: activeToken.query,
         limit: 50,
       })
         .then((results) => {
-          if (fileSearchRequestRef.current === requestId) {
+          if (!cancelled && fileSearchRequestRef.current === requestId) {
             setFileResults(results);
+            setFileSearchStatus("ready");
           }
         })
         .catch(() => {
-          if (fileSearchRequestRef.current === requestId) {
+          if (!cancelled && fileSearchRequestRef.current === requestId) {
             setFileResults([]);
+            setFileSearchStatus("error");
           }
         });
     }, 120);
-    return () => window.clearTimeout(timeout);
-  }, [activeToken, fileSearchTarget, threadId]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [activeToken, fileSearchTarget]);
 
   const autocompleteItems = useMemo(
     () =>
@@ -446,19 +456,44 @@ export function InlineComposer({
     ],
   );
   const hasAutocompleteItems = autocompleteItems.length > 0;
+  const activeFileToken = activeToken?.kind === "file" ? activeToken : null;
+  let autocompleteStatusMessage: string | null = null;
+  if (dismissedTokenKey !== activeTokenKey && activeFileToken) {
+    if (fileSearchStatus === "loading") {
+      autocompleteStatusMessage = "Searching files...";
+    } else if (fileSearchStatus === "error") {
+      autocompleteStatusMessage = "File search failed.";
+    } else if (fileSearchStatus === "ready" && autocompleteItems.length === 0) {
+      autocompleteStatusMessage = "No matching files.";
+    }
+  }
+  const showAutocompleteMenu =
+    hasAutocompleteItems || autocompleteStatusMessage !== null;
+  const activeIndex =
+    autocompleteItems.length === 0
+      ? 0
+      : Math.min(
+          autocompleteSelection.tokenKey === activeTokenKey
+            ? autocompleteSelection.index
+            : 0,
+          autocompleteItems.length - 1,
+        );
   const showVisualCaret =
     inputFocused &&
     !inputDisabled &&
     selection.start === selection.end &&
     draft.length > 0;
 
-  useEffect(() => {
-    setActiveIndex((current) =>
-      autocompleteItems.length === 0
-        ? 0
-        : Math.min(current, autocompleteItems.length - 1),
-    );
-  }, [autocompleteItems.length]);
+  function updateAutocompleteIndex(updater: (current: number) => number) {
+    setAutocompleteSelection((current) => {
+      const currentIndex =
+        current.tokenKey === activeTokenKey ? current.index : 0;
+      return {
+        tokenKey: activeTokenKey,
+        index: updater(currentIndex),
+      };
+    });
+  }
 
   useEffect(() => {
     if (!menuRef.current) {
@@ -529,6 +564,10 @@ export function InlineComposer({
       start,
       catalog,
       composer.provider,
+      {
+        decorateFileTokens: fileSearchTarget !== null,
+        draftMentionBindings: mentionBindings,
+      },
     );
     if (!deletionRange) {
       return false;
@@ -614,12 +653,13 @@ export function InlineComposer({
   return (
     <div className={`tx-composer ${isPlanMode ? "tx-composer--plan" : ""}`}>
       <div className="tx-composer__menu-anchor">
-        {hasAutocompleteItems ? (
+        {showAutocompleteMenu ? (
           <div ref={menuRef} className="tx-composer__menu-portal">
             <ComposerAutocompleteMenu
               items={autocompleteItems}
               activeIndex={activeIndex}
               onSelect={applyItem}
+              statusMessage={autocompleteStatusMessage}
             />
           </div>
         ) : null}
@@ -656,6 +696,8 @@ export function InlineComposer({
             draft={draft}
             catalog={catalog}
             cursorIndex={selection.start}
+            decorateFileTokens={fileSearchTarget !== null}
+            mentionBindings={mentionBindings}
             placeholder={placeholder}
             provider={composer.provider}
             showCaret={showVisualCaret}
@@ -719,14 +761,14 @@ export function InlineComposer({
               if (hasAutocompleteItems) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  setActiveIndex(
+                  updateAutocompleteIndex(
                     (current) => (current + 1) % autocompleteItems.length,
                   );
                   return;
                 }
                 if (event.key === "ArrowUp") {
                   event.preventDefault();
-                  setActiveIndex((current) =>
+                  updateAutocompleteIndex((current) =>
                     current === 0 ? autocompleteItems.length - 1 : current - 1,
                   );
                   return;
@@ -743,6 +785,11 @@ export function InlineComposer({
                   setDismissedTokenKey(activeTokenKey);
                   return;
                 }
+              }
+              if (autocompleteStatusMessage && event.key === "Escape") {
+                event.preventDefault();
+                setDismissedTokenKey(activeTokenKey);
+                return;
               }
 
               if (event.key === "Escape" && isRefiningPlan) {

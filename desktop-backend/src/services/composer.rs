@@ -3,19 +3,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::domain::conversation::{
-    ComposerAppOption, ComposerFileSearchResult, ComposerMentionBindingInput,
-    ComposerMentionBindingKind, ComposerPromptArgumentMode, ComposerPromptOption,
-    ComposerSkillOption, ThreadComposerCatalog,
+    ComposerAppOption, ComposerMentionBindingInput, ComposerMentionBindingKind,
+    ComposerPromptArgumentMode, ComposerPromptOption, ComposerSkillOption, ThreadComposerCatalog,
 };
 use crate::error::{AppError, AppResult};
 
 #[path = "composer/claude.rs"]
 mod claude;
+#[path = "composer/file_search.rs"]
+mod file_search;
 
 pub use claude::{
     build_claude_thread_catalog, load_claude_command_definitions, load_claude_skill_definitions,
     resolve_claude_composer_text,
 };
+pub use file_search::search_workspace_files;
 
 const PROMPT_PREFIX: &str = "/prompts:";
 
@@ -160,14 +162,6 @@ pub fn build_thread_catalog(
             })
             .collect(),
     }
-}
-
-pub fn trim_file_search_results(paths: Vec<String>, limit: usize) -> Vec<ComposerFileSearchResult> {
-    paths
-        .into_iter()
-        .take(limit)
-        .map(|path| ComposerFileSearchResult { path })
-        .collect()
 }
 
 pub fn connector_mention_slug(name: &str) -> String {
@@ -758,6 +752,9 @@ fn resolve_dollar_mentions(
 
     let mut explicit_by_name = HashMap::<String, VecDeque<&ComposerMentionBindingInput>>::new();
     for binding in explicit_bindings {
+        if matches!(binding.kind, ComposerMentionBindingKind::File) {
+            continue;
+        }
         explicit_by_name
             .entry(binding.mention.to_ascii_lowercase())
             .or_default()
@@ -806,6 +803,7 @@ fn resolve_dollar_mentions(
                         continue;
                     }
                 }
+                ComposerMentionBindingKind::File => {}
             }
         }
 
@@ -1063,11 +1061,15 @@ mod tests {
                     mention: "github".to_string(),
                     kind: ComposerMentionBindingKind::App,
                     path: github_app.path.clone(),
+                    start: None,
+                    end: None,
                 },
                 ComposerMentionBindingInput {
                     mention: "github".to_string(),
                     kind: ComposerMentionBindingKind::Skill,
                     path: github_skill.path.clone(),
+                    start: None,
+                    end: None,
                 },
             ],
         )
@@ -1075,6 +1077,32 @@ mod tests {
 
         assert_eq!(resolved.mentions, vec![github_app]);
         assert_eq!(resolved.skills, vec![github_skill]);
+    }
+
+    #[test]
+    fn file_mention_bindings_do_not_resolve_as_dollar_mentions() {
+        let resolved = resolve_composer_text(
+            "Review @src/main.ts with $review",
+            &[],
+            &[SkillBinding {
+                name: "review".to_string(),
+                description: "Review".to_string(),
+                path: "/tmp/skills/review/SKILL.md".to_string(),
+            }],
+            &[],
+            &[ComposerMentionBindingInput {
+                mention: "src/main.ts".to_string(),
+                kind: ComposerMentionBindingKind::File,
+                path: "src/main.ts".to_string(),
+                start: None,
+                end: None,
+            }],
+        )
+        .expect("file bindings should remain metadata-only");
+
+        assert_eq!(resolved.text, "Review @src/main.ts with $review");
+        assert_eq!(resolved.skills.len(), 1);
+        assert!(resolved.mentions.is_empty());
     }
 
     #[test]

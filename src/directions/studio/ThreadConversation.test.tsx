@@ -309,6 +309,33 @@ describe("ThreadConversation", () => {
     });
   });
 
+  it("opens file autocomplete from the real thread composer wiring", async () => {
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot(),
+      capabilities: capabilitiesFixture,
+    });
+    mockedBridge.searchComposerFiles.mockResolvedValue([{ path: "src/App.tsx" }]);
+
+    render(
+      <ThreadConversation
+        environment={makeEnvironment()}
+        thread={makeThread()}
+      />,
+    );
+
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await userEvent.type(input, "@");
+
+    expect(
+      await screen.findByRole("option", { name: /App\.tsx/i }),
+    ).toBeInTheDocument();
+    expect(mockedBridge.searchComposerFiles).toHaveBeenCalledWith({
+      target: { kind: "thread", threadId: "thread-1" },
+      query: "",
+      limit: 50,
+    });
+  });
+
   it("collapses intermediate work activity into a single live block when the setting is enabled", async () => {
     useWorkspaceStore.setState((state) => ({
       ...state,
@@ -3087,6 +3114,47 @@ describe("ThreadConversation", () => {
         }),
       });
     });
+  });
+
+  it("keeps file autocomplete disabled for standalone chat threads", async () => {
+    const thread = makeThread({
+      id: "chat-thread-1",
+      environmentId: "chat-env-1",
+    });
+    const runtime = makeEnvironment().runtime;
+    const environment = makeEnvironment({
+      id: "chat-env-1",
+      kind: "chat",
+      projectId: "skein-chat-workspace",
+      name: "Chat",
+      threads: [thread],
+      runtime: {
+        ...runtime,
+        environmentId: "chat-env-1",
+      },
+    });
+    mockedBridge.openThreadConversation.mockResolvedValue({
+      snapshot: makeConversationSnapshot({
+        threadId: "chat-thread-1",
+        environmentId: "chat-env-1",
+        status: "idle",
+      }),
+      capabilities: capabilitiesFixture,
+    });
+
+    render(
+      <ThreadConversation
+        environment={environment}
+        thread={thread}
+      />,
+    );
+
+    const user = userEvent.setup();
+    const input = await screen.findByPlaceholderText("Message Skein...");
+    await user.type(input, "@");
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(mockedBridge.searchComposerFiles).not.toHaveBeenCalled();
   });
 
   it("adds a trailing space after skill autocomplete selections", async () => {
