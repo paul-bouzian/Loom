@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -112,6 +112,7 @@ pub struct RuntimeSupervisor {
     environment_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     headless_sessions: Arc<Mutex<HashMap<String, HeadlessSession>>>,
     account_usage: Arc<Mutex<AccountUsageState>>,
+    composer_file_search_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     usage_updates: mpsc::UnboundedSender<RuntimeUsageUpdate>,
 }
 
@@ -255,6 +256,7 @@ impl RuntimeSupervisor {
         let environment_locks = Arc::new(Mutex::new(HashMap::new()));
         let headless_sessions = Arc::new(Mutex::new(HashMap::new()));
         let account_usage = Arc::new(Mutex::new(AccountUsageState::default()));
+        let composer_file_search_cancellations = Arc::new(Mutex::new(HashMap::new()));
         let (usage_updates, usage_update_rx) = mpsc::unbounded_channel();
         spawn_usage_update_task(
             events.clone(),
@@ -276,6 +278,7 @@ impl RuntimeSupervisor {
             environment_locks,
             headless_sessions,
             account_usage,
+            composer_file_search_cancellations,
             usage_updates,
         }
     }
@@ -806,12 +809,35 @@ impl RuntimeSupervisor {
         limit: usize,
     ) -> AppResult<Vec<crate::domain::conversation::ComposerFileSearchResult>> {
         validate_composer_file_search_context(&context)?;
+        let cancellation_key = composer_file_search_cancellation_key(&context);
         let environment_path = context.environment_path;
-        tokio::task::spawn_blocking(move || {
-            search_workspace_files(&environment_path, &query, limit)
+        let cancellation = Arc::new(AtomicBool::new(false));
+        {
+            let mut cancellations = self.composer_file_search_cancellations.lock().await;
+            if let Some(previous) =
+                cancellations.insert(cancellation_key.clone(), cancellation.clone())
+            {
+                previous.store(true, Ordering::Relaxed);
+            }
+        }
+
+        let result = tokio::task::spawn_blocking({
+            let cancellation = cancellation.clone();
+            move || search_workspace_files(&environment_path, &query, limit, &cancellation)
         })
-        .await
-        .map_err(|error| AppError::Runtime(error.to_string()))?
+        .await;
+
+        {
+            let mut cancellations = self.composer_file_search_cancellations.lock().await;
+            if cancellations
+                .get(&cancellation_key)
+                .is_some_and(|current| Arc::ptr_eq(current, &cancellation))
+            {
+                cancellations.remove(&cancellation_key);
+            }
+        }
+
+        result.map_err(|error| AppError::Runtime(error.to_string()))?
     }
 
     pub async fn send_thread_message(
@@ -1825,6 +1851,21 @@ fn validate_composer_file_search_context(context: &ComposerTargetContext) -> App
     Ok(())
 }
 
+fn composer_file_search_cancellation_key(context: &ComposerTargetContext) -> String {
+    format!(
+        "{}:{}",
+        context.environment_id,
+        provider_file_search_key(context.provider)
+    )
+}
+
+fn provider_file_search_key(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Codex => "codex",
+        ProviderKind::Claude => "claude",
+    }
+}
+
 fn resolve_binary_path(codex_binary_path: Option<String>) -> AppResult<String> {
     resolve_codex_binary_path(codex_binary_path.as_deref())
 }
@@ -1842,17 +1883,18 @@ mod tests {
 
     use super::{
         apply_account_usage_patch, apply_account_usage_snapshot, classify_idle_runtime_candidates,
-        collect_idle_runtime_candidates, emit_account_usage_event, finish_headless_read,
-        finish_headless_session, latest_running_usage_source, merge_account_usage_snapshot,
-        prime_running_runtime_usage, read_account_from_target, read_auth_status_from_target,
-        read_capabilities_from_target, read_composer_catalog_from_target, resolve_binary_path,
-        should_stop_idle_runtime_candidate, store_account_usage_snapshot_from_read,
-        store_headless_session, take_idle_headless_sessions, take_mismatched_headless_session,
-        touch_headless_session, touch_running_runtime, usage_snapshot_is_empty,
-        usage_snapshot_patch_from_snapshot, validate_composer_file_search_context,
-        AccountUsageState, AppServerAuthStatus, CodexRateLimitSnapshotPatch, HeadlessSession,
-        RunningRuntime, RuntimeReadTarget, RuntimeRegistry, RuntimeSupervisor, RuntimeUsageUpdate,
-        SharedHeadlessHandle, UsageConfirmationFallback, UsageUpdateOrigin,
+        collect_idle_runtime_candidates, composer_file_search_cancellation_key,
+        emit_account_usage_event, finish_headless_read, finish_headless_session,
+        latest_running_usage_source, merge_account_usage_snapshot, prime_running_runtime_usage,
+        read_account_from_target, read_auth_status_from_target, read_capabilities_from_target,
+        read_composer_catalog_from_target, resolve_binary_path, should_stop_idle_runtime_candidate,
+        store_account_usage_snapshot_from_read, store_headless_session,
+        take_idle_headless_sessions, take_mismatched_headless_session, touch_headless_session,
+        touch_running_runtime, usage_snapshot_is_empty, usage_snapshot_patch_from_snapshot,
+        validate_composer_file_search_context, AccountUsageState, AppServerAuthStatus,
+        CodexRateLimitSnapshotPatch, HeadlessSession, RunningRuntime, RuntimeReadTarget,
+        RuntimeRegistry, RuntimeSupervisor, RuntimeUsageUpdate, SharedHeadlessHandle,
+        UsageConfirmationFallback, UsageUpdateOrigin,
     };
     use crate::app_identity::CODEX_USAGE_EVENT_NAME;
     use crate::domain::conversation::{
@@ -2228,6 +2270,29 @@ mod tests {
             file_search_enabled: true,
         })
         .expect("project file search should be provider-neutral");
+    }
+
+    #[test]
+    fn composer_file_search_cancellation_key_is_environment_provider_scoped() {
+        let codex_key = composer_file_search_cancellation_key(&ComposerTargetContext {
+            environment_id: "env-1".to_string(),
+            environment_path: "/tmp/skein".to_string(),
+            provider: ProviderKind::Codex,
+            codex_thread_id: None,
+            codex_binary_path: None,
+            file_search_enabled: true,
+        });
+        let claude_key = composer_file_search_cancellation_key(&ComposerTargetContext {
+            environment_id: "env-1".to_string(),
+            environment_path: "/tmp/skein".to_string(),
+            provider: ProviderKind::Claude,
+            codex_thread_id: None,
+            codex_binary_path: None,
+            file_search_enabled: true,
+        });
+
+        assert_eq!(codex_key, "env-1:codex");
+        assert_eq!(claude_key, "env-1:claude");
     }
 
     #[tokio::test]

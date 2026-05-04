@@ -1,12 +1,13 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::domain::conversation::ComposerFileSearchResult;
 use crate::error::{AppError, AppResult};
 use crate::services::git::{command_output, stderr_message};
 
-const FILE_SEARCH_MAX_INDEX_ENTRIES: usize = 25_000;
+const FILE_SEARCH_MAX_FILESYSTEM_ENTRIES: usize = 25_000;
 const FILE_SEARCH_IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
     ".next",
@@ -23,6 +24,7 @@ pub fn search_workspace_files(
     environment_path: &str,
     query: &str,
     limit: usize,
+    cancellation: &AtomicBool,
 ) -> AppResult<Vec<ComposerFileSearchResult>> {
     let root = Path::new(environment_path);
     if !root.is_dir() {
@@ -30,19 +32,24 @@ pub fn search_workspace_files(
             "File search target must be an existing directory.".to_string(),
         ));
     }
+    ensure_file_search_not_cancelled(cancellation)?;
 
-    let mut paths = match list_git_workspace_files(root) {
+    let mut paths = match list_git_workspace_files(root, cancellation) {
         Ok(paths) => paths,
-        Err(_) => list_filesystem_workspace_files(root)?,
+        Err(_) => list_filesystem_workspace_files(root, cancellation)?,
     };
+    ensure_file_search_not_cancelled(cancellation)?;
     paths.sort();
     paths.dedup();
 
     let normalized_query = normalize_file_search_query(query);
-    let mut ranked = paths
-        .into_iter()
-        .filter_map(|path| score_file_path(&path, &normalized_query).map(|score| (score, path)))
-        .collect::<Vec<_>>();
+    let mut ranked = Vec::new();
+    for path in paths {
+        ensure_file_search_not_cancelled(cancellation)?;
+        if let Some(score) = score_file_path(&path, &normalized_query) {
+            ranked.push((score, path));
+        }
+    }
     ranked.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
 
     Ok(trim_file_search_results(
@@ -59,7 +66,15 @@ fn trim_file_search_results(paths: Vec<String>, limit: usize) -> Vec<ComposerFil
         .collect()
 }
 
-fn list_git_workspace_files(root: &Path) -> AppResult<Vec<String>> {
+fn ensure_file_search_not_cancelled(cancellation: &AtomicBool) -> AppResult<()> {
+    if cancellation.load(Ordering::Relaxed) {
+        return Err(AppError::Runtime("File search cancelled.".to_string()));
+    }
+
+    Ok(())
+}
+
+fn list_git_workspace_files(root: &Path, cancellation: &AtomicBool) -> AppResult<Vec<String>> {
     let output = command_output(
         root,
         [
@@ -74,21 +89,32 @@ fn list_git_workspace_files(root: &Path) -> AppResult<Vec<String>> {
         return Err(AppError::Git(stderr_message(&output.stderr)));
     }
 
-    Ok(output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|token| !token.is_empty())
-        .filter_map(|token| String::from_utf8(token.to_vec()).ok())
-        .filter_map(|path| normalize_relative_file_path(&path))
-        .take(FILE_SEARCH_MAX_INDEX_ENTRIES)
-        .collect())
+    let mut paths = Vec::new();
+    for token in output.stdout.split(|byte| *byte == 0) {
+        ensure_file_search_not_cancelled(cancellation)?;
+        if token.is_empty() {
+            continue;
+        }
+        let Ok(path) = String::from_utf8(token.to_vec()) else {
+            continue;
+        };
+        if let Some(path) = normalize_relative_file_path(&path) {
+            paths.push(path);
+        }
+    }
+
+    Ok(paths)
 }
 
-fn list_filesystem_workspace_files(root: &Path) -> AppResult<Vec<String>> {
+fn list_filesystem_workspace_files(
+    root: &Path,
+    cancellation: &AtomicBool,
+) -> AppResult<Vec<String>> {
     let mut pending = VecDeque::from([PathBuf::new()]);
     let mut paths = Vec::new();
 
     while let Some(relative_dir) = pending.pop_front() {
+        ensure_file_search_not_cancelled(cancellation)?;
         let absolute_dir = root.join(&relative_dir);
         let entries = match fs::read_dir(&absolute_dir) {
             Ok(entries) => entries,
@@ -103,6 +129,7 @@ fn list_filesystem_workspace_files(root: &Path) -> AppResult<Vec<String>> {
         };
 
         for entry in entries {
+            ensure_file_search_not_cancelled(cancellation)?;
             let entry = entry?;
             let file_type = entry.file_type()?;
             let name = entry.file_name();
@@ -123,7 +150,7 @@ fn list_filesystem_workspace_files(root: &Path) -> AppResult<Vec<String>> {
             } else if file_type.is_file() {
                 if let Some(path) = normalize_relative_file_path(&relative_path.to_string_lossy()) {
                     paths.push(path);
-                    if paths.len() >= FILE_SEARCH_MAX_INDEX_ENTRIES {
+                    if paths.len() >= FILE_SEARCH_MAX_FILESYSTEM_ENTRIES {
                         return Ok(paths);
                     }
                 }
@@ -213,8 +240,10 @@ mod tests {
         fs::write(workspace.path.join("src").join("App.tsx"), "export {}").expect("app file");
         fs::write(workspace.path.join("README.md"), "# Test").expect("readme file");
 
-        let results = search_workspace_files(workspace.path.to_str().unwrap(), "", 10)
-            .expect("empty query should return files");
+        let cancellation = AtomicBool::new(false);
+        let results =
+            search_workspace_files(workspace.path.to_str().unwrap(), "", 10, &cancellation)
+                .expect("empty query should return files");
         let paths = results
             .into_iter()
             .map(|result| result.path)
@@ -231,13 +260,27 @@ mod tests {
         fs::write(workspace.path.join("src").join("App.tsx"), "export {}").expect("app file");
         fs::write(workspace.path.join("src").join("Other.ts"), "export {}").expect("other file");
 
-        let results = search_workspace_files(workspace.path.to_str().unwrap(), "app", 10)
-            .expect("query should return matching files");
+        let cancellation = AtomicBool::new(false);
+        let results =
+            search_workspace_files(workspace.path.to_str().unwrap(), "app", 10, &cancellation)
+                .expect("query should return matching files");
 
         assert_eq!(
             results.first().map(|result| result.path.as_str()),
             Some("src/App.tsx")
         );
+    }
+
+    #[test]
+    fn cancelled_search_stops_before_listing_files() {
+        let workspace = temp_workspace("cancelled-search");
+        fs::write(workspace.path.join("README.md"), "# Test").expect("readme file");
+        let cancellation = AtomicBool::new(true);
+
+        let error = search_workspace_files(workspace.path.to_str().unwrap(), "", 10, &cancellation)
+            .expect_err("cancelled search should fail fast");
+
+        assert!(matches!(error, AppError::Runtime(message) if message == "File search cancelled."));
     }
 
     struct TempWorkspace {
