@@ -909,11 +909,11 @@ function buildOptimisticUserMessageSnapshot(
 
   return {
     item: messageItem,
-    snapshot: {
+    snapshot: snapshotWithOptimisticTurn({
       ...snapshot,
       items: [...snapshot.items, messageItem],
       error: null,
-    },
+    }),
   };
 }
 
@@ -1066,7 +1066,11 @@ function snapshotWithPendingOptimisticMessage(
 }
 
 function isStalePreRunSnapshot(snapshot: ThreadConversationSnapshot): boolean {
-  return snapshot.status === "idle" && !snapshot.activeTurnId;
+  return (
+    !snapshot.activeTurnId &&
+    snapshot.status !== "running" &&
+    snapshot.status !== "waitingForExternalAction"
+  );
 }
 
 function snapshotWithOptimisticTurn(

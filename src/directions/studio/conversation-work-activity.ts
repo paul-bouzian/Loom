@@ -1,5 +1,6 @@
 import type {
   ConversationItem,
+  ConversationMessageItem,
   ConversationStatus,
   ConversationTaskSnapshot,
   ProposedPlanSnapshot,
@@ -36,6 +37,7 @@ type WorkActivityTiming = {
 };
 
 const TIMING_BY_GROUP: Map<string, WorkActivityTiming> = new Map();
+const OPTIMISTIC_TIMING_KEY_BY_FINGERPRINT: Map<string, string> = new Map();
 const TIMING_MAX_ENTRIES = 500;
 
 function evictOldestTiming(): void {
@@ -43,21 +45,37 @@ function evictOldestTiming(): void {
     const oldest = TIMING_BY_GROUP.keys().next().value;
     if (oldest === undefined) break;
     TIMING_BY_GROUP.delete(oldest);
+    for (const [fingerprint, timingKey] of OPTIMISTIC_TIMING_KEY_BY_FINGERPRINT) {
+      if (timingKey === oldest) {
+        OPTIMISTIC_TIMING_KEY_BY_FINGERPRINT.delete(fingerprint);
+      }
+    }
   }
 }
 
 function recordTiming(
   timingKey: string,
   status: WorkActivityStatus,
+  fingerprint: string | null,
+  isOptimisticTiming: boolean,
 ): WorkActivityTiming | null {
-  const existing = TIMING_BY_GROUP.get(timingKey) ?? null;
+  const existing =
+    TIMING_BY_GROUP.get(timingKey) ??
+    (isOptimisticTiming ? null : migratedOptimisticTiming(timingKey, fingerprint));
   if (status === "running" || status === "waiting") {
     if (existing) {
       existing.finishedAt = null;
       return existing;
     }
-    const created: WorkActivityTiming = { startedAt: Date.now(), finishedAt: null };
+    const created: WorkActivityTiming = {
+      startedAt: Date.now(),
+      finishedAt: null,
+    };
     TIMING_BY_GROUP.set(timingKey, created);
+    if (isOptimisticTiming && fingerprint) {
+      clearOptimisticTimingForThread(fingerprint, timingKey);
+      OPTIMISTIC_TIMING_KEY_BY_FINGERPRINT.set(fingerprint, timingKey);
+    }
     evictOldestTiming();
     return created;
   }
@@ -66,6 +84,59 @@ function recordTiming(
     existing.finishedAt = Date.now();
   }
   return existing;
+}
+
+function migratedOptimisticTiming(
+  timingKey: string,
+  fingerprint: string | null,
+): WorkActivityTiming | null {
+  if (!fingerprint) {
+    return null;
+  }
+  const optimisticTimingKey =
+    OPTIMISTIC_TIMING_KEY_BY_FINGERPRINT.get(fingerprint) ?? null;
+  if (!optimisticTimingKey) {
+    return null;
+  }
+  const optimisticTiming = TIMING_BY_GROUP.get(optimisticTimingKey) ?? null;
+  if (!optimisticTiming) {
+    OPTIMISTIC_TIMING_KEY_BY_FINGERPRINT.delete(fingerprint);
+    return null;
+  }
+  TIMING_BY_GROUP.delete(optimisticTimingKey);
+  TIMING_BY_GROUP.set(timingKey, optimisticTiming);
+  OPTIMISTIC_TIMING_KEY_BY_FINGERPRINT.delete(fingerprint);
+  return optimisticTiming;
+}
+
+function clearOptimisticTimingForThread(
+  fingerprint: string,
+  currentTimingKey: string,
+): void {
+  const threadId = threadIdForFingerprint(fingerprint);
+  if (!threadId) {
+    return;
+  }
+  for (const [candidateFingerprint, candidateTimingKey] of [
+    ...OPTIMISTIC_TIMING_KEY_BY_FINGERPRINT,
+  ]) {
+    if (
+      candidateTimingKey !== currentTimingKey &&
+      threadIdForFingerprint(candidateFingerprint) === threadId
+    ) {
+      TIMING_BY_GROUP.delete(candidateTimingKey);
+      OPTIMISTIC_TIMING_KEY_BY_FINGERPRINT.delete(candidateFingerprint);
+    }
+  }
+}
+
+function threadIdForFingerprint(fingerprint: string): string | null {
+  try {
+    const parsed = JSON.parse(fingerprint);
+    return typeof parsed?.[0] === "string" ? parsed[0] : null;
+  } catch {
+    return null;
+  }
 }
 
 export type ConversationTimelineEntry =
@@ -470,7 +541,13 @@ function finalizeGroup(
   };
 
   const status = statusForGroup(group.turnId, snapshot, latestWorkTurnId);
-  const timing = recordTiming(timingKeyForGroup(group.turnId, snapshot), status);
+  const timingFingerprint = timingFingerprintForGroup(group.turnId, snapshot);
+  const timing = recordTiming(
+    timingKeyForGroup(group.turnId, snapshot),
+    status,
+    timingFingerprint,
+    group.turnId === OPTIMISTIC_FIRST_TURN_ID,
+  );
 
   return {
     id: `work-${group.turnId}`,
@@ -481,6 +558,53 @@ function finalizeGroup(
     startedAt: timing?.startedAt ?? null,
     finishedAt: timing?.finishedAt ?? null,
   };
+}
+
+function timingFingerprintForGroup(
+  turnId: string,
+  snapshot: ThreadConversationSnapshot,
+): string | null {
+  const userMessage =
+    turnId === OPTIMISTIC_FIRST_TURN_ID
+      ? userMessageAtActiveTurnAnchor(snapshot)
+      : firstUserMessageForTurn(snapshot, turnId);
+  if (!userMessage) return null;
+  const images = (userMessage.images ?? [])
+    .map((image) =>
+      image.type === "image" ? `image:${image.url}` : `localImage:${image.path}`,
+    )
+    .join("\n");
+  return JSON.stringify([snapshot.threadId, userMessage.text, images]);
+}
+
+function userMessageAtActiveTurnAnchor(
+  snapshot: ThreadConversationSnapshot,
+): ConversationMessageItem | null {
+  const anchorIndex = findActiveTurnAnchorIndex(snapshot);
+  const item = anchorIndex === null ? null : (snapshot.items[anchorIndex] ?? null);
+  return item?.kind === "message" && item.role === "user" ? item : null;
+}
+
+function firstUserMessageForTurn(
+  snapshot: ThreadConversationSnapshot,
+  turnId: string,
+): ConversationMessageItem | null {
+  if (snapshot.activeTurnId === turnId) {
+    const activeAnchor = userMessageAtActiveTurnAnchor(snapshot);
+    if (activeAnchor) {
+      return activeAnchor;
+    }
+  }
+  for (const item of snapshot.items) {
+    if (
+      item.kind === "message" &&
+      item.role === "user" &&
+      item.turnId === turnId
+    ) {
+      return item;
+    }
+  }
+  return null;
 }
 
 function timingKeyForGroup(

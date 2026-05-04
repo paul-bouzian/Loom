@@ -43,6 +43,73 @@ describe("buildConversationTimeline", () => {
     }
   });
 
+  it("preserves optimistic timing when the provider confirms the active turn", () => {
+    const dateNow = vi.spyOn(Date, "now");
+    const optimisticStartedAt = new Date("2026-05-01T10:00:00Z").getTime();
+    const providerStartedAt = new Date("2026-05-01T10:00:07Z").getTime();
+    try {
+      dateNow.mockReturnValue(optimisticStartedAt);
+      const optimisticGroup = optimisticWorkActivityGroup({
+        threadId: "thread-confirmed-timing",
+        messageId: "optimistic-user-confirmed",
+        text: "Build the dashboard",
+      });
+
+      dateNow.mockReturnValue(providerStartedAt);
+      const confirmedGroup = onlyWorkActivityGroup(
+        buildConversationTimeline(
+          makeConversationSnapshot({
+            threadId: "thread-confirmed-timing",
+            status: "running",
+            activeTurnId: "turn-confirmed",
+            items: [
+              {
+                kind: "message",
+                id: "user-confirmed",
+                role: "user",
+                text: "Build the dashboard",
+                images: null,
+                isStreaming: false,
+              },
+            ],
+          }),
+        ),
+      );
+
+      expect(optimisticGroup.startedAt).toBe(optimisticStartedAt);
+      expect(confirmedGroup.turnId).toBe("turn-confirmed");
+      expect(confirmedGroup.startedAt).toBe(optimisticStartedAt);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("starts fresh timing for a later optimistic send with the same text", () => {
+    const dateNow = vi.spyOn(Date, "now");
+    const firstStartedAt = new Date("2026-05-01T10:00:00Z").getTime();
+    const secondStartedAt = new Date("2026-05-01T10:02:00Z").getTime();
+    try {
+      dateNow.mockReturnValue(firstStartedAt);
+      const firstGroup = optimisticWorkActivityGroup({
+        threadId: "thread-repeated-optimistic-text",
+        messageId: "optimistic-user-repeat-old",
+        text: "Try again",
+      });
+
+      dateNow.mockReturnValue(secondStartedAt);
+      const secondGroup = optimisticWorkActivityGroup({
+        threadId: "thread-repeated-optimistic-text",
+        messageId: "optimistic-user-repeat-new",
+        text: "Try again",
+      });
+
+      expect(firstGroup.startedAt).toBe(firstStartedAt);
+      expect(secondGroup.startedAt).toBe(secondStartedAt);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("keeps live assistant updates inside the active work activity", () => {
     const entries = buildConversationTimeline(
       makeConversationSnapshot({

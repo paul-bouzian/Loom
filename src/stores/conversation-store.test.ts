@@ -814,8 +814,11 @@ describe("conversation store", () => {
     });
   });
 
-  it("adds an optimistic user message immediately and rolls it back if send fails", async () => {
-    const initialSnapshot = makeConversationSnapshot({ status: "idle" });
+  it("adds an optimistic active turn immediately and rolls it back if send fails", async () => {
+    const initialSnapshot = makeConversationSnapshot({
+      status: "completed",
+      activeTurnId: null,
+    });
     const deferred = new Promise<ThreadConversationSnapshot>((_, reject) => {
       queueMicrotask(() => reject(new Error("send failed")));
     });
@@ -854,10 +857,13 @@ describe("conversation store", () => {
   });
 
   it("keeps an optimistic user message while stale runtime snapshots arrive", async () => {
-    const initialSnapshot = makeConversationSnapshot({ status: "idle" });
+    const initialSnapshot = makeConversationSnapshot({
+      status: "completed",
+      activeTurnId: null,
+    });
     const staleSnapshot = makeConversationSnapshot({
-      status: "running",
-      activeTurnId: "turn-optimistic",
+      status: "completed",
+      activeTurnId: null,
       items: initialSnapshot.items,
     });
     const confirmedSnapshot = makeConversationSnapshot({
@@ -892,6 +898,12 @@ describe("conversation store", () => {
       .sendMessage("thread-1", "tu vas bien?");
 
     expect(
+      useConversationStore.getState().snapshotsByThreadId["thread-1"],
+    ).toMatchObject({
+      status: "running",
+      activeTurnId: OPTIMISTIC_FIRST_TURN_ID,
+    });
+    expect(
       useConversationStore
         .getState()
         .snapshotsByThreadId["thread-1"].items.some(
@@ -908,6 +920,12 @@ describe("conversation store", () => {
       snapshot: staleSnapshot,
     });
 
+    expect(
+      useConversationStore.getState().snapshotsByThreadId["thread-1"],
+    ).toMatchObject({
+      status: "running",
+      activeTurnId: OPTIMISTIC_FIRST_TURN_ID,
+    });
     expect(
       useConversationStore
         .getState()
