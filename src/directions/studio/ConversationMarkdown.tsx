@@ -37,6 +37,10 @@ type MarkdownLinkAttributes = Pick<
   "data-footnote-backref"?: string;
   "data-footnote-ref"?: string;
 };
+type MarkdownLinkTargetParts = {
+  destinationEnd: number;
+  destinationStart: number;
+};
 
 const MARKDOWN_REMARK_PLUGINS = [
   remarkGfm,
@@ -518,7 +522,7 @@ function normalizeMarkdownLinkTargetsInPlainText(value: string): string {
     }
 
     const target = value.slice(link.targetStart, link.targetEnd);
-    const normalizedTarget = normalizeMarkdownLinkTarget(target);
+    const normalizedTarget = normalizeMarkdownLinkTargetPayload(target);
     result +=
       value.slice(cursor, link.targetStart) +
       normalizedTarget +
@@ -529,6 +533,25 @@ function normalizeMarkdownLinkTargetsInPlainText(value: string): string {
   return result;
 }
 
+function normalizeMarkdownLinkTargetPayload(target: string): string {
+  const targetParts = readMarkdownLinkTargetParts(target);
+  if (!targetParts) {
+    return normalizeMarkdownLinkTarget(target);
+  }
+
+  const destination = target.slice(targetParts.destinationStart, targetParts.destinationEnd);
+  const normalizedDestination = normalizeMarkdownLinkDestination(destination);
+  if (!normalizedDestination) {
+    return normalizeMarkdownLinkTarget(target);
+  }
+
+  return (
+    target.slice(0, targetParts.destinationStart) +
+    normalizedDestination +
+    target.slice(targetParts.destinationEnd)
+  );
+}
+
 function normalizeMarkdownLinkTarget(target: string): string {
   if (target.startsWith("#") || isValidExternalUrl(target)) {
     return target;
@@ -537,6 +560,18 @@ function normalizeMarkdownLinkTarget(target: string): string {
     return `${FILE_REFERENCE_HREF_PREFIX}${encodeURIComponent(target)}`;
   }
   return `${LITERAL_LINK_HREF_PREFIX}${encodeURIComponent(target)}`;
+}
+
+function normalizeMarkdownLinkDestination(destination: string): string | null {
+  const angleDestination = unwrapAngleMarkdownDestination(destination);
+  const target = angleDestination ?? destination;
+  if (target.startsWith("#") || isValidExternalUrl(target)) {
+    return destination;
+  }
+  if (parseFileReferenceTarget(target)) {
+    return `${FILE_REFERENCE_HREF_PREFIX}${encodeURIComponent(target)}`;
+  }
+  return null;
 }
 
 function decodePlaceholderHref(value: string, prefix: string): string | null {
@@ -802,6 +837,133 @@ function readInlineMarkdownLink(
     targetEnd: parenEnd,
     targetStart: bracketEnd + 2,
   };
+}
+
+function readMarkdownLinkTargetParts(value: string): MarkdownLinkTargetParts | null {
+  const destinationStart = skipMarkdownWhitespace(value, 0);
+  if (destinationStart >= value.length) {
+    return null;
+  }
+
+  const destinationEnd =
+    value[destinationStart] === "<"
+      ? findAngleMarkdownDestinationEnd(value, destinationStart)
+      : findBareMarkdownDestinationEnd(value, destinationStart);
+  if (destinationEnd === -1) {
+    return null;
+  }
+
+  let cursor = skipMarkdownWhitespace(value, destinationEnd);
+  if (cursor >= value.length) {
+    return { destinationEnd, destinationStart };
+  }
+
+  const titleEnd = findMarkdownLinkTitleEnd(value, cursor);
+  if (titleEnd === -1) {
+    return null;
+  }
+
+  cursor = skipMarkdownWhitespace(value, titleEnd);
+  return cursor === value.length ? { destinationEnd, destinationStart } : null;
+}
+
+function skipMarkdownWhitespace(value: string, index: number): number {
+  let cursor = index;
+  while (cursor < value.length && /\s/.test(value[cursor] ?? "")) {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function findAngleMarkdownDestinationEnd(value: string, startIndex: number): number {
+  let cursor = startIndex + 1;
+  while (cursor < value.length) {
+    if (value[cursor] === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (value[cursor] === ">") {
+      return cursor + 1;
+    }
+    if (value[cursor] === "\n") {
+      return -1;
+    }
+    cursor += 1;
+  }
+  return -1;
+}
+
+function findBareMarkdownDestinationEnd(value: string, startIndex: number): number {
+  let cursor = startIndex;
+  while (cursor < value.length) {
+    if (value[cursor] === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (/\s/.test(value[cursor] ?? "")) {
+      return cursor;
+    }
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function findMarkdownLinkTitleEnd(value: string, startIndex: number): number {
+  const marker = value[startIndex];
+  if (marker === "\"" || marker === "'") {
+    return findQuotedMarkdownTitleEnd(value, startIndex, marker);
+  }
+  if (marker === "(") {
+    return findParenthesizedMarkdownTitleEnd(value, startIndex);
+  }
+  return -1;
+}
+
+function findQuotedMarkdownTitleEnd(
+  value: string,
+  startIndex: number,
+  marker: "\"" | "'",
+): number {
+  let cursor = startIndex + 1;
+  while (cursor < value.length) {
+    if (value[cursor] === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (value[cursor] === marker) {
+      return cursor + 1;
+    }
+    cursor += 1;
+  }
+  return -1;
+}
+
+function findParenthesizedMarkdownTitleEnd(value: string, startIndex: number): number {
+  let depth = 0;
+  let cursor = startIndex;
+  while (cursor < value.length) {
+    if (value[cursor] === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (value[cursor] === "(") {
+      depth += 1;
+    } else if (value[cursor] === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return cursor + 1;
+      }
+    }
+    cursor += 1;
+  }
+  return -1;
+}
+
+function unwrapAngleMarkdownDestination(destination: string): string | null {
+  if (!destination.startsWith("<") || !destination.endsWith(">")) {
+    return null;
+  }
+  return destination.slice(1, -1);
 }
 
 function findMarkdownBracketEnd(value: string, startIndex: number): number {

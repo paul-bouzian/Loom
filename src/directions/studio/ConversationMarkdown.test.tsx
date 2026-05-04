@@ -34,6 +34,22 @@ describe("ConversationMarkdown", () => {
     expect(openExternalMock).toHaveBeenCalledWith("https://openai.com/docs");
   });
 
+  it("preserves markdown link titles while normalizing valid destinations", async () => {
+    render(
+      <ConversationMarkdown
+        markdown={'See [OpenAI](https://openai.com/docs "API docs") before shipping.'}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "OpenAI" });
+    expect(link).toHaveAttribute("href", "https://openai.com/docs");
+    expect(link).toHaveAttribute("title", "API docs");
+
+    await userEvent.click(link);
+
+    expect(openExternalMock).toHaveBeenCalledWith("https://openai.com/docs");
+  });
+
   it("renders local markdown targets as compact file reference tokens", () => {
     const filePath =
       "/Users/tester/.skein/worktrees/skein-019d5b55/lively-dolphin/src/directions/studio/ConversationMarkdown.tsx";
@@ -54,6 +70,20 @@ describe("ConversationMarkdown", () => {
       screen.queryByRole("link", { name: "ConversationMarkdown.tsx" }),
     ).toBeNull();
     expect(container.textContent).toBe("Updated ConversationMarkdown.tsx in this pass.");
+  });
+
+  it("preserves file reference links that include markdown titles", () => {
+    render(
+      <ConversationMarkdown
+        markdown={'Updated [ConversationMarkdown.tsx](src/ConversationMarkdown.tsx:42 "Open file").'}
+      />,
+    );
+
+    const token = screen.getByText("ConversationMarkdown.tsx");
+    expect(token).toHaveClass("tx-markdown__file-ref");
+    expect(token).toHaveAttribute("title", "src/ConversationMarkdown.tsx:42");
+    expect(token).toHaveAttribute("data-file-path", "src/ConversationMarkdown.tsx");
+    expect(token).toHaveAttribute("data-file-line", "42");
   });
 
   it("renders inline markdown inside file reference labels", () => {
