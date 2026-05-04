@@ -1,9 +1,22 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { openExternalMock } from "../../test/desktop-mock";
 import { ConversationMarkdown } from "./ConversationMarkdown";
+
+const clipboardWriteTextMock = vi.fn();
+
+beforeEach(() => {
+  clipboardWriteTextMock.mockReset();
+  clipboardWriteTextMock.mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (...args: unknown[]) => clipboardWriteTextMock(...args),
+    },
+  });
+});
 
 describe("ConversationMarkdown", () => {
   it("renders markdown links as external links and opens them with the desktop opener", async () => {
@@ -15,6 +28,22 @@ describe("ConversationMarkdown", () => {
 
     const link = screen.getByRole("link", { name: "OpenAI" });
     expect(link).toHaveAttribute("href", "https://openai.com/docs");
+
+    await userEvent.click(link);
+
+    expect(openExternalMock).toHaveBeenCalledWith("https://openai.com/docs");
+  });
+
+  it("preserves markdown link titles while normalizing valid destinations", async () => {
+    render(
+      <ConversationMarkdown
+        markdown={'See [OpenAI](https://openai.com/docs "API docs") before shipping.'}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "OpenAI" });
+    expect(link).toHaveAttribute("href", "https://openai.com/docs");
+    expect(link).toHaveAttribute("title", "API docs");
 
     await userEvent.click(link);
 
@@ -41,6 +70,20 @@ describe("ConversationMarkdown", () => {
       screen.queryByRole("link", { name: "ConversationMarkdown.tsx" }),
     ).toBeNull();
     expect(container.textContent).toBe("Updated ConversationMarkdown.tsx in this pass.");
+  });
+
+  it("preserves file reference links that include markdown titles", () => {
+    render(
+      <ConversationMarkdown
+        markdown={'Updated [ConversationMarkdown.tsx](src/ConversationMarkdown.tsx:42 "Open file").'}
+      />,
+    );
+
+    const token = screen.getByText("ConversationMarkdown.tsx");
+    expect(token).toHaveClass("tx-markdown__file-ref");
+    expect(token).toHaveAttribute("title", "src/ConversationMarkdown.tsx:42");
+    expect(token).toHaveAttribute("data-file-path", "src/ConversationMarkdown.tsx");
+    expect(token).toHaveAttribute("data-file-line", "42");
   });
 
   it("renders inline markdown inside file reference labels", () => {
@@ -215,6 +258,19 @@ describe("ConversationMarkdown", () => {
     expect(token).toHaveAttribute("data-file-line", "42");
   });
 
+  it("keeps titled windows paths with parenthesized folders intact", () => {
+    render(
+      <ConversationMarkdown
+        markdown={'Inspect [page.tsx](C:\\repo\\(auth)\\page.tsx:42 "Open file").'}
+      />,
+    );
+
+    const token = screen.getByText("page.tsx");
+    expect(token).toHaveAttribute("title", "C:\\repo\\(auth)\\page.tsx:42");
+    expect(token).toHaveAttribute("data-file-path", "C:\\repo\\(auth)\\page.tsx");
+    expect(token).toHaveAttribute("data-file-line", "42");
+  });
+
   it.each([
     "www.example.com",
     "www.example.com:443",
@@ -237,5 +293,163 @@ describe("ConversationMarkdown", () => {
 
     expect(screen.queryByRole("link", { name: "ratio" })).toBeNull();
     expect(container.textContent).toBe("Ignore [ratio](1/2) and keep it literal.");
+  });
+
+  it("preserves label formatting when rendering unsupported links as literal text", () => {
+    const { container } = render(
+      <ConversationMarkdown markdown={"Ignore [**ratio**](1/2) and keep it literal."} />,
+    );
+
+    expect(screen.queryByRole("link", { name: "ratio" })).toBeNull();
+    expect(screen.getByText("ratio").tagName).toBe("STRONG");
+    expect(container.textContent).toBe("Ignore [ratio](1/2) and keep it literal.");
+  });
+
+  it("renders GFM tables instead of collapsing table rows into a paragraph", () => {
+    const { container } = render(
+      <ConversationMarkdown
+        markdown={[
+          "Comparison:",
+          "",
+          "| CV | OFF | ON | Delta | Statut |",
+          "| --- | ---: | ---: | ---: | --- |",
+          "| Abdu Yener | 91% | 87% | -4 | succeeded |",
+          "| Alessandro Amoretti | 79% | 85% | +6 | succeeded |",
+        ].join("\n")}
+      />,
+    );
+
+    const table = container.querySelector(".tx-markdown__table");
+    expect(table).not.toBeNull();
+    expect(screen.getByRole("columnheader", { name: "CV" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Alessandro Amoretti" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "+6" })).toHaveStyle({ textAlign: "right" });
+    expect(container.textContent).not.toContain("| --- |");
+  });
+
+  it("renders GFM task lists, strikethrough and footnotes", () => {
+    const { container } = render(
+      <ConversationMarkdown
+        markdown={
+          "- [x] Parsed tables\n- [ ] Review ~~legacy parser~~ output\n\nFootnote marker.[^1]\n\n[^1]: Verified through GFM."
+        }
+      />,
+    );
+
+    const checkboxes = container.querySelectorAll(".tx-markdown__task-checkbox");
+    expect(checkboxes).toHaveLength(2);
+    expect(checkboxes[0]).toBeChecked();
+    expect(checkboxes[1]).not.toBeChecked();
+    expect(screen.getByText("legacy parser").tagName).toBe("DEL");
+    expect(container.querySelector(".contains-task-list")).not.toBeNull();
+    expect(container.querySelector(".task-list-item")).not.toBeNull();
+    expect(container.querySelector(".footnotes")).not.toBeNull();
+    expect(container.querySelector("#footnote-label")).toHaveClass("sr-only");
+    expect(container.querySelector("[data-footnote-ref]")).toHaveAttribute(
+      "aria-describedby",
+      "footnote-label",
+    );
+    expect(container.querySelector("[data-footnote-backref]")).toHaveAttribute(
+      "aria-label",
+    );
+    expect(screen.getByText("Verified through GFM.")).toBeInTheDocument();
+  });
+
+  it("renders math while preserving literal dollars in prose", () => {
+    const { container } = render(
+      <ConversationMarkdown markdown={"Budget $400 and formula $x+1$.\n\n$$E=mc^2$$"} />,
+    );
+
+    expect(container.textContent).toContain("Budget $400");
+    expect(container.querySelectorAll(".katex")).not.toHaveLength(0);
+    expect(container.textContent).toContain("x+1");
+    expect(container.textContent).toContain("E=mc");
+  });
+
+  it("does not render markdown images as remote image elements", () => {
+    const { container } = render(
+      <ConversationMarkdown markdown={"![diagram](https://example.com/diagram.png)"} />,
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("[image: diagram]")).toHaveClass(
+      "tx-markdown__image-placeholder",
+    );
+  });
+
+  it("exposes a copy action for fenced code blocks", async () => {
+    render(
+      <ConversationMarkdown markdown={"```ts\nconst value = 1;\n```"} />,
+    );
+
+    expect(screen.getByText("ts")).toHaveClass("tx-markdown__code-language-label");
+    await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    expect(clipboardWriteTextMock).toHaveBeenCalledWith("const value = 1;");
+  });
+
+  it("leaves markdown-looking content untouched inside indented fenced code blocks", () => {
+    const { container } = render(
+      <ConversationMarkdown
+        markdown={[
+          "- Debug output:",
+          "  ```md",
+          "  [literal](www.example.com:443)",
+          "  Budget $400 and `inline`",
+          "  ```",
+        ].join("\n")}
+      />,
+    );
+
+    const codeBlock = container.querySelector(".tx-markdown__code-block code");
+    expect(codeBlock).toHaveTextContent("[literal](www.example.com:443)");
+    expect(codeBlock).toHaveTextContent("Budget $400 and `inline`");
+  });
+
+  it("leaves markdown-looking content untouched inside indented code blocks", () => {
+    const { container } = render(
+      <ConversationMarkdown
+        markdown={[
+          "Log output:",
+          "",
+          "    [literal](1/2)",
+          "    Budget $400 and `inline`",
+          "",
+          "Done.",
+        ].join("\n")}
+      />,
+    );
+
+    const codeBlock = container.querySelector(".tx-markdown__code-block code");
+    expect(codeBlock).toHaveTextContent("[literal](1/2)");
+    expect(codeBlock).toHaveTextContent("Budget $400 and `inline`");
+    expect(codeBlock?.textContent).not.toContain("skein.local");
+    expect(container.textContent).toContain("Done.");
+  });
+
+  it("ignores code-copy completion after the code block unmounts", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      let resolveClipboard: () => void = () => {};
+      clipboardWriteTextMock.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveClipboard = resolve;
+        }),
+      );
+
+      const { unmount } = render(
+        <ConversationMarkdown markdown={"```ts\nconst value = 1;\n```"} />,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+      unmount();
+      resolveClipboard();
+      await Promise.resolve();
+
+      expect(clipboardWriteTextMock).toHaveBeenCalledWith("const value = 1;");
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 });
