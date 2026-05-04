@@ -152,6 +152,77 @@ describe("buildConversationTimeline", () => {
     }
   });
 
+  it("does not let historical matching turns consume optimistic timing", () => {
+    const dateNow = vi.spyOn(Date, "now");
+    const optimisticStartedAt = new Date("2026-05-01T10:00:00Z").getTime();
+    const providerStartedAt = new Date("2026-05-01T10:00:08Z").getTime();
+    try {
+      dateNow.mockReturnValue(optimisticStartedAt);
+      optimisticWorkActivityGroup({
+        threadId: "thread-repeated-confirmed-text",
+        messageId: "optimistic-user-latest",
+        text: "Try again",
+      });
+
+      dateNow.mockReturnValue(providerStartedAt);
+      const entries = buildConversationTimeline(
+        makeConversationSnapshot({
+          threadId: "thread-repeated-confirmed-text",
+          status: "running",
+          activeTurnId: "turn-latest",
+          items: [
+            {
+              kind: "message",
+              id: "user-old",
+              turnId: "turn-old",
+              role: "user",
+              text: "Try again",
+              images: null,
+              isStreaming: false,
+            },
+            {
+              kind: "reasoning",
+              id: "reason-old",
+              turnId: "turn-old",
+              summary: "Old reasoning",
+              content: "",
+              isStreaming: false,
+            },
+            {
+              kind: "message",
+              id: "assistant-old",
+              turnId: "turn-old",
+              role: "assistant",
+              text: "Earlier answer.",
+              images: null,
+              isStreaming: false,
+            },
+            {
+              kind: "message",
+              id: "user-latest",
+              turnId: "turn-latest",
+              role: "user",
+              text: "Try again",
+              images: null,
+              isStreaming: false,
+            },
+          ],
+        }),
+      );
+
+      const workGroups = entries.flatMap((entry) =>
+        entry.kind === "workActivity" ? [entry.group] : [],
+      );
+      const oldGroup = workGroups.find((group) => group.turnId === "turn-old");
+      const latestGroup = workGroups.find((group) => group.turnId === "turn-latest");
+
+      expect(oldGroup?.startedAt).toBeNull();
+      expect(latestGroup?.startedAt).toBe(optimisticStartedAt);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("keeps live assistant updates inside the active work activity", () => {
     const entries = buildConversationTimeline(
       makeConversationSnapshot({

@@ -59,13 +59,14 @@ function recordTiming(
   fingerprint: string | null,
   isOptimisticTiming: boolean,
 ): WorkActivityTiming | null {
-  const existing =
-    TIMING_BY_GROUP.get(timingKey) ??
-    (isOptimisticTiming ? null : migratedOptimisticTiming(timingKey, fingerprint));
+  const existing = TIMING_BY_GROUP.get(timingKey) ?? null;
   if (status === "running" || status === "waiting") {
-    if (existing) {
-      existing.finishedAt = null;
-      return existing;
+    const activeTiming =
+      existing ??
+      (isOptimisticTiming ? null : migratedOptimisticTiming(timingKey, fingerprint));
+    if (activeTiming) {
+      activeTiming.finishedAt = null;
+      return activeTiming;
     }
     const created: WorkActivityTiming = {
       startedAt: Date.now(),
